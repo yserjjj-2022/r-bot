@@ -1,0 +1,26 @@
+# .dockerignore
+
+# 1. Исключаем все, что связано с Git
+.git/
+.gitignore
+
+# 2. Исключаем все, что связано с Docker, из самого образа
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# 3. Исключаем виртуальное окружение и секреты (дублируем из .gitignore для надежности)
+my_bot_env/
+venv/
+env/
+.venv
+.env
+
+# 4. Исключаем кэш Python
+__pycache__/
+*.pyc
+
+# 5. Исключаем файлы IDE и ОС
+.vscode/
+.idea/
+*.DS_Store

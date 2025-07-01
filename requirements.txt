@@ -1,0 +1,10 @@
+pandas
+pytz
+pyTelegramBotAPI
+python-dotenv
+psycopg2-binary
+gigachat
+Flask
+sqlalchemy
+python-decouple
+boto3

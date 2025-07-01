@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Редактор графов</title>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        body, html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+        #graph-container { width: 70%; height: 100%; float: left; border-right: 1px solid #ccc; box-sizing: border-box; }
+        #edit-panel { width: 30%; height: 100%; float: right; padding: 15px; box-sizing: border-box; overflow-y: auto; background-color: #f9f9f9; }
+        #save-button { position: absolute; bottom: 20px; right: 20px; padding: 12px 20px; font-size: 16px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; z-index: 1001; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        #save-button:hover { background-color: #45a049; }
+        textarea, input[type="text"], input[type="number"], select { width: 98%; padding: 8px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; box-sizing: border-box; }
+        h3, h4 { margin-top: 0; color: #333; }
+        hr { margin: 20px 0; border: 0; border-top: 1px solid #eee; }
+        button { padding: 8px 12px; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; background-color: #f0f0f0; margin-bottom: 10px; }
+        button:hover { background-color: #e0e0e0; }
+        .delete-btn { color: red; border: none; background: none; font-weight: bold; float: right; cursor: pointer; }
+        .delete-node-btn { background-color: #f44336; color: white; margin-top: 15px; width: 100%; }
+        .delete-node-btn:hover { background-color: #da190b; }
+    </style>
+</head>
+<body>
+    <div id="graph-container"></div>
+    <div id="edit-panel">
+        <h3>Инструменты</h3>
+        <button id="add-new-node-btn">Добавить новый узел</button>
+        <hr>
+        <div id="node-editor-content">
+            <p>Кликните на узел для редактирования или добавьте новый. Для соединения узлов используйте панель слева.</p>
+        </div>
+    </div>
+    <button id="save-button" title="Сохранить изменения в файл на сервере">Сохранить</button>
+
+    {% raw %}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const container = document.getElementById('graph-container');
+            const editPanel = document.getElementById('edit-panel');
+            const nodeEditorContent = document.getElementById('node-editor-content');
+            const addNewNodeBtn = document.getElementById('add-new-node-btn');
+            const saveButton = document.getElementById('save-button');
+            let network = null;
+            let originalGraphData = null;
+
+            function markdownToHtml(text) { return text ? text.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>') : ''; }
+            
+            function convertGraphDataToVis(graphData) {
+                const visNodes = []; const visEdges = [];
+                if (!graphData || !graphData.nodes) return { nodes: [], edges: [] };
+                const nodeIds = Object.keys(graphData.nodes);
+                for (const nodeId of nodeIds) {
+                    const node = graphData.nodes[nodeId]; let labelLines = [];
+                    const nodeType = node.type || 'question';
+                    if (nodeType === 'question') {
+                        const aiIcon = node.ai_enabled ? '🧠 ' : '❓ ';
+                        labelLines.push(node.text ? `${aiIcon} ${markdownToHtml(node.text)}` : `▶️ **${nodeId}**`);
+                        if (node.options && node.options.length > 0) { labelLines.push('---'); node.options.forEach((opt, i) => { labelLines.push(`${i + 1}. ${opt.text} → ${opt.next_node_id || '???'}`); }); }
+                    } else if (nodeType === 'randomizer') {
+                        labelLines.push(`🎲 **${nodeId} (Рандомизатор)**`);
+                        if(node.branches && node.branches.length > 0) { labelLines.push('---'); node.branches.forEach(b => { labelLines.push(`→ ${b.next_node_id || '???'} (вес: ${b.weight || 1})`); }); }
+                    } else if (nodeType === 'condition') {
+                        labelLines.push(`💎 **${nodeId} (Условие)**`);
+                        labelLines.push(`Если: **${node.condition || '???'}**`);
+                        labelLines.push(`ВЫБОР1 → ${node.then_node_id || '???'}`);
+                        labelLines.push(`ВЫБОР2 → ${node.else_node_id || '???'}`);
+                    }
+                    let label = labelLines.join('\n'); let color = '#97C2FC';
+                    if (nodeType === 'randomizer') color = '#FFA500'; if (nodeType === 'condition') color = '#BA55D3'; if (nodeId === graphData.start_node_id) color = '#7BE141';
+                    visNodes.push({ id: nodeId, label: label, shape: 'box', color: color, x: node.x, y: node.y });
+                }
+                for (const nodeId of nodeIds) {
+                    const node = graphData.nodes[nodeId];
+                    if (node.options) node.options.forEach(o => { if (o.next_node_id) visEdges.push({ from: nodeId, to: o.next_node_id }); });
+                    if (node.branches) node.branches.forEach(b => { if (b.next_node_id) visEdges.push({ from: nodeId, to: b.next_node_id, dashes: true }); });
+                    if (node.type === 'condition') {
+                        if(node.then_node_id) visEdges.push({ from: nodeId, to: node.then_node_id, label: 'ВЫБОР1', font: {color: 'green'}, color: { color: 'green' } });
+                        if(node.else_node_id) visEdges.push({ from: nodeId, to: node.else_node_id, label: 'ВЫБОР2', font: {color: 'red'}, color: { color: 'red' }, dashes: true });
+                    }
+                }
+                return { nodes: visNodes, edges: visEdges };
+            }
+            
+            const options = {
+                nodes: { font: { multi: 'html', align: 'left' } },
+                edges: { smooth: true, color: '#848484', width: 2, arrows: 'to' },
+                interaction: { dragNodes: true, dragView: true, zoomView: true },
+                physics: { enabled: false }, // Отключаем физику для ручной расстановки
+                manipulation: {
+                    enabled: true, initiallyActive: false, addNode: false, deleteNode: false, deleteEdge: true,
+                    addEdge: (edgeData, callback) => {
+                        if (edgeData.from === edgeData.to) { callback(null); return; }
+                        const fromNode = originalGraphData.nodes[edgeData.from];
+                        if (fromNode.type === 'randomizer') { if (!fromNode.branches) fromNode.branches = []; fromNode.branches.push({ next_node_id: edgeData.to, weight: 1 }); } 
+                        else if (fromNode.type === 'condition') { alert("Нельзя создавать связи из узла 'Условие' вручную. Используйте поля 'ВЫБОР1' и 'ВЫБОР2' в панели справа."); callback(null); return; } 
+                        else { const optionText = prompt("Введите текст для этого варианта ответа:", "Новый вариант"); if (!optionText) { callback(null); return; } if (!fromNode.options) fromNode.options = []; fromNode.options.push({ text: optionText, next_node_id: edgeData.to }); }
+                        redrawGraph(); callback(null);
+                    },
+                }
+            };
+
+            function showEditPanel(nodeId) {
+                const nodeData = originalGraphData.nodes[nodeId];
+                if (!nodeData) return;
+                const nodeType = nodeData.type || 'question';
+                nodeEditorContent.innerHTML = `<h3>Редактирование: ${nodeId}</h3><label for="nodeType">Тип узла:</label><select id="nodeType"><option value="question" ${nodeType === 'question' ? 'selected' : ''}>Вопрос</option><option value="randomizer" ${nodeType === 'randomizer' ? 'selected' : ''}>Рандомизатор</option><option value="condition" ${nodeType === 'condition' ? 'selected' : ''}>Условие</option></select><hr><div id="node-dynamic-content"></div><button class="delete-node-btn" id="delete-node">Удалить этот узел</button>`;
+                const dynamicContent = document.getElementById('node-dynamic-content');
+                if (nodeType === 'randomizer') {
+                    dynamicContent.innerHTML = '<h4>Ветки:</h4><div id="branches-container"></div><button id="add-branch">+ Добавить ветку</button>';
+                    renderBranches(nodeId);
+                } else if (nodeType === 'condition') {
+                    dynamicContent.innerHTML = `<label for="conditionText">Условие (формат: {id} == 'текст'):</label><input type="text" id="conditionText" value="${nodeData.condition || ''}"><label for="thenNode">ВЫБОР1 (ID узла):</label><input type="text" id="thenNode" value="${nodeData.then_node_id || ''}"><label for="elseNode">ВЫБОР2 (ID узла):</label><input type="text" id="elseNode" value="${nodeData.else_node_id || ''}">`;
+                } else {
+                    dynamicContent.innerHTML = `<label for="nodeText">Текст вопроса ( **текст** для выделения):</label><textarea id="nodeText">${nodeData.text || ''}</textarea><hr><label><input type="checkbox" id="aiEnabledCheckbox" ${nodeData.ai_enabled ? 'checked' : ''}> 🧠 Включить ИИ-помощника</label><hr><h4>Варианты ответов:</h4><div id="options-container"></div><button id="add-option">+ Добавить вариант</button>`;
+                    renderOptions(nodeId);
+                }
+            }
+            function renderOptions(nodeId) {
+                const container = document.getElementById('options-container'); container.innerHTML = '';
+                (originalGraphData.nodes[nodeId].options || []).forEach((opt, index) => {
+                    const div = document.createElement('div'); div.innerHTML = `<input type="text" value="${opt.text}" data-index="${index}" class="option-text" placeholder="Текст варианта"><input type="text" value="${opt.next_node_id || ''}" data-index="${index}" class="option-next" placeholder="ID след. узла"><button class="delete-btn" data-index="${index}">X</button>`; container.appendChild(div);
+                });
+            }
+            function renderBranches(nodeId) {
+                const container = document.getElementById('branches-container'); container.innerHTML = '';
+                (originalGraphData.nodes[nodeId].branches || []).forEach((branch, index) => {
+                    const div = document.createElement('div'); div.innerHTML = `<input type="text" value="${branch.next_node_id || ''}" data-index="${index}" class="branch-next" placeholder="ID след. узла"><input type="number" value="${branch.weight || 1}" data-index="${index}" class="branch-weight" placeholder="Вес"><button class="delete-btn" data-index="${index}">X</button>`; container.appendChild(div);
+                });
+            }
+            
+            editPanel.addEventListener('click', e => {
+                const selectedNodeId = network.getSelection().nodes[0]; if (!selectedNodeId) return;
+                const nodeData = originalGraphData.nodes[selectedNodeId];
+                if (e.target.id === 'delete-node') deleteNode(selectedNodeId);
+                if (e.target.id === 'add-option') { if (!nodeData.options) nodeData.options = []; nodeData.options.push({ text: '', next_node_id: '' }); renderOptions(selectedNodeId); }
+                if (e.target.id === 'add-branch') { if (!nodeData.branches) nodeData.branches = []; nodeData.branches.push({ next_node_id: '', weight: 1 }); renderBranches(selectedNodeId); }
+                if (e.target.classList.contains('delete-btn')) {
+                    const index = e.target.dataset.index;
+                    if (nodeData.options) { nodeData.options.splice(index, 1); renderOptions(selectedNodeId); }
+                    if (nodeData.branches) { nodeData.branches.splice(index, 1); renderBranches(selectedNodeId); }
+                    redrawGraph();
+                }
+            });
+            editPanel.addEventListener('change', e => {
+                const selectedNodeId = network.getSelection().nodes[0]; if (!selectedNodeId) return;
+                const nodeData = originalGraphData.nodes[selectedNodeId];
+                if (e.target.id === 'nodeType') {
+                    const newType = e.target.value; const props = originalGraphData.nodes[selectedNodeId];
+                    const commonPropsToDelete = ['text', 'options', 'ai_enabled', 'type', 'branches', 'condition', 'then_node_id', 'else_node_id'];
+                    commonPropsToDelete.forEach(p => delete props[p]);
+                    if (newType === 'question') { props.text = 'Новый вопрос'; props.options = []; } 
+                    else { props.type = newType; if (newType === 'randomizer') props.branches = []; else if (newType === 'condition') { props.condition = ''; props.then_node_id = ''; props.else_node_id = ''; } }
+                    showEditPanel(selectedNodeId);
+                } else {
+                    const nodeType = nodeData.type || 'question';
+                    if (nodeType === 'question') {
+                        if (e.target.id === 'nodeText') nodeData.text = e.target.value;
+                        if (e.target.id === 'aiEnabledCheckbox') { if (e.target.checked) nodeData.ai_enabled = true; else delete nodeData.ai_enabled; }
+                        if (e.target.classList.contains('option-text')) nodeData.options[e.target.dataset.index].text = e.target.value;
+                        if (e.target.classList.contains('option-next')) nodeData.options[e.target.dataset.index].next_node_id = e.target.value;
+                    } else if (nodeType === 'randomizer') { if (e.target.classList.contains('branch-next')) nodeData.branches[e.target.dataset.index].next_node_id = e.target.value; if (e.target.classList.contains('branch-weight')) nodeData.branches[e.target.dataset.index].weight = parseInt(e.target.value, 10) || 1; } 
+                    else if (nodeType === 'condition') { if (e.target.id === 'conditionText') nodeData.condition = e.target.value; if (e.target.id === 'thenNode') nodeData.then_node_id = e.target.value; if (e.target.id === 'elseNode') nodeData.else_node_id = e.target.value; }
+                }
+                redrawGraph();
+            });
+            function deleteNode(nodeId) {
+                if (!confirm(`Вы уверены, что хотите удалить узел "${nodeId}"?`)) return;
+                delete originalGraphData.nodes[nodeId];
+                Object.values(originalGraphData.nodes).forEach(node => {
+                    if (node.options) node.options = node.options.filter(opt => opt.next_node_id !== nodeId);
+                    if (node.branches) node.branches = node.branches.filter(b => b.next_node_id !== nodeId);
+                    if (node.type === 'condition') { if (node.then_node_id === nodeId) node.then_node_id = ''; if (node.else_node_id === nodeId) node.else_node_id = ''; }
+                });
+                nodeEditorContent.innerHTML = '<p>Кликните на узел для редактирования.</p>'; redrawGraph();
+            }
+            addNewNodeBtn.addEventListener('click', () => {
+                const nodeId = prompt("Введите уникальный ID для нового узла:", "node" + Date.now().toString().slice(-4));
+                if (!nodeId) return;
+                if (originalGraphData.nodes[nodeId]) { alert("Узел с таким ID уже существует."); return; }
+                originalGraphData.nodes[nodeId] = { text: "Новый вопрос", options: [], x: 0, y: 0 };
+                redrawGraph(); network.selectNodes([nodeId]); showEditPanel(nodeId);
+            });
+            function redrawGraph() { if (!originalGraphData || !network) return; network.setData(convertGraphDataToVis(originalGraphData)); }
+            saveButton.addEventListener('click', function() {
+                saveButton.textContent = "Сохранение..."; saveButton.disabled = true;
+                fetch('/api/graph', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(originalGraphData, null, 2) })
+                .then(res => res.json()).then(data => { alert(data.success ? "Граф успешно сохранен!" : "Ошибка: " + data.error); })
+                .catch(err => alert("Сетевая ошибка: " + err)).finally(() => { saveButton.textContent = "Сохранить"; saveButton.disabled = false; });
+            });
+            fetch('/api/graph').then(res => res.json()).then(graphData => {
+                originalGraphData = graphData; network = new vis.Network(container, convertGraphDataToVis(graphData), options);
+                network.on('selectNode', params => showEditPanel(params.nodes[0]));
+                network.on('deselectNode', () => { nodeEditorContent.innerHTML = '<p>Кликните на узел для редактирования.</p>'; });
+                network.on('dragEnd', function (params) {
+                    if (params.nodes.length > 0) {
+                        const positions = network.getPositions(params.nodes);
+                        params.nodes.forEach(nodeId => {
+                            if (originalGraphData.nodes[nodeId] && positions[nodeId]) {
+                                originalGraphData.nodes[nodeId].x = Math.round(positions[nodeId].x);
+                                originalGraphData.nodes[nodeId].y = Math.round(positions[nodeId].y);
+                            }
+                        });
+                    }
+                });
+            }).catch(err => console.error('Ошибка:', err));
+        });
+    </script>
+    {% endraw %}
+</body>
+</html>
