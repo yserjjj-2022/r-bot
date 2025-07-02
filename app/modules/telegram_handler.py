@@ -1,48 +1,44 @@
 # app/modules/telegram_handler.py
 
 import random
-import re # <-- Добавляем импорт для работы с регулярными выражениями
+import re
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import traceback # <-- Добавляем traceback для детальных логов ошибок
 
 from app.modules.database import SessionLocal, crud
 from app.modules import gigachat_handler
 
 user_sessions = {}
 
+# Ваша функция register_handlers остается без изменений, мы правим только ее внутренности
 def register_handlers(bot: telebot.TeleBot, graph_data: dict):
     
+    # Вспомогательная функция send_node_message остается без изменений
     def send_node_message(chat_id, node_id):
+        # ... (здесь ваш код без изменений)
         node = graph_data["nodes"].get(node_id)
         session_info = user_sessions.get(chat_id)
         if not node or not session_info:
             bot.send_message(chat_id, "Произошла ошибка: узел или сессия не найдены.")
             return
 
-        node_type = node.get("type", "question") # По умолчанию узел - это вопрос
+        node_type = node.get("type", "question")
 
-        # --- ОБНОВЛЕННЫЙ БЛОК ЛОГИКИ ---
-        
-        # 1. Обработка УСЛОВНОГО ПЕРЕХОДА
         if node_type == "condition":
             condition_str = node.get("condition")
             db = SessionLocal()
             try:
-                # Находим placeholder типа {node_id}
                 match = re.search(r'\{(\w+)\}', condition_str)
                 if not match:
-                    # Если условие задано неверно, идем по "else" ветке
                     send_node_message(chat_id, node.get("else_node_id"))
                     return
 
-                # Извлекаем ID вопроса и значение для сравнения
                 question_node_id = match.group(1)
                 value_to_compare = condition_str.split('==')[-1].strip().strip("'\"")
                 
-                # Получаем реальный ответ пользователя из БД
                 user_response = crud.get_response_for_node(db, session_info['session_id'], question_node_id)
                 
-                # Сравниваем
                 if user_response and user_response.answer_text == value_to_compare:
                     send_node_message(chat_id, node.get("then_node_id"))
                 else:
@@ -51,20 +47,14 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 db.close()
             return
             
-        # --- ОБНОВЛЕННЫЙ БЛОК РАНДОМИЗАТОРА С ПОДДЕРЖКОЙ ВЕСОВ ---
         if node.get("type") == "randomizer":
             branches = node.get("branches", [])
             if not branches:
                 bot.send_message(chat_id, "Ошибка конфигурации графа: узел-рандомизатор не имеет веток.")
                 return
             
-            # Извлекаем веса из каждой ветки. Если веса нет, используем 1 (для обратной совместимости).
             weights = [branch.get("weight", 1) for branch in branches]
-            
-            # Используем random.choices для выбора одной ветки с учетом весов.
-            # k=1 означает, что нам нужен только один результат. Возвращается список, поэтому берем [0].
             chosen_branch = random.choices(branches, weights=weights, k=1)[0]
-            
             next_node_id = chosen_branch.get("next_node_id")
             
             if not next_node_id:
@@ -74,7 +64,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             send_node_message(chat_id, next_node_id)
             return
 
-        # --- Остальной код функции без изменений ---
         session_info = user_sessions.get(chat_id)
         if session_info:
             session_info['node_id'] = node_id
@@ -97,20 +86,59 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         if session_info:
             session_info['last_question_message_id'] = sent_message.message_id
 
+
+    # --- ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ ---
     @bot.message_handler(commands=['start'])
     def start_interview(message):
+        # Наш первый "жучок"
+        print(f"--- 1. ОБРАБОТЧИК /start СРАБОТАЛ для пользователя {message.chat.id} ---")
+        
         chat_id = message.chat.id
         db = SessionLocal()
+        
         try:
+            print("--- 2. Попытка получить/создать пользователя... ---")
             user = crud.get_or_create_user(db, telegram_id=chat_id)
+            
+            print(f"--- 3. Пользователь получен (ID: {user.id}). Попытка создать сессию... ---")
+            # Проверяем, что graph_id существует, прежде чем его использовать
+            if "graph_id" not in graph_data:
+                 print("!!! КРИТИЧЕСКАЯ ОШИБКА: 'graph_id' не найден в graph_data !!!")
+                 # Можно отправить сообщение пользователю или просто выйти
+                 bot.send_message(chat_id, "Ошибка конфигурации бота. Не удалось начать сессию.")
+                 return
+
             session = crud.create_session(db, user_id=user.id, graph_id=graph_data["graph_id"])
+            
+            print(f"--- 4. Сессия создана (ID: {session.id}). Регистрация в user_sessions... ---")
             user_sessions[chat_id] = {'session_id': session.id, 'node_id': None, 'last_question_message_id': None}
+            
+            # Проверяем, что start_node_id существует
+            if "start_node_id" not in graph_data:
+                print("!!! КРИТИЧЕСКАЯ ОШИБКА: 'start_node_id' не найден в graph_data !!!")
+                bot.send_message(chat_id, "Ошибка конфигурации бота. Не найден стартовый узел.")
+                return
+
+            print("--- 5. Попытка отправить стартовое сообщение... ---")
             send_node_message(chat_id, graph_data["start_node_id"])
+            
+            print("--- 6. ВСЕ ШАГИ ВНУТРИ ОБРАБОТЧИКА УСПЕШНО ЗАВЕРШЕНЫ ---")
+
+        except Exception as e:
+            # ЭТО САМАЯ ВАЖНАЯ ЧАСТЬ! Она поймает любую скрытую ошибку.
+            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА ВНУТРИ ОБРАБОТЧИКА /start: {e} !!!")
+            traceback.print_exc() # Напечатает полный путь ошибки, чтобы мы точно знали, где она
         finally:
+            # Этот блок гарантирует, что БД закроется в любом случае
+            print("--- 7. Закрытие сессии БД... ---")
             db.close()
 
+
+    # --- Остальные обработчики с "легким" логированием ---
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback_query(call):
+        print(f"--- Получен callback_query от {call.message.chat.id} с данными: {call.data} ---")
+        
         chat_id = call.message.chat.id
         try:
             button_idx_str, next_node_id = call.data.split('|', 1)
@@ -138,8 +166,15 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         
         send_node_message(chat_id, next_node_id)
 
+
     @bot.message_handler(content_types=['text'])
     def handle_text_message(message):
+        # Пропускаем обработку команды /start здесь, чтобы избежать двойной логики
+        if message.text.startswith('/start'):
+            return
+            
+        print(f"--- Получено текстовое сообщение от {message.chat.id}: '{message.text}' ---")
+        
         chat_id = message.chat.id
         session_data = user_sessions.get(chat_id)
         if not session_data or not session_data.get('node_id'):
