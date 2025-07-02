@@ -69,17 +69,3 @@ def webhook():
     else:
         return 'Bad Request', 400
 
-# --- Запуск приложения ---
-
-# 7. Устанавливаем вебхук при запуске (если мы не в режиме отладки)
-# В Amvera эта часть выполнится один раз при старте контейнера.
-if __name__ != '__main__':
-    # Эта проверка нужна, чтобы gunicorn не запускал этот код много раз
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
-    print(f"Вебхук установлен на: {WEBHOOK_URL}")
-
-# ВАЖНО: Мы больше не используем bot.infinity_polling()!
-# Вместо этого, веб-сервер будет запущен Gunicorn'ом, как указано в Dockerfile.
-# CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8443", "app:app"]
-
