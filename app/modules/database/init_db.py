@@ -1,7 +1,7 @@
 # app/modules/database/init_db.py
 
-from app.modules.database.database import engine
-from app.modules.database import models
+from .database import engine  # Точка означает "из текущего пакета"
+from . import models
 
 def create_tables():
     """

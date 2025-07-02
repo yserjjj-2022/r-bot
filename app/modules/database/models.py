@@ -1,10 +1,11 @@
 # app/modules/database/models.py
 
 # ИЗМЕНЕНИЕ: Добавляем импорт 'func' из sqlalchemy
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, func
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
-Base = declarative_base()
+from .database import Base
 
 class User(Base):
     __tablename__ = 'users'
