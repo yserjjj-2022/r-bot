@@ -73,3 +73,7 @@ def webhook():
         return '', 200
     else:
         return 'Bad Request', 400
+
+if __name__ == "__main__":
+    # Запускаем встроенный веб-сервер Flask, который будет слушать на всех интерфейсах на порту 8443
+    app.run(host='0.0.0.0', port=8443)
