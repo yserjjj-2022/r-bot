@@ -68,4 +68,3 @@ def webhook():
         return '', 200
     else:
         return 'Bad Request', 400
-
