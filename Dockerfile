@@ -21,4 +21,4 @@ COPY . .
 ENV PYTHONPATH /app
 
 # 7. Финальная команда для запуска нашего бота.
-CMD ["python", "app/__main__.py"]
+CMD ["sh", "-c", "echo 'Запускаем инициализацию базы данных...' && python app/modules/database/init_db.py && echo 'Инициализация завершена. Запускаем основное приложение...' && python app/__main__.py"]
