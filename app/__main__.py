@@ -1,8 +1,13 @@
+# app/__main__.py - Финальная версия для работы с Webhook
+
 import telebot
 import json
-from decouple import config # <-- Импортируем config
-from app.modules.telegram_handler import register_handlers
+from decouple import config
+from flask import Flask, request
+import os
+import shutil
 
+# --- Вспомогательные функции (остаются без изменений) ---
 def load_graph(filename: str) -> dict:
     try:
         with open(filename, 'r', encoding='utf-8') as f:
@@ -11,24 +16,70 @@ def load_graph(filename: str) -> dict:
         print(f"Ошибка загрузки графа {filename}: {e}")
         return None
 
-def main():
-    # Комментарий: Получаем токен. config() сама позаботится о .env
-    bot_token = config("TELEGRAM_BOT_TOKEN", default=None)
-    if not bot_token:
-        print("Ошибка: Токен не найден. Проверьте ваш .env файл.")
-        return
+# --- Инициализация и настройка ---
 
-    GRAPH_PATH = config("GRAPH_PATH", default="data/default_interview.json")
-    graph_data = load_graph(GRAPH_PATH)
-    if not graph_data:
-        print("Не удалось запустить бота без графа сценариев.")
-        return
+# 1. Получаем переменные окружения
+BOT_TOKEN = config("TELEGRAM_BOT_TOKEN")
+# Путь к файлу в постоянном хранилище /data
+GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json") 
+# Публичный URL вашего сервера, который вы получили от Amvera
+SERVER_URL = config("SERVER_URL") 
+# Секретный путь, чтобы никто другой не мог отправлять запросы
+# Мы используем токен, это безопасно
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+# Полный URL для вебхука
+WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
 
-    bot = telebot.TeleBot(bot_token)
+# 2. Инициализируем Flask-приложение (наш веб-сервер)
+app = Flask(__name__)
+
+# 3. Инициализируем бота
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# 4. Проверяем и копируем файл сценария (как мы обсуждали ранее)
+template_graph_path = '/app/data/default_interview.json'
+if not os.path.exists(GRAPH_PATH):
+    print(f"Файл сценария в {GRAPH_PATH} не найден. Копирую из шаблона...")
+    try:
+        shutil.copy(template_graph_path, GRAPH_PATH)
+        print("Копирование успешно завершено.")
+    except Exception as e:
+        print(f"ОШИБКА: Не удалось скопировать файл сценария: {e}")
+
+# 5. Загружаем граф и регистрируем обработчики
+graph_data = load_graph(GRAPH_PATH)
+if graph_data:
+    # Ваша функция register_handlers должна быть импортирована
+    from app.modules.telegram_handler import register_handlers
     register_handlers(bot, graph_data)
+    print("Обработчики успешно зарегистрированы.")
+else:
+    print("Критическая ошибка: не удалось загрузить граф сценариев. Бот не сможет обрабатывать команды.")
 
-    print("Бот запущен и готов вести по графу...")
-    bot.infinity_polling()
+# --- Обработка входящих запросов от Telegram ---
 
-if __name__ == "__main__":
-    main()
+# 6. Создаем "маршрут", который будет слушать наш секретный путь
+@app.route(WEBHOOK_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        return 'Bad Request', 400
+
+# --- Запуск приложения ---
+
+# 7. Устанавливаем вебхук при запуске (если мы не в режиме отладки)
+# В Amvera эта часть выполнится один раз при старте контейнера.
+if __name__ != '__main__':
+    # Эта проверка нужна, чтобы gunicorn не запускал этот код много раз
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Вебхук установлен на: {WEBHOOK_URL}")
+
+# ВАЖНО: Мы больше не используем bot.infinity_polling()!
+# Вместо этого, веб-сервер будет запущен Gunicorn'ом, как указано в Dockerfile.
+# CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8443", "app:app"]
+

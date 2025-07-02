@@ -21,4 +21,4 @@ COPY . .
 ENV PYTHONPATH /app
 
 # 7. Финальная команда для запуска нашего бота.
-CMD ["python", "-m", "app"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8443", "app.__main__:app"]
