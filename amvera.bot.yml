@@ -4,16 +4,16 @@
 meta:
   name: r-bot
   
-# Среда выполнения и команда запуска
-run:
-  runtime: python
-  # Команда для запуска нашего бота
-  entrypoint: python -m app
-  # Порт, на котором бот будет ждать вебхуки от Telegram
-  port: 8443
+# # Среда выполнения и команда запуска
+# run:
+#   runtime: python
+#   # Команда для запуска нашего бота
+#   entrypoint: python -m app
+#   # Порт, на котором бот будет ждать вебхуки от Telegram
+#   port: 8443
 
-  env: 
-    PYTHONPATH: /app
+#   env: 
+#     PYTHONPATH: /app
 
 # Настройка персистентного хранилища
 storage:
