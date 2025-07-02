@@ -33,6 +33,11 @@ WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
 # 2. Инициализируем Flask-приложение (наш веб-сервер)
 app = Flask(__name__)
 
+# Маршрут для проверки здоровья от Amvera
+@app.route('/', methods=['GET'])
+def health_check():
+    return "Bot is alive and listening!", 200
+
 # 3. Инициализируем бота
 bot = telebot.TeleBot(BOT_TOKEN)
 
