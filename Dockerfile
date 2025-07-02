@@ -21,4 +21,4 @@ COPY . .
 ENV PYTHONPATH /app
 
 # 7. Финальная команда для запуска нашего бота.
-CMD ["gunicorn", "-w", "1", "--timeout", "60", "-b", "0.0.0.0:8443", "app.__main__:app"]
+CMD ["gunicorn", "-w", "1", "--timeout", "120", "-b", "0.0.0.0:8443", "app.__main__:app"]
