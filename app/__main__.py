@@ -1,7 +1,7 @@
 import telebot
 import json
 from decouple import config # <-- Импортируем config
-from modules.telegram_handler import register_handlers
+from app.modules.telegram_handler import register_handlers
 
 def load_graph(filename: str) -> dict:
     try:
@@ -18,7 +18,8 @@ def main():
         print("Ошибка: Токен не найден. Проверьте ваш .env файл.")
         return
 
-    graph_data = load_graph("/data/default_interview.json")
+    GRAPH_PATH = config("GRAPH_PATH", default="data/default_interview.json")
+    graph_data = load_graph(GRAPH_PATH)
     if not graph_data:
         print("Не удалось запустить бота без графа сценариев.")
         return
