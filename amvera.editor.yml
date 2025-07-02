@@ -2,7 +2,7 @@
 
 # Указываем, что этот файл для проекта с именем interview-bot-editor
 meta:
-  name: interview-bot-editor
+  name: w-bot
 
 # Среда выполнения и команда запуска
 run:

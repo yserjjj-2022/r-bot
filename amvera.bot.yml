@@ -2,7 +2,7 @@
 
 # Указываем, что этот файл для проекта с именем interview-bot-app
 meta:
-  name: interview-bot-app
+  name: r-bot
   
 # Среда выполнения и команда запуска
 run:

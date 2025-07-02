@@ -13,8 +13,7 @@ app = Flask(__name__)
 DATABASE_URL = config("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 # Определяем путь к нашему основному файлу графа
-GRAPH_FILE_PATH = "/data/default_interview.json"
-
+GRAPH_FILE_PATH = config("GRAPH_PATH", default="data/default_interview.json")
 
 # ===============================================================
 #  Раздел API для редактора графов
