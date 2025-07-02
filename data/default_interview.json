@@ -1,0 +1,65 @@
+{
+  "graph_id": "conditional_v1",
+  "nodes": {
+    "branch_other": {
+      "options": [
+        {
+          "next_node_id": "final_thanks",
+          "text": "Очень важна"
+        }
+      ],
+      "text": "Спасибо! Вы попали в общую ветку. Насколько для вас важна стабильность компании?",
+      "x": 701,
+      "y": 270
+    },
+    "branch_young": {
+      "options": [
+        {
+          "next_node_id": "final_thanks",
+          "text": "Очень важна"
+        }
+      ],
+      "text": "Спасибо! Вы попали в ветку для молодых респондентов. Насколько вам важна возможность удаленной работы?",
+      "x": -652,
+      "y": 187
+    },
+    "check_age_condition": {
+      "condition": "{start} == '18-25'",
+      "else_node_id": "branch_other",
+      "then_node_id": "branch_young",
+      "type": "condition",
+      "x": -132,
+      "y": -278
+    },
+    "final_thanks": {
+      "text": "Опрос завершен! Огромное спасибо за ваше участие.",
+      "x": 195,
+      "y": 548
+    },
+    "start": {
+      "options": [
+        {
+          "next_node_id": "check_age_condition",
+          "text": "18-25"
+        },
+        {
+          "next_node_id": "check_age_condition",
+          "text": "26 и старше"
+        }
+      ],
+      "text": "Привет! Давайте начнем. Пожалуйста, укажите ваш возраст.",
+      "x": 106,
+      "y": -692,
+      "ai_enabled": true
+    },
+    "node9564": {
+      "x": 627,
+      "y": -449,
+      "type": "condition",
+      "condition": "",
+      "then_node_id": "",
+      "else_node_id": ""
+    }
+  },
+  "start_node_id": "start"
+}

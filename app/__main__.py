@@ -18,7 +18,7 @@ def main():
         print("Ошибка: Токен не найден. Проверьте ваш .env файл.")
         return
 
-    graph_data = load_graph("graphs/default_interview.json")
+    graph_data = load_graph("/data/default_interview.json")
     if not graph_data:
         print("Не удалось запустить бота без графа сценариев.")
         return

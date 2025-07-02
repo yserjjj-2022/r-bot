@@ -1,0 +1,18 @@
+# amvera.editor.yml - Конфигурация для редактора графов
+
+# Указываем, что этот файл для проекта с именем interview-bot-editor
+meta:
+  name: interview-bot-editor
+
+# Среда выполнения и команда запуска
+run:
+  runtime: python
+  # Используем gunicorn для запуска веб-сервера
+  entrypoint: gunicorn --bind 0.0.0.0:5000 web_server:app
+  port: 5000
+
+# Настройка персистентного хранилища
+storage:
+  # Подключаем ту же самую папку /data
+  data:
+    mount: /data
