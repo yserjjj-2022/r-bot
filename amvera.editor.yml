@@ -11,6 +11,9 @@ run:
   entrypoint: gunicorn --bind 0.0.0.0:5000 web_server:app
   port: 5000
 
+  env: 
+    PYTHONPATH: /app
+
 # Настройка персистентного хранилища
 storage:
   # Подключаем ту же самую папку /data
