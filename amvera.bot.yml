@@ -8,7 +8,7 @@ meta:
 run:
   runtime: python
   # Команда для запуска нашего бота
-  entrypoint: python app/__main__.py
+  entrypoint: python -m app
   # Порт, на котором бот будет ждать вебхуки от Telegram
   port: 8443
 
