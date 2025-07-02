@@ -1,7 +1,7 @@
 import telebot
 import json
 from decouple import config # <-- Импортируем config
-from app.modules.telegram_handler import register_handlers
+from modules.telegram_handler import register_handlers
 
 def load_graph(filename: str) -> dict:
     try:
