@@ -64,14 +64,14 @@ def get_response_for_node(db: Session, session_id: int, node_id: str):
 
 # --- Функции для работы с диалогами GigaChat ---
 
-def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_query: str, ai_response: str):
+def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_message: str, ai_response: str):
     """
     Сохраняет диалог с AI.
     """
     dialogue = models.AIDialogue(
         session_id=session_id,
         node_id=node_id,
-        user_query=user_query,
+        user_message=user_message,
         ai_response=ai_response
     )
     db.add(dialogue)
