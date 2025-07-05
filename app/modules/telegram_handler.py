@@ -13,9 +13,8 @@ user_sessions = {}
 
 def register_handlers(bot: telebot.TeleBot, graph_data: dict):
     
+    # --- Вспомогательная функция для отправки сообщений по графу ---
     def send_node_message(chat_id, node_id):
-        # ... (код для send_node_message без изменений, он уже правильный) ...
-        # (я оставлю его свернутым для краткости, он идентичен коду из прошлого ответа)
         node = graph_data["nodes"].get(node_id)
         session_info = user_sessions.get(chat_id)
         if not node or not session_info:
@@ -23,18 +22,43 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             return
 
         node_type = node.get("type", "question")
+        # Сохраняем текущий узел в сессию пользователя для последующей обработки
         session_info['node_id'] = node_id
 
+        # --- Логика для узлов-помощников (условие, рандомизатор) ---
         if node_type == "condition":
-            # ...
+            db = SessionLocal()
+            try:
+                condition_str = node.get("condition")
+                match = re.search(r'\{(\w+)\}', condition_str)
+                if not match:
+                    send_node_message(chat_id, node.get("else_node_id"))
+                    return
+                question_node_id = match.group(1)
+                value_to_compare = condition_str.split('==')[-1].strip().strip("'\"")
+                user_response = crud.get_response_for_node(db, session_info['session_id'], question_node_id)
+                if user_response and user_response.answer_text == value_to_compare:
+                    send_node_message(chat_id, node.get("then_node_id"))
+                else:
+                    send_node_message(chat_id, node.get("else_node_id"))
+            finally:
+                db.close()
             return
+            
         if node_type == "randomizer":
-            # ...
+            branches = node.get("branches", [])
+            weights = [branch.get("weight", 1) for branch in branches]
+            chosen_branch = random.choices(branches, weights=weights, k=1)[0]
+            next_node_id = chosen_branch.get("next_node_id")
+            if next_node_id:
+                send_node_message(chat_id, next_node_id)
             return
 
+        # --- Логика создания кнопок (с поддержкой безусловного перехода) ---
         markup = InlineKeyboardMarkup()
         if node_type == "question" and "options" in node and node["options"]:
             unconditional_next_id = node.get("next_node_id")
+
             for idx, option in enumerate(node["options"]):
                 next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
                 if not next_node_id_for_button:
@@ -43,6 +67,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 callback_payload = f"{idx}|{next_node_id_for_button}"
                 markup.add(InlineKeyboardButton(text=option["text"], callback_data=callback_payload))
         
+        # --- Логика для финальных узлов (завершение сессии) ---
         is_final_node = not ("options" in node and node["options"]) and not node.get("next_node_id")
         if is_final_node and node_type != "input_text":
             db = SessionLocal()
@@ -57,9 +82,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         if session_info and chat_id in user_sessions:
             session_info['last_question_message_id'] = sent_message.message_id
 
+    # --- Обработчик команды /start ---
     @bot.message_handler(commands=['start'])
     def start_interview(message):
-        # ... (код для /start без изменений) ...
         print(f"--- 1. ОБРАБОТЧИК /start СРАБОТАЛ для пользователя {message.chat.id} ---")
         chat_id = message.chat.id
         db = SessionLocal()
@@ -76,9 +101,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             print("--- 7. Закрытие сессии БД... ---")
             db.close()
 
+    # --- Обработчик нажатия кнопок ---
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback_query(call):
-        # ... (код для callback_query без изменений) ...
         print(f"--- Получен callback_query от {call.message.chat.id} с данными: {call.data} ---")
         chat_id = call.message.chat.id
         try:
@@ -102,7 +127,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         new_text = f"{call.message.text}\n\n*Ваш ответ: {pressed_button_text}*"
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
         send_node_message(chat_id, next_node_id)
-
 
     # --- ИСПРАВЛЕННАЯ ЛОГИКА "УМНОГО ДИСПЕТЧЕРА" ---
     @bot.message_handler(content_types=['text'])
@@ -162,4 +186,3 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         # Это обычный узел с кнопками, без поддержки ИИ.
         else:
             bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
-
