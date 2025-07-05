@@ -1,4 +1,4 @@
-# app/modules/telegram_handler.py (Версия 3.1 с однозначной логикой)
+# app/modules/telegram_handler.py (Версия 3.2 с полной обработкой ошибок)
 
 import random
 import re
@@ -22,10 +22,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             return
 
         node_type = node.get("type", "question")
-        # Сохраняем текущий узел в сессию пользователя для последующей обработки
         session_info['node_id'] = node_id
 
-        # --- Логика для узлов-помощников (условие, рандомизатор) ---
+        # Логика для узлов-помощников (условие, рандомизатор)
         if node_type == "condition":
             db = SessionLocal()
             try:
@@ -54,11 +53,10 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 send_node_message(chat_id, next_node_id)
             return
 
-        # --- Логика создания кнопок (с поддержкой безусловного перехода) ---
+        # Логика создания кнопок (с поддержкой безусловного перехода)
         markup = InlineKeyboardMarkup()
         if node_type == "question" and "options" in node and node["options"]:
             unconditional_next_id = node.get("next_node_id")
-
             for idx, option in enumerate(node["options"]):
                 next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
                 if not next_node_id_for_button:
@@ -67,7 +65,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 callback_payload = f"{idx}|{next_node_id_for_button}"
                 markup.add(InlineKeyboardButton(text=option["text"], callback_data=callback_payload))
         
-        # --- Логика для финальных узлов (завершение сессии) ---
+        # Логика для финальных узлов (завершение сессии)
         is_final_node = not ("options" in node and node["options"]) and not node.get("next_node_id")
         if is_final_node and node_type != "input_text":
             db = SessionLocal()
@@ -165,20 +163,31 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         elif node.get("ai_enabled", False):
             print(f"Обработка AI диалога для узла {current_node_id}")
             bot.send_chat_action(chat_id, 'typing')
-            last_question_message_id = session_data.get('last_question_message_id')
             
             db = SessionLocal()
             try:
                 session_id = session_data['session_id']
                 system_prompt_context = crud.build_full_context_for_ai(db, session_id, node.get("text", ""), node.get("options", []))
+                
+                # Вызываем наш gigachat_handler
                 ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)
-                crud.create_ai_dialogue(db, session_id, current_node_id, message.text, ai_answer)
-                if last_question_message_id:
-                    try: bot.delete_message(chat_id, last_question_message_id)
-                    except Exception as e: print(f"Не удалось удалить старое сообщение (ID: {last_question_message_id}): {e}")
-                bot.reply_to(message, ai_answer, parse_mode="Markdown")
-                # После ответа ИИ, мы снова показываем исходный вопрос с кнопками
-                send_node_message(chat_id, current_node_id)
+                
+                # Проверяем, что ответ не пустой
+                if ai_answer:
+                    crud.create_ai_dialogue(db, session_id, current_node_id, message.text, ai_answer)
+                    bot.reply_to(message, ai_answer, parse_mode="Markdown")
+                    # После ответа ИИ, мы снова показываем исходный вопрос с кнопками
+                    send_node_message(chat_id, current_node_id)
+                else:
+                    # Если gigachat_handler вернул пустой ответ (например, из-за внутренней ошибки)
+                    print("!!! GigaChat вернул пустой ответ. Ничего не отправлено пользователю.")
+                    bot.reply_to(message, "К сожалению, не удалось получить ответ от ассистента. Попробуйте переформулировать вопрос.")
+
+            except Exception as e:
+                # Ловим любую другую ошибку и сообщаем о ней
+                print("!!! КРИТИЧЕСКАЯ ОШИБКА В БЛОКЕ GIGACHAT !!!")
+                traceback.print_exc()
+                bot.reply_to(message, "Произошла внутренняя ошибка при обращении к AI-ассистенту. Пожалуйста, попробуйте позже.")
             finally:
                 db.close()
 
