@@ -1,4 +1,5 @@
 # app/modules/database/crud.py
+# Версия с добавлением функций для работы с состояниями пользователя
 
 from sqlalchemy.orm import Session
 from . import models
@@ -8,12 +9,9 @@ from . import models
 def get_or_create_user(db: Session, telegram_id: int):
     """
     Находит пользователя по telegram_id или создает нового, если не найден.
-    Принимает сессию `db` в качестве аргумента.
     """
-    # Ищем пользователя, используя переданную сессию `db`
     user = db.query(models.User).filter(models.User.telegram_id == str(telegram_id)).first()
     if not user:
-        # Создаем нового пользователя в рамках той же сессии `db`
         user = models.User(telegram_id=str(telegram_id))
         db.add(user)
         db.commit()
@@ -34,11 +32,11 @@ def create_session(db: Session, user_id: int, graph_id: str):
 
 def end_session(db: Session, session_id: int):
     """
-    Завершает сессию опроса.
+    Завершает сессию опроса, устанавливая время окончания.
     """
     session = db.query(models.Session).filter(models.Session.id == session_id).first()
-    if session:
-        session.is_active = False
+    if session and session.end_time is None:
+        session.end_time = func.now() # Используем func.now() для корректной установки времени
         db.commit()
 
 # --- Функции для работы с ответами ---
@@ -82,14 +80,9 @@ def build_full_context_for_ai(db: Session, session_id: int, current_question: st
     """
     Собирает полный контекст для системного промпта GigaChat.
     """
-    # Собираем историю ответов пользователя
     responses = db.query(models.Response).filter(models.Response.session_id == session_id).order_by(models.Response.id).all()
     history = "\n".join([f"- Ответ на вопрос '{r.node_id}': {r.answer_text}" for r in responses])
-
-    # Форматируем варианты ответа
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Вариантов ответа нет."
-
-    # Собираем системный промпт
     system_prompt = (
         "Ты — вежливый и компетентный ассистент."
         f"Текущий вопрос, который задали пользователю: '{current_question}'\n"
@@ -98,3 +91,40 @@ def build_full_context_for_ai(db: Session, session_id: int, current_question: st
         "Основываясь на этой информации, ответь на следующий вопрос пользователя."
     )
     return system_prompt
+
+# --- НОВЫЙ БЛОК: Функции для работы с состояниями пользователя ---
+
+def get_user_state(db: Session, user_id: int, session_id: int, key: str, default: str = "0") -> str:
+    """
+    Получает значение конкретного ключа состояния для пользователя в рамках сессии.
+    Если состояние не найдено, возвращает значение по умолчанию.
+    Например: get_user_state(db, user_id=1, session_id=5, key='score') -> '120'
+    """
+    state = db.query(models.UserState).filter(
+        models.UserState.user_id == user_id,
+        models.UserState.session_id == session_id,
+        models.UserState.state_key == key
+    ).order_by(models.UserState.id.desc()).first() # Берем самое последнее значение
+    
+    if state:
+        return state.state_value
+    else:
+        return default
+
+def update_user_state(db: Session, user_id: int, session_id: int, key: str, value: any):
+    """
+    Обновляет или создает значение ключа состояния для пользователя в рамках сессии.
+    Всегда сохраняет значение как строку.
+    Например: update_user_state(db, user_id=1, session_id=5, key='score', value=125)
+    """
+    # Создаем новую запись о состоянии. Мы не обновляем старые, чтобы иметь историю изменений.
+    new_state = models.UserState(
+        user_id=user_id,
+        session_id=session_id,
+        state_key=key,
+        state_value=str(value) # Преобразуем значение в строку для единообразного хранения
+    )
+    db.add(new_state)
+    db.commit()
+    db.refresh(new_state)
+    return new_state
