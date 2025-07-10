@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.3: Полный код с исправленной обработкой переносов строк
+# Финальная версия 5.4: Восстановлена подстановка переменных в тексте задач
 
 import random
 import re
@@ -25,7 +25,7 @@ def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_i
             print(f"ОШИБКА: Некорректный формат условия: {condition_str}")
             return False
         key, op_str, value_str = match.groups()
-        actual_value_str = crud.get_user_state(db, user_id, session_id, key)
+        actual_value_str = crud.get_user_state(db, user_id, session_id, key, '0')
         actual_value = float(actual_value_str)
         comparison_value = float(value_str.strip())
         print(f"--- [УСЛОВИЕ] Проверка: {actual_value} {op_str} {comparison_value} ---")
@@ -62,29 +62,37 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     print(f"ОШИБКА: У узла-условия '{node_id}' не определен путь для результата.")
                 return
 
-            # Переменная для хранения текста перед финальной обработкой
-            node_text_template = node.get("text", "")
+            # --- ИЗМЕНЕНИЕ: Восстановлена правильная логика форматирования ---
+            
+            # Сначала получаем сырой шаблон текста
+            text_template = node.get("text", "")
+            
+            # Формируем словарь с переменными
+            current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
+            capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
+            state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
 
-            if node_type in ["task", "state", "question"]:
-                current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
-                capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
-                state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
-                
-                if node_type == "state":
-                    # Для узла "Состояние" берем текст из специального поля
-                    message_template = node.get("state_message", "Состояние обновлено.")
-                    # Сначала форматируем переменные
-                    formatted_text = message_template.format(**state_variables)
-                    # Затем обрабатываем переносы строк
-                    final_text = formatted_text.replace('\\n', '\n')
-                    bot.send_message(chat_id, final_text, parse_mode="Markdown")
-                    
-                    next_node_id = node.get("next_node_id")
-                    if next_node_id: send_node_message(chat_id, next_node_id)
-                    return
-                else:
-                    # Для "Задач" и "Вопросов" форматируем текст из основной колонки
-                    node_text_template = node_text_template.format(**state_variables)
+            if node_type == "state":
+                # Для узла "Состояние" берем текст из специального поля
+                text_template = node.get("state_message", "Состояние обновлено.")
+
+            # Подставляем переменные в шаблон
+            try:
+                formatted_text = text_template.format(**state_variables)
+            except KeyError as e:
+                print(f"ОШИБКА: В шаблоне '{text_template}' не найдена переменная {e}. Используется сырой шаблон.")
+                formatted_text = text_template
+
+            # Обрабатываем переносы строк
+            final_text_to_send = formatted_text.replace('\\n', '\n')
+            
+            if node_type == "state":
+                bot.send_message(chat_id, final_text_to_send, parse_mode="Markdown")
+                next_node_id = node.get("next_node_id")
+                if next_node_id: send_node_message(chat_id, next_node_id)
+                return
+
+            # --- Конец блока изменений ---
 
             if node_type == "randomizer":
                 branches = node.get("branches", [])
@@ -93,9 +101,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 next_node_id = chosen_branch.get("next_node_id")
                 if next_node_id: send_node_message(chat_id, next_node_id)
                 return
-
-            # Финальная обработка текста для всех узлов, которые отправляют сообщение
-            final_text_to_send = node_text_template.replace('\\n', '\n')
 
             markup = InlineKeyboardMarkup()
             if node_type in ["question", "task"] and "options" in node and node["options"]:
@@ -122,7 +127,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         finally:
             db.close()
 
-    # --- Обработчики команд и сообщений ---
+    # --- Обработчики команд и сообщений (без изменений) ---
 
     @bot.message_handler(commands=['start'])
     def start_interview(message):
@@ -171,9 +176,15 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             if pressed_button_text != "N/A":
                 crud.create_response(db, session_id=session_data['session_id'], node_id=session_data['node_id'], answer_text=pressed_button_text)
             
+            # ИЗМЕНЕНИЕ: Форматируем текст при редактировании сообщения
+            original_template = graph_data["nodes"][current_node_id].get("text", "")
+            score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
+            formatted_original = original_template.format(score=int(float(score_str)))
+            clean_original = formatted_original.replace('\\n', '\n')
+            
+            new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
+            
             bot.answer_callback_query(call.id)
-            original_text_without_variables = graph_data["nodes"][current_node_id].get("text", "").replace('\\n', '\n')
-            new_text = f"{original_text_without_variables}\n\n*Ваш ответ: {pressed_button_text}*"
             bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
             send_node_message(chat_id, next_node_id)
         except Exception as e:
@@ -215,6 +226,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             except Exception as e:
                 traceback.print_exc()
                 bot.reply_to(message, "Произошла внутренняя ошибка при обращении к AI-ассистенту.")
-            finally: db.close()
+            finally:
+                db.close()
         else:
             bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
