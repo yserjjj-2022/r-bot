@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.2: Полный код с логированием и обработкой ошибок
+# Финальная версия 5.3: Полный код с исправленной обработкой переносов строк
 
 import random
 import re
@@ -62,23 +62,30 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     print(f"ОШИБКА: У узла-условия '{node_id}' не определен путь для результата.")
                 return
 
+            # Переменная для хранения текста перед финальной обработкой
+            node_text_template = node.get("text", "")
+
             if node_type in ["task", "state", "question"]:
-                current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score')
-                capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before')
+                current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
+                capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
                 state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
                 
                 if node_type == "state":
+                    # Для узла "Состояние" берем текст из специального поля
                     message_template = node.get("state_message", "Состояние обновлено.")
-                    message_text = message_template.format(**state_variables)
-                    bot.send_message(chat_id, message_text, parse_mode="Markdown")
+                    # Сначала форматируем переменные
+                    formatted_text = message_template.format(**state_variables)
+                    # Затем обрабатываем переносы строк
+                    final_text = formatted_text.replace('\\n', '\n')
+                    bot.send_message(chat_id, final_text, parse_mode="Markdown")
+                    
                     next_node_id = node.get("next_node_id")
                     if next_node_id: send_node_message(chat_id, next_node_id)
                     return
                 else:
-                    node_text = node.get("text", "").format(**state_variables)
-            else:
-                node_text = node.get("text", "")
-            
+                    # Для "Задач" и "Вопросов" форматируем текст из основной колонки
+                    node_text_template = node_text_template.format(**state_variables)
+
             if node_type == "randomizer":
                 branches = node.get("branches", [])
                 weights = [branch.get("weight", 1) for branch in branches]
@@ -86,6 +93,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 next_node_id = chosen_branch.get("next_node_id")
                 if next_node_id: send_node_message(chat_id, next_node_id)
                 return
+
+            # Финальная обработка текста для всех узлов, которые отправляют сообщение
+            final_text_to_send = node_text_template.replace('\\n', '\n')
 
             markup = InlineKeyboardMarkup()
             if node_type in ["question", "task"] and "options" in node and node["options"]:
@@ -102,7 +112,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 crud.end_session(db, session_info['session_id'])
                 if chat_id in user_sessions: del user_sessions[chat_id]
             
-            bot.send_message(chat_id, node_text, reply_markup=markup, parse_mode="Markdown")
+            bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
         except Exception as e:
             print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в send_node_message для узла {node_id}!!!")
@@ -141,12 +151,13 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             node = graph_data["nodes"].get(current_node_id)
             if node and node.get("type") == "task":
                 try:
-                    button_idx = int(call.data.split('|', 1)[0])
+                    button_idx_str, _ = call.data.split('|', 1)
+                    button_idx = int(button_idx_str)
                     option_data = node["options"][button_idx]
                     formula = option_data.get("formula")
                     if formula:
                         user = crud.get_or_create_user(db, chat_id)
-                        old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score')
+                        old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
                         crud.update_user_state(db, user.id, session_data['session_id'], 'capital_before', float(old_score_str))
                         current_state = {'score': float(old_score_str)}
                         new_score = state_calculator.calculate_new_state(formula, current_state)
@@ -161,7 +172,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 crud.create_response(db, session_id=session_data['session_id'], node_id=session_data['node_id'], answer_text=pressed_button_text)
             
             bot.answer_callback_query(call.id)
-            new_text = f"{call.message.text}\n\n*Ваш ответ: {pressed_button_text}*"
+            original_text_without_variables = graph_data["nodes"][current_node_id].get("text", "").replace('\\n', '\n')
+            new_text = f"{original_text_without_variables}\n\n*Ваш ответ: {pressed_button_text}*"
             bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
             send_node_message(chat_id, next_node_id)
         except Exception as e:
