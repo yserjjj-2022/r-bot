@@ -1,36 +1,141 @@
 {
   "graph_id": "default_interview_from_csv",
-  "start_node_id": "init_score",
+  "start_node_id": "game_start",
   "nodes": {
-    "final_node": {
-      "text": "Тест завершен.",
+    "game_end_check": {
+      "type": "condition",
+      "condition_string": "{score} >= 350000",
+      "then_node_id": "game_success",
+      "else_node_id": "game_failure"
+    },
+    "game_failure": {
+      "text": "❌ **К сожалению, цель не достигнута.**\n\nВаш итоговый капитал: {score:,.0f} руб.",
       "type": "question"
     },
-    "init_score": {
+    "game_start": {
       "type": "task",
-      "text": "Начнем тест калькулятора. Ваш стартовый счет: 100.",
+      "text": "*--- НАЧАЛО ИГРЫ ---*\n\nОтлично! Начнем финансовую игру. Ваш стартовый капитал: 150,000 руб.",
       "options": [
         {
-          "text": "Начать",
-          "next_node_id": "task_1"
+          "text": "Начать игру",
+          "next_node_id": "round_1_income",
+          "formula": "150000"
         }
       ]
     },
-    "show_result_1": {
+    "game_success": {
+      "text": "✅ **Поздравляем!**\n\nВы успешно завершили игру, достигнув цели. Ваш итоговый капитал: {score:,.0f} руб.",
+      "type": "question"
+    },
+    "round_1_choice": {
+      "type": "task",
+      "text": "Ваш капитал: {score:,.0f} руб.\n\nВыберите инвестиционную стратегию на этот раунд:",
+      "options": [
+        {
+          "text": "Осторожная (+5,000 руб. гарантированно)",
+          "next_node_id": "round_1_result",
+          "formula": "score + 5000"
+        },
+        {
+          "text": "Рискованная (Шанс: +20,000 или -10,000)",
+          "next_node_id": "round_1_result",
+          "formula": "score + random.choice([-10000, 20000])"
+        }
+      ],
+      "ai_enabled": true
+    },
+    "round_1_income": {
+      "type": "task",
+      "text": "*=== РАУНД 1: ОБЫЧНЫЙ ===*\n\nРаунд 1/3. Вам начислен доход: 100,000 руб.",
+      "options": [
+        {
+          "text": "Принять",
+          "next_node_id": "round_1_choice",
+          "formula": "score + 100000"
+        }
+      ]
+    },
+    "round_1_result": {
       "type": "state",
-      "text": "",
-      "next_node_id": "final_node"
+      "next_node_id": "round_2_income",
+      "state_message": "Итоги Раунда 1:\\n- Было: {capital_before:,.0f} руб.\\n- Стало: **{score:,.0f} руб.**"
     },
-    "task_1": {
+    "round_2_choice": {
       "type": "task",
-      "text": "У вас {score} очков. Прибавляем 20.",
+      "text": "После трат ваш капитал: {score:,.0f} руб.\n\nВыберите стратегию на этот раунд:",
       "options": [
         {
-          "text": "Продолжить",
-          "next_node_id": "show_result_1",
-          "formula": "score + 20"
+          "text": "Осторожная (+5,000 руб. гарантированно)",
+          "next_node_id": "round_2_result",
+          "formula": "score + 5000"
+        },
+        {
+          "text": "Рискованная (Шанс: +20,000 или -10,000)",
+          "next_node_id": "round_2_result",
+          "formula": "score + random.choice([-10000, 20000])"
+        }
+      ],
+      "ai_enabled": true
+    },
+    "round_2_income": {
+      "type": "task",
+      "text": "**--- РАУНД 2: ШОКОВОЕ СОБЫТИЕ ---**\n\nРаунд 2/3. Вам начислен доход: 100,000 руб.",
+      "options": [
+        {
+          "text": "Принять",
+          "next_node_id": "round_2_shock",
+          "formula": "score + 100000"
         }
       ]
+    },
+    "round_2_result": {
+      "type": "state",
+      "next_node_id": "round_3_income",
+      "state_message": "Итоги Раунда 2:\\n- Было: {capital_before:,.0f} руб.\\n- Стало: **{score:,.0f} руб.**"
+    },
+    "round_2_shock": {
+      "type": "task",
+      "text": "🚨 **ШОКОВОЕ СОБЫТИЕ!**\n\nСрочный ремонт автомобиля потребовал непредвиденных трат: -140,000 руб.",
+      "options": [
+        {
+          "text": "Ох...",
+          "next_node_id": "round_2_choice",
+          "formula": "score - 140000"
+        }
+      ]
+    },
+    "round_3_choice": {
+      "type": "task",
+      "text": "Ваш капитал: {score:,.0f} руб.\n\nВыберите финальную стратегию:",
+      "options": [
+        {
+          "text": "Осторожная (+5,000 руб. гарантированно)",
+          "next_node_id": "round_3_result",
+          "formula": "score + 5000"
+        },
+        {
+          "text": "Рискованная (Шанс: +20,000 или -10,000)",
+          "next_node_id": "round_3_result",
+          "formula": "score + random.choice([-10000, 20000])"
+        }
+      ],
+      "ai_enabled": true
+    },
+    "round_3_income": {
+      "type": "task",
+      "text": "--- РАУНД 3: ФИНАЛЬНЫЙ ---\n\nРаунд 3/3. Финальный доход: 100,000 руб.",
+      "options": [
+        {
+          "text": "Принять",
+          "next_node_id": "round_3_choice",
+          "formula": "score + 100000"
+        }
+      ]
+    },
+    "round_3_result": {
+      "type": "state",
+      "next_node_id": "game_end_check",
+      "state_message": "Итоги Раунда 3:\\n- Было: {capital_before:,.0f} руб.\\n- Стало: **{score:,.0f} руб.**"
     }
   }
 }
