@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.4: Восстановлена подстановка переменных в тексте задач
+# Финальная версия 5.5: Добавлена поддержка узла "пауза"
 
 import random
 import re
@@ -7,6 +7,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import traceback
 import operator
+import threading  # Импортируем модуль для работы с таймерами
 from sqlalchemy.orm import Session
 
 from app.modules.database import SessionLocal, crud
@@ -53,6 +54,30 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             user = crud.get_or_create_user(db, chat_id)
 
+            # --- НОВЫЙ БЛОК: Обработка узла "Пауза" ---
+            if node_type == "pause":
+                delay = float(node.get("delay", 1.0)) # Получаем задержку из JSON
+                next_node_id = node.get("next_node_id")
+
+                if not next_node_id:
+                    print(f"ОШИБКА: У узла-паузы '{node_id}' не определен next_node_id.")
+                    return
+                
+                print(f"--- [ПАУЗА] Задержка на {delay} сек. для чата {chat_id}, затем переход на {next_node_id} ---")
+                
+                # Показываем пользователю статус "Печатает...", чтобы он понимал, что бот думает
+                bot.send_chat_action(chat_id, 'typing')
+                
+                # Создаем и запускаем неблокирующий таймер
+                timer = threading.Timer(
+                    delay,
+                    send_node_message, # Какую функцию вызвать после паузы
+                    args=[chat_id, next_node_id] # С какими аргументами ее вызвать
+                )
+                timer.start()
+                # Важно! Сразу завершаем выполнение, чтобы не блокировать бота
+                return
+
             if node_type == "condition":
                 result_is_true = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
                 next_node_id = node.get("then_node_id") if result_is_true else node.get("else_node_id")
@@ -62,28 +87,21 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     print(f"ОШИБКА: У узла-условия '{node_id}' не определен путь для результата.")
                 return
 
-            # --- ИЗМЕНЕНИЕ: Восстановлена правильная логика форматирования ---
-            
-            # Сначала получаем сырой шаблон текста
             text_template = node.get("text", "")
             
-            # Формируем словарь с переменными
             current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
             capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
             state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
 
             if node_type == "state":
-                # Для узла "Состояние" берем текст из специального поля
                 text_template = node.get("state_message", "Состояние обновлено.")
 
-            # Подставляем переменные в шаблон
             try:
                 formatted_text = text_template.format(**state_variables)
             except KeyError as e:
                 print(f"ОШИБКА: В шаблоне '{text_template}' не найдена переменная {e}. Используется сырой шаблон.")
                 formatted_text = text_template
 
-            # Обрабатываем переносы строк
             final_text_to_send = formatted_text.replace('\\n', '\n')
             
             if node_type == "state":
@@ -91,8 +109,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 next_node_id = node.get("next_node_id")
                 if next_node_id: send_node_message(chat_id, next_node_id)
                 return
-
-            # --- Конец блока изменений ---
 
             if node_type == "randomizer":
                 branches = node.get("branches", [])
@@ -112,7 +128,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     markup.add(InlineKeyboardButton(text=option["text"], callback_data=callback_payload))
             
             is_final_node = not ("options" in node and node["options"]) and not node.get("next_node_id")
-            if is_final_node and node_type not in ["input_text", "state", "condition"]:
+            if is_final_node and node_type not in ["input_text", "state", "condition", "pause"]:
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
                 crud.end_session(db, session_info['session_id'])
                 if chat_id in user_sessions: del user_sessions[chat_id]
@@ -176,7 +192,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             if pressed_button_text != "N/A":
                 crud.create_response(db, session_id=session_data['session_id'], node_id=session_data['node_id'], answer_text=pressed_button_text)
             
-            # ИЗМЕНЕНИЕ: Форматируем текст при редактировании сообщения
             original_template = graph_data["nodes"][current_node_id].get("text", "")
             score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
             formatted_original = original_template.format(score=int(float(score_str)))
