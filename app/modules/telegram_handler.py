@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.5: Добавлена поддержка узла "пауза"
+# Финальная версия 5.6: Улучшенная "пауза" с кастомным текстом
 
 import random
 import re
@@ -37,6 +37,22 @@ def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_i
 
 def register_handlers(bot: telebot.TeleBot, graph_data: dict):
     
+    # --- НОВАЯ Вспомогательная функция для таймера ---
+    def _resume_after_pause(chat_id, next_node_id, temp_message_id=None):
+        """
+        Эта функция вызывается таймером. 
+        Она удаляет временное сообщение и переходит на следующий узел.
+        """
+        if temp_message_id:
+            try:
+                bot.delete_message(chat_id, temp_message_id)
+            except Exception as e:
+                # Ошибку логируем, но не останавливаем процесс, если сообщение уже удалено
+                print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
+        
+        # Переходим на следующий узел сценария
+        send_node_message(chat_id, next_node_id)
+
     # --- Основная функция отправки сообщений ---
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
@@ -54,10 +70,13 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             user = crud.get_or_create_user(db, chat_id)
 
-            # --- НОВЫЙ БЛОК: Обработка узла "Пауза" ---
+            # --- УЛУЧШЕННЫЙ БЛОК: Обработка узла "Пауза" ---
             if node_type == "pause":
-                delay = float(node.get("delay", 1.0)) # Получаем задержку из JSON
+                delay = float(node.get("delay", 1.0))
                 next_node_id = node.get("next_node_id")
+                # Получаем кастомный текст для паузы. Если его нет, строка будет пустой.
+                pause_text = node.get("pause_text", "").replace('\\n', '\n')
+                temp_message_id = None
 
                 if not next_node_id:
                     print(f"ОШИБКА: У узла-паузы '{node_id}' не определен next_node_id.")
@@ -65,17 +84,21 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 
                 print(f"--- [ПАУЗА] Задержка на {delay} сек. для чата {chat_id}, затем переход на {next_node_id} ---")
                 
-                # Показываем пользователю статус "Печатает...", чтобы он понимал, что бот думает
-                bot.send_chat_action(chat_id, 'typing')
+                if pause_text:
+                    # Если есть текст, отправляем его и запоминаем ID сообщения
+                    sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
+                    temp_message_id = sent_msg.message_id
+                else:
+                    # Если текста нет, используем стандартный статус "думает..."
+                    bot.send_chat_action(chat_id, 'thinking...')
                 
-                # Создаем и запускаем неблокирующий таймер
+                # Создаем и запускаем таймер, который вызовет нашу новую функцию
                 timer = threading.Timer(
                     delay,
-                    send_node_message, # Какую функцию вызвать после паузы
-                    args=[chat_id, next_node_id] # С какими аргументами ее вызвать
+                    _resume_after_pause,
+                    args=[chat_id, next_node_id, temp_message_id]
                 )
                 timer.start()
-                # Важно! Сразу завершаем выполнение, чтобы не блокировать бота
                 return
 
             if node_type == "condition":

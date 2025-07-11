@@ -27,25 +27,17 @@
       "text": "✅ **Поздравляем!**\\n\\nВы успешно завершили игру, достигнув цели. Ваш итоговый капитал: {score:,.0f} руб.",
       "type": "question"
     },
-    "next": {
-      "text": "",
-      "type": "question",
-      "options": [
-        {
-          "text": "Далее"
-        }
-      ],
-      "next_node_id": "pause2"
-    },
     "pause1": {
       "type": "pause",
       "next_node_id": "round_1_result",
-      "delay": 3.0
+      "delay": 3.0,
+      "pause_text": "Веду расчеты по вашему портфелю…"
     },
     "pause2": {
       "type": "pause",
       "next_node_id": "round_2_income",
-      "delay": 3.0
+      "delay": 3.0,
+      "pause_text": "Планирую следующий шаг…"
     },
     "round_1_choice": {
       "type": "task",
@@ -77,7 +69,7 @@
     },
     "round_1_result": {
       "type": "state",
-      "next_node_id": "next",
+      "next_node_id": "pause2",
       "state_message": "*Итоги Раунда 1:\\n\\n- Было: {capital_before:,.0f} руб.\\n\\n- Стало: {score:,.0f} руб.*"
     },
     "round_2_choice": {
