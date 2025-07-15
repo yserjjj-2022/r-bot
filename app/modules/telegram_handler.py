@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.20: Исправлена логика сохранения трактовок для "Обстоятельств"
+# Финальная версия 5.18: Исправлена логика переходов для транзитных узлов (Условие, Пауза и т.д.)
 
 import random
 import re
@@ -18,6 +18,7 @@ user_sessions = {}
 
 # --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
+    """Проверяет, является ли узел конечным в сценарии."""
     if not node_data:
         return True
     
@@ -67,7 +68,18 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
-            # Служебные узлы, которые не отправляют основное сообщение
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Обработка транзитных узлов ---
+            # Для каждого такого узла мы выполняем действие и немедленно выходим из функции
+            if node_type == "condition":
+                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
+                branch_key = "then_node_id" if result else "else_node_id"
+                next_node_id = node.get(branch_key)
+                if next_node_id:
+                    send_node_message(chat_id, next_node_id)
+                else:
+                    print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла-условия '{node_id}' не определен путь для ветки '{branch_key}'.")
+                return # <-- Важнейший return
+
             if node_type == "pause":
                 delay = float(node.get("delay", 1.0))
                 next_node_id = node.get("next_node_id")
@@ -77,16 +89,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if pause_text:
                     sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
                     temp_message_id = sent_msg.message_id
-                else:
-                    bot.send_chat_action(chat_id, 'typing')
+                else: bot.send_chat_action(chat_id, 'typing')
                 threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
-                return
-
-            if node_type == "condition":
-                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                next_node_id = node.get("then_node_id") if result else node.get("else_node_id")
-                if next_node_id: send_node_message(chat_id, next_node_id)
-                return
+                return # <-- Важнейший return
 
             if node_type == "randomizer":
                 branches = node.get("branches", [])
@@ -95,9 +100,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 chosen_branch = random.choices(branches, weights=weights, k=1)[0]
                 next_node_id = chosen_branch.get("next_node_id")
                 if next_node_id: send_node_message(chat_id, next_node_id)
-                return
+                return # <-- Важнейший return
 
-            # Формирование и отправка основного сообщения
+            # Формирование и отправка основного сообщения (для узлов, которые требуют ответа)
             text_template = node.get("text", "")
             if node_type == "state": text_template = node.get("state_message", "Состояние обновлено.")
             
@@ -171,11 +176,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             node_type = node.get("type")
 
             if node_type == "circumstance":
-                # Сначала определяем, что сохранить в базу
                 pressed_button_text = node.get("option_text", "Далее")
-                text_to_save_in_db = node.get('interpretation', pressed_button_text) # Используем трактовку, если она есть
-
-                # Затем применяем формулу
+                text_to_save_in_db = node.get('interpretation', pressed_button_text)
                 formula = node.get("formula")
                 if formula:
                     old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
@@ -201,10 +203,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
             capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
             
-            try:
-                formatted_original = original_template.format(score=int(float(score_str)), capital_before=int(float(capital_before_str)))
-            except KeyError:
-                formatted_original = original_template
+            try: formatted_original = original_template.format(score=int(float(score_str)), capital_before=int(float(capital_before_str)))
+            except KeyError: formatted_original = original_template
             clean_original = formatted_original.replace('\\n', '\n')
             
             new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
