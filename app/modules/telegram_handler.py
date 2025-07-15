@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.17: Добавлена логика для финального чата с ИИ
+# Финальная версия 5.17: Добавлена диагностика для узлов-условий и исправлена логика AI-чата
 
 import random
 import re
@@ -62,12 +62,24 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             node = graph_data["nodes"].get(str(node_id))
             session_info = user_sessions.get(chat_id)
 
-            if not node or not session_info:
-                return
+            if not node or not session_info: return
 
             session_info['node_id'] = node_id
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
+
+            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Улучшенная обработка "Условия" ---
+            if node_type == "condition":
+                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
+                branch_key = "then_node_id" if result else "else_node_id"
+                next_node_id = node.get(branch_key)
+                
+                if next_node_id:
+                    send_node_message(chat_id, next_node_id)
+                else:
+                    # Добавляем лог, чтобы сразу видеть проблему в сценарии
+                    print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла-условия '{node_id}' не определен путь для ветки '{branch_key}'. Бот остановлен.")
+                return
 
             # Служебные узлы, которые не отправляют основное сообщение
             if node_type == "pause":
@@ -79,15 +91,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if pause_text:
                     sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
                     temp_message_id = sent_msg.message_id
-                else:
-                    bot.send_chat_action(chat_id, 'typing')
+                else: bot.send_chat_action(chat_id, 'typing')
                 threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
-                return
-
-            if node_type == "condition":
-                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                next_node_id = node.get("then_node_id") if result else node.get("else_node_id")
-                if next_node_id: send_node_message(chat_id, next_node_id)
                 return
 
             if node_type == "randomizer":
@@ -102,8 +107,11 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             # Формирование и отправка основного сообщения
             text_template = node.get("text", "")
             if node_type == "state": text_template = node.get("state_message", "Состояние обновлено.")
+            
             current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
-            state_variables = {'score': int(float(current_score_str))}
+            capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
+            state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
+            
             try: formatted_text = text_template.format(**state_variables)
             except KeyError: formatted_text = text_template
             final_text_to_send = formatted_text.replace('\\n', '\n')
@@ -194,7 +202,10 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             original_template = node.get("text", "")
             score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-            try: formatted_original = original_template.format(score=int(float(score_str)))
+            capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
+            
+            try:
+                formatted_original = original_template.format(score=int(float(score_str)), capital_before=int(float(capital_before_str)))
             except KeyError: formatted_original = original_template
             clean_original = formatted_original.replace('\\n', '\n')
             
@@ -224,7 +235,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         current_node_id = session_data['node_id']
         node = graph_data["nodes"].get(current_node_id)
         
-        # --- ИЗМЕНЕНИЕ: Логика для AI-помощи ---
         if node and node.get("ai_enabled", False):
             bot.send_chat_action(chat_id, 'typing')
             db = SessionLocal()
@@ -253,7 +263,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     crud.end_session(db, session_data['session_id'])
                     if chat_id in user_sessions: del user_sessions[chat_id]
                 elif ai_answer:
-                    # Возвращаем к вопросу только если это не финальный чат
                     send_node_message(chat_id, current_node_id)
             
             except Exception as e:
@@ -271,4 +280,3 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 db.close()
         else:
             bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
-
