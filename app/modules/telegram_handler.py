@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# ВЕРСИЯ ДЛЯ ДИАГНОСТИКИ: Добавлено расширенное логирование
+# ПОЛНАЯ ВЕРСИЯ ДЛЯ ДИАГНОСТИКИ: Добавлено расширенное логирование для всех узлов
 
 import random
 import re
@@ -69,6 +69,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             node_type = node.get("type", "question")
             print(f"--- [DIAGNOSTIC] Обрабатывается узел '{node_id}', тип: '{node_type}'")
 
+            # --- Блок обработки транзитных (неинтерактивных) узлов ---
             if node_type == "condition":
                 result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
                 branch_key = "then_node_id" if result else "else_node_id"
@@ -80,6 +81,31 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     print(f"--- [DIAGNOSTIC] !!! ОШИБКА СЦЕНАРИЯ: Для узла '{node_id}' не определен переход для ветки '{branch_key}'.")
                 return
 
+            if node_type == "pause":
+                print(f"--- [DIAGNOSTIC] Узел-пауза '{node_id}'. Задержка: {node.get('delay', 1.0)}с, следующий узел: '{node.get('next_node_id')}'")
+                delay = float(node.get("delay", 1.0))
+                next_node_id = node.get("next_node_id")
+                if not next_node_id: return
+                pause_text = node.get("pause_text", "").replace('\\n', '\n')
+                temp_message_id = None
+                if pause_text:
+                    sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
+                    temp_message_id = sent_msg.message_id
+                else: bot.send_chat_action(chat_id, 'typing')
+                threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
+                return
+
+            if node_type == "randomizer":
+                branches = node.get("branches", [])
+                print(f"--- [DIAGNOSTIC] Узел-рандомизатор '{node_id}'. Возможные ветки: {branches}")
+                if not branches: return
+                weights = [branch.get("weight", 1) for branch in branches]
+                chosen_branch = random.choices(branches, weights=weights, k=1)[0]
+                next_node_id = chosen_branch.get("next_node_id")
+                print(f"--- [DIAGNOSTIC] Рандомизатор выбрал ветку с переходом на '{next_node_id}'")
+                if next_node_id: send_node_message(chat_id, next_node_id)
+                return
+            
             if node_type == "state":
                 print(f"--- [DIAGNOSTIC] Узел-состояние '{node_id}'. Следующий узел: '{node.get('next_node_id')}'")
                 text_template = node.get("state_message", "Состояние обновлено.")
@@ -97,6 +123,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     print(f"--- [DIAGNOSTIC] !!! ОШИБКА СЦЕНАРИЯ: У узла 'state' '{node_id}' нет next_node_id.")
                 return
 
+            # --- Блок обработки интерактивных узлов ---
             print(f"--- [DIAGNOSTIC] Узел '{node_id}' является интерактивным. Готовится сообщение.")
             text_template = node.get("text", "")
             current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
@@ -285,4 +312,3 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         else:
             print(f"--- [DIAGNOSTIC] Некорректное текстовое сообщение для узла '{current_node_id}'.")
             bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
-
