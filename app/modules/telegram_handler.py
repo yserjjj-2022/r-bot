@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.8: Добавлена поддержка типа "Обстоятельство"
+# Финальная версия 5.13: Добавлена логика сохранения "трактовок" в базу данных
 
 import random
 import re
@@ -64,7 +64,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             user = crud.get_or_create_user(db, chat_id)
 
-            # --- Обработка узла "Обстоятельство" ---
             if node_type == "circumstance":
                 current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
                 state_variables = {'score': int(float(current_score_str))}
@@ -217,17 +216,28 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             button_idx_str, next_node_id = call.data.split('|', 1)
             button_idx = int(button_idx_str)
 
-            if node.get("type") == "circumstance":
-                pressed_button_text = node.get("option_text", "Далее")
-            else:
-                pressed_button_text = call.message.reply_markup.keyboard[button_idx][0].text
+            # --- ИЗМЕНЕНИЕ: Логика выбора текста для сохранения в базу ---
+            text_to_save_in_db = "N/A"
+            pressed_button_text = "N/A"
 
-            if pressed_button_text != "N/A":
-                crud.create_response(db, session_id=session_data['session_id'], node_id=session_data['node_id'], answer_text=pressed_button_text)
+            if node.get("type") == "circumstance":
+                text_to_save_in_db = node.get("option_text", "Далее")
+                pressed_button_text = text_to_save_in_db
+            elif "options" in node and len(node["options"]) > button_idx:
+                option_data = node["options"][button_idx]
+                pressed_button_text = option_data['text'] # Видимый текст кнопки
+                # Если есть 'interpretation', используем ее для сохранения. Иначе - видимый текст.
+                text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
+            
+            if text_to_save_in_db != "N/A":
+                crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, answer_text=text_to_save_in_db)
             
             original_template = graph_data["nodes"][current_node_id].get("text", "")
             score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-            formatted_original = original_template.format(score=int(float(score_str)))
+            try:
+                formatted_original = original_template.format(score=int(float(score_str)))
+            except KeyError:
+                formatted_original = original_template # Если нет переменных для подстановки
             clean_original = formatted_original.replace('\\n', '\n')
             
             new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
@@ -274,8 +284,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     session_id, 
                     user.id,
                     node.get("text", ""), 
-                    node.get("options", []),
-                    node.get("event_type") # Передаем тип события
+                    node.get("options", []) if node.get("options") else [],
+                    node.get("event_type")
                 )
                 
                 ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)
@@ -294,4 +304,4 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 db.close()
         
         else:
-            bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")          
+            bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")     

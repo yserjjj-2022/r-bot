@@ -2,6 +2,12 @@
   "graph_id": "default_interview_from_csv",
   "start_node_id": "game_start",
   "nodes": {
+    "game_end": {
+      "type": "circumstance",
+      "text": "Поздравляю с завершением игры!",
+      "next_node_id": "",
+      "option_text": ""
+    },
     "game_end_check": {
       "type": "condition",
       "condition_string": "{score} >= 350000",
@@ -10,7 +16,15 @@
     },
     "game_failure": {
       "text": "❌ **К сожалению, цель не достигнута.**\\n\\nВаш итоговый капитал: {score:,.0f} руб.",
-      "type": "question"
+      "type": "question",
+      "options": [
+        {
+          "text": "далее",
+          "interpretation": "Цель игры не достигнута"
+        }
+      ],
+      "next_node_id": "game_end",
+      "ai_enabled": true
     },
     "game_start": {
       "type": "task",
@@ -25,7 +39,15 @@
     },
     "game_success": {
       "text": "✅ **Поздравляем!**\\n\\nВы успешно завершили игру, достигнув цели. Ваш итоговый капитал: {score:,.0f} руб.",
-      "type": "question"
+      "type": "question",
+      "options": [
+        {
+          "text": "далее",
+          "interpretation": "Цель игры достигнута"
+        }
+      ],
+      "next_node_id": "game_end",
+      "ai_enabled": true
     },
     "pause1": {
       "type": "pause",
@@ -46,12 +68,14 @@
         {
           "text": "Осторожная (+5,000 руб. гарантированно)",
           "next_node_id": "pause1",
-          "formula": "score + 5000"
+          "formula": "score + 5000",
+          "interpretation": "Выбрана осторожная стратегия"
         },
         {
           "text": "Рискованная (Шанс: +20,000 или -10,000)",
           "next_node_id": "pause1",
-          "formula": "score + random.choice([-10000, 20000])"
+          "formula": "score + random.choice([-10000, 20000])",
+          "interpretation": "Выбрана рискованная стратегия"
         }
       ],
       "ai_enabled": true
@@ -79,12 +103,14 @@
         {
           "text": "Осторожная (+5,000 руб. гарантированно)",
           "next_node_id": "round_2_result",
-          "formula": "score + 5000"
+          "formula": "score + 5000",
+          "interpretation": "Выбрана осторожная стратегия"
         },
         {
           "text": "Рискованная (Шанс: +20,000 или -10,000)",
           "next_node_id": "round_2_result",
-          "formula": "score + random.choice([-10000, 20000])"
+          "formula": "score + random.choice([-10000, 20000])",
+          "interpretation": "Выбрана рискованная стратегия"
         }
       ],
       "ai_enabled": true
@@ -119,12 +145,14 @@
         {
           "text": "Осторожная (+5,000 руб. гарантированно)",
           "next_node_id": "round_3_result",
-          "formula": "score + 5000"
+          "formula": "score + 5000",
+          "interpretation": "Выбрана осторожная стратегия"
         },
         {
           "text": "Рискованная (Шанс: +20,000 или -10,000)",
           "next_node_id": "round_3_result",
-          "formula": "score + random.choice([-10000, 20000])"
+          "formula": "score + random.choice([-10000, 20000])",
+          "interpretation": "Выбрана рискованная стратегия"
         }
       ],
       "ai_enabled": true
