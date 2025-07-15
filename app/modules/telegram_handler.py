@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.18: Исправлена логика переходов для транзитных узлов (Условие, Пауза и т.д.)
+# Финальная версия 5.18: Исправлена логика переходов для транзитных узлов (Условие, Состояние и т.д.)
 
 import random
 import re
@@ -16,27 +16,16 @@ from app.modules import state_calculator
 
 user_sessions = {}
 
-# --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
-    """Проверяет, является ли узел конечным в сценарии."""
-    if not node_data:
-        return True
-    
+    if not node_data: return True
     has_next_node = node_data.get("next_node_id") or node_data.get("then_node_id") or node_data.get("else_node_id")
-    if has_next_node:
-        return False
-        
+    if has_next_node: return False
     if "options" in node_data and node_data["options"]:
         for option in node_data["options"]:
-            if option.get("next_node_id"):
-                return False
-
-    if "branches" in node_data and node_data["branches"]:
-        return False
-        
+            if option.get("next_node_id"): return False
+    if "branches" in node_data and node_data["branches"]: return False
     return True
 
-# --- Вспомогательная функция для безопасного сравнения ---
 def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_id: int) -> bool:
     ops = {'>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le, '==': operator.eq, '!=': operator.ne}
     try:
@@ -68,8 +57,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Обработка транзитных узлов ---
-            # Для каждого такого узла мы выполняем действие и немедленно выходим из функции
+            # --- Блок обработки транзитных (неинтерактивных) узлов ---
             if node_type == "condition":
                 result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
                 branch_key = "then_node_id" if result else "else_node_id"
@@ -78,7 +66,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     send_node_message(chat_id, next_node_id)
                 else:
                     print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла-условия '{node_id}' не определен путь для ветки '{branch_key}'.")
-                return # <-- Важнейший return
+                return
 
             if node_type == "pause":
                 delay = float(node.get("delay", 1.0))
@@ -91,7 +79,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     temp_message_id = sent_msg.message_id
                 else: bot.send_chat_action(chat_id, 'typing')
                 threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
-                return # <-- Важнейший return
+                return
 
             if node_type == "randomizer":
                 branches = node.get("branches", [])
@@ -100,16 +88,26 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 chosen_branch = random.choices(branches, weights=weights, k=1)[0]
                 next_node_id = chosen_branch.get("next_node_id")
                 if next_node_id: send_node_message(chat_id, next_node_id)
-                return # <-- Важнейший return
-
-            # Формирование и отправка основного сообщения (для узлов, которые требуют ответа)
-            text_template = node.get("text", "")
-            if node_type == "state": text_template = node.get("state_message", "Состояние обновлено.")
+                return
             
+            if node_type == "state":
+                text_template = node.get("state_message", "Состояние обновлено.")
+                current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
+                capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
+                state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
+                try: formatted_text = text_template.format(**state_variables)
+                except KeyError: formatted_text = text_template
+                final_text_to_send = formatted_text.replace('\\n', '\n')
+                bot.send_message(chat_id, final_text_to_send, parse_mode="Markdown")
+                next_node_id = node.get("next_node_id")
+                if next_node_id: send_node_message(chat_id, next_node_id)
+                return
+
+            # --- Блок обработки интерактивных узлов ---
+            text_template = node.get("text", "")
             current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
             capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
             state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
-            
             try: formatted_text = text_template.format(**state_variables)
             except KeyError: formatted_text = text_template
             final_text_to_send = formatted_text.replace('\\n', '\n')
@@ -131,10 +129,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
                 crud.end_session(db, session_info['session_id'])
                 if chat_id in user_sessions: del user_sessions[chat_id]
-
-            if node_type == "state":
-                next_node_id = node.get("next_node_id")
-                if next_node_id: send_node_message(chat_id, next_node_id)
         
         except Exception as e:
             traceback.print_exc()
