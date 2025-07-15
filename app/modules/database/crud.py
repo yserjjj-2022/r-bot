@@ -1,10 +1,11 @@
 # app/modules/database/crud.py
-# Финальная версия 5.15: Исправлена ошибка NameError
+# Финальная версия 5.17: Промпт доработан для предоставления обоснования (Rationale)
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from . import models
 
+# --- Функции для работы с пользователями (без изменений) ---
 def get_or_create_user(db: Session, telegram_id: int):
     user = db.query(models.User).filter(models.User.telegram_id == str(telegram_id)).first()
     if not user:
@@ -14,6 +15,7 @@ def get_or_create_user(db: Session, telegram_id: int):
         db.refresh(user)
     return user
 
+# --- Функции для работы с сессиями опроса (без изменений) ---
 def create_session(db: Session, user_id: int, graph_id: str):
     session = models.Session(user_id=user_id, graph_id=graph_id)
     db.add(session)
@@ -27,6 +29,7 @@ def end_session(db: Session, session_id: int):
         session.end_time = func.now()
         db.commit()
 
+# --- Функции для работы с ответами (без изменений) ---
 def create_response(db: Session, session_id: int, node_id: str, answer_text: str):
     response = models.Response(session_id=session_id, node_id=node_id, answer_text=answer_text)
     db.add(response)
@@ -34,6 +37,7 @@ def create_response(db: Session, session_id: int, node_id: str, answer_text: str
     db.refresh(response)
     return response
 
+# --- Функции для работы с состояниями пользователя (без изменений) ---
 def get_user_state(db: Session, user_id: int, session_id: int, key: str, default: str = "0") -> str:
     state = db.query(models.UserState).filter(
         models.UserState.user_id == user_id,
@@ -54,12 +58,14 @@ def update_user_state(db: Session, user_id: int, session_id: int, key: str, valu
     db.refresh(new_state)
     return new_state
 
+# --- Функции для работы с диалогами GigaChat (без изменений) ---
 def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_message: str, ai_response: str):
     dialogue = models.AIDialogue(session_id=session_id, node_id=node_id, user_message=user_message, ai_response=ai_response)
     db.add(dialogue)
     db.commit()
     return dialogue
 
+# --- ИЗМЕНЕНИЕ: Финальная, улучшенная функция сборки контекста для ИИ ---
 def build_full_context_for_ai(db: Session, session_id: int, user_id: int, current_question: str, options: list, event_type: str = None) -> str:
     """Собирает полный, структурированный контекст для ИИ по принципам финансовой аналитики."""
     
@@ -77,8 +83,6 @@ def build_full_context_for_ai(db: Session, session_id: int, user_id: int, curren
             game_history.append(f"- На шаге '{r.node_id}' игрок выбрал: «{r.answer_text}»")
     
     profile_block = "\n".join(profile_info) if profile_info else "Не предоставлен."
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Добавлена недостающая строка ---
-    game_history_block = "\n".join(game_history) if game_history else "Еще не было."
     last_player_action = game_history[-1] if game_history else "Это первое действие в игре."
 
     score = get_user_state(db, user_id, session_id, 'score', '0')
@@ -90,19 +94,26 @@ def build_full_context_for_ai(db: Session, session_id: int, user_id: int, curren
     
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Вариантов ответа нет."
     
+    # --- Финальный промпт, использующий технику "Цепочка рассуждений" (Chain-of-Thought) ---
     system_prompt = (
-        "Ты — уверенный и проактивный AI-консультант в финансовой игре. Твоя главная цель — не просто информировать, а **давать прямые, конкретные и аргументированные рекомендации**, чтобы помочь игроку достичь цели. Ты должен активно брать на себя ответственность за совет.\n\n"
-        "--- АНАЛИТИЧЕСКАЯ СВОДКА ПО ИГРОКУ ---\n\n"
-        f"**БЛОК 1: ПРОФИЛЬ ИГРОКА (ключевые характеристики и предпочтения).**\n{profile_block}\n\n"
-        f"**БЛОК 2: ИСТОРИЯ РЕШЕНИЙ В ИГРЕ.**\n{game_history_block}\n\n"
-        f"**БЛОК 3: ТЕКУЩЕЕ ФИНАНСОВОЕ СОСТОЯНИЕ.**\n{state_info}\n\n"
-        "--- ТЕКУЩАЯ ЗАДАЧА ---\n"
-        f"**Описание:** {current_question}\n"
-        f"**Природа события:** {event_nature}\n"
-        f"**Варианты выбора:**\n{options_text}\n\n"
-        "--- ТВОЯ ЖЕСТКАЯ ИНСТРУКЦИЯ ---\n"
-        "1. **АНАЛИЗ:** Внимательно изучи всю сводку. Не путай решения игрока и внешние шоки.\n"
-        "2. **ОТВЕТ:** Ответь на вопрос пользователя. Не задавай встречных вопросов, не уклоняйся от ответа, не перекладывай ответственность на игрока.\n"
-        "3. **РЕКОМЕНДАЦИЯ:** Обязательно закончи свой ответ прямым советом. Используй фразы вроде: «Я рекомендую выбрать...», «В вашей ситуации оптимальным будет...», «Наилучшим решением здесь является...». Твой совет должен быть однозначным."
+        "Ты — AI-ассистент, действующий как логик-аналитик. Твоя задача — строго следовать приведенному ниже алгоритму, чтобы дать пользователю логически безупречный и полезный ответ.\n\n"
+        "--- ИСХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА ---\n"
+        f"1. **Профиль игрока:**\n{profile_block}\n"
+        f"2. **Последнее решение игрока:** {last_player_action}\n"
+        f"3. **Событие, произошедшее ПОСЛЕ этого решения:** {current_question.strip()}\n"
+        f"4. **Природа этого события:** {event_nature}\n"
+        f"5. **Текущее финансовое состояние:** {state_info}\n"
+        f"6. **Доступные варианты для следующего шага:**\n{options_text}\n\n"
+        "--- АЛГОРИТМ ТВОИХ ДЕЙСТВИЙ (ОБЯЗАТЕЛЕН К ВЫПОЛНЕНИЮ) ---\n"
+        "**Шаг 1: Анализ причинно-следственной связи.**\n"
+        "- Определи, связано ли текущее событие (пункт 3) с последним решением игрока (пункт 2), основываясь на природе события (пункт 4).\n"
+        "**Шаг 2: Формулировка объяснения для пользователя.**\n"
+        "- Если пользователь спрашивает 'что случилось?', дай ему четкий ответ на основе анализа из Шага 1. Если это был внешний шок, обязательно подчеркни его случайный, не зависящий от игрока характер.\n"
+        "**Шаг 3: Формулировка ОБОСНОВАНИЯ (Rationale) для рекомендации.**\n"
+        "- На основе ВСЕХ исходных данных (профиля, финансов и корректного объяснения из Шага 2) кратко, в 1-2 предложениях, сформулируй логику твоего будущего совета. Пример: «Учитывая вашу склонность к риску и текущее финансовое положение, наиболее разумным будет выбрать вариант, который...».\n"
+        "**Шаг 4: Формулировка прямой РЕКОМЕНДАЦИИ.**\n"
+        "- Дай игроку **прямую и однозначную рекомендацию**, какой вариант выбрать. Используй фразы: «Поэтому я рекомендую выбрать...», «Исходя из этого, лучшим решением будет...».\n"
+        "**Шаг 5: Итоговый ответ.**\n"
+        "- Скомпонуй результаты Шагов 2, 3 и 4 в единый, логичный и уверенный ответ на вопрос пользователя. Не показывай пользователю свои внутренние шаги."
     )
     return system_prompt
