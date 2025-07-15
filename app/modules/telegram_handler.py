@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.17: Добавлена диагностика для узлов-условий и исправлена логика AI-чата
+# Финальная версия 5.20: Исправлена логика сохранения трактовок для "Обстоятельств"
 
 import random
 import re
@@ -18,7 +18,6 @@ user_sessions = {}
 
 # --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
-    """Проверяет, является ли узел конечным в сценарии."""
     if not node_data:
         return True
     
@@ -68,19 +67,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
-            # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Улучшенная обработка "Условия" ---
-            if node_type == "condition":
-                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                branch_key = "then_node_id" if result else "else_node_id"
-                next_node_id = node.get(branch_key)
-                
-                if next_node_id:
-                    send_node_message(chat_id, next_node_id)
-                else:
-                    # Добавляем лог, чтобы сразу видеть проблему в сценарии
-                    print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла-условия '{node_id}' не определен путь для ветки '{branch_key}'. Бот остановлен.")
-                return
-
             # Служебные узлы, которые не отправляют основное сообщение
             if node_type == "pause":
                 delay = float(node.get("delay", 1.0))
@@ -91,8 +77,15 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if pause_text:
                     sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
                     temp_message_id = sent_msg.message_id
-                else: bot.send_chat_action(chat_id, 'typing')
+                else:
+                    bot.send_chat_action(chat_id, 'typing')
                 threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
+                return
+
+            if node_type == "condition":
+                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
+                next_node_id = node.get("then_node_id") if result else node.get("else_node_id")
+                if next_node_id: send_node_message(chat_id, next_node_id)
                 return
 
             if node_type == "randomizer":
@@ -156,7 +149,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             traceback.print_exc()
         finally:
             db.close()
-
+    
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback_query(call):
         chat_id = call.message.chat.id
@@ -178,8 +171,12 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             node_type = node.get("type")
 
             if node_type == "circumstance":
+                # Сначала определяем, что сохранить в базу
+                pressed_button_text = node.get("option_text", "Далее")
+                text_to_save_in_db = node.get('interpretation', pressed_button_text) # Используем трактовку, если она есть
+
+                # Затем применяем формулу
                 formula = node.get("formula")
-                pressed_button_text = text_to_save_in_db = node.get("option_text", "Далее")
                 if formula:
                     old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
                     new_score = state_calculator.calculate_new_state(formula, {'score': float(old_score_str)})
@@ -206,7 +203,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             try:
                 formatted_original = original_template.format(score=int(float(score_str)), capital_before=int(float(capital_before_str)))
-            except KeyError: formatted_original = original_template
+            except KeyError:
+                formatted_original = original_template
             clean_original = formatted_original.replace('\\n', '\n')
             
             new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"

@@ -4,12 +4,7 @@
   "nodes": {
     "game_end": {
       "text": "Поздравляю с завершением игры!",
-      "type": "question",
-      "options": [
-        {
-          "text": "завершить"
-        }
-      ]
+      "type": "question"
     },
     "game_end_check": {
       "type": "condition",
@@ -20,13 +15,6 @@
     "game_failure": {
       "text": "❌ **К сожалению, цель не достигнута.**\\n\\nВаш итоговый капитал: {score:,.0f} руб.",
       "type": "question",
-      "options": [
-        {
-          "text": "далее",
-          "interpretation": "Цель игры не достигнута"
-        }
-      ],
-      "next_node_id": "game_end",
       "ai_enabled": true
     },
     "game_start": {
@@ -43,13 +31,6 @@
     "game_success": {
       "text": "✅ **Поздравляем!**\\n\\nВы успешно завершили игру, достигнув цели. Ваш итоговый капитал: {score:,.0f} руб.",
       "type": "question",
-      "options": [
-        {
-          "text": "далее",
-          "interpretation": "Цель игры достигнута"
-        }
-      ],
-      "next_node_id": "game_end",
       "ai_enabled": true
     },
     "pause1": {
@@ -139,7 +120,8 @@
       "text": "❗ *ШОКОВОЕ СОБЫТИЕ!\\n\\nСрочный ремонт автомобиля потребовал непредвиденных трат: -140,000 руб.*",
       "next_node_id": "round_2_choice",
       "option_text": "Ох...",
-      "formula": "score - 140000"
+      "formula": "score - 140000",
+      "interpretation": "Произошел внешний, не зависящий от предыдущих решений человека шок \"Ремонт автомобиля\", счет уменьшился на 140 000"
     },
     "round_3_choice": {
       "type": "task",
