@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.7: ИИ теперь "видит" состояние счета
+# Финальная версия 5.8: Добавлена поддержка типа "Обстоятельство"
 
 import random
 import re
@@ -63,6 +63,20 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             print(f"--- [СЕССИЯ] Установлен текущий узел: {node_id} ---")
             
             user = crud.get_or_create_user(db, chat_id)
+
+            # --- Обработка узла "Обстоятельство" ---
+            if node_type == "circumstance":
+                current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
+                state_variables = {'score': int(float(current_score_str))}
+                text_template = node.get("text", "").replace('\\n', '\n')
+                final_text = text_template.format(**state_variables)
+                
+                markup = InlineKeyboardMarkup()
+                callback_data = f"0|{node.get('next_node_id')}"
+                markup.add(InlineKeyboardButton(text=node.get('option_text', 'Далее'), callback_data=callback_data))
+                
+                bot.send_message(chat_id, final_text, reply_markup=markup, parse_mode="Markdown")
+                return
 
             if node_type == "pause":
                 delay = float(node.get("delay", 1.0))
@@ -132,7 +146,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     markup.add(InlineKeyboardButton(text=option["text"], callback_data=callback_payload))
             
             is_final_node = not ("options" in node and node["options"]) and not node.get("next_node_id")
-            if is_final_node and node_type not in ["input_text", "state", "condition", "pause"]:
+            if is_final_node and node_type not in ["input_text", "state", "condition", "pause", "circumstance"]:
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
                 crud.end_session(db, session_info['session_id'])
                 if chat_id in user_sessions: del user_sessions[chat_id]
@@ -174,7 +188,17 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         try:
             current_node_id = session_data['node_id']
             node = graph_data["nodes"].get(current_node_id)
-            if node and node.get("type") == "task":
+
+            if node and node.get("type") == "circumstance":
+                formula = node.get("formula")
+                if formula:
+                    user = crud.get_or_create_user(db, chat_id)
+                    old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
+                    current_state = {'score': float(old_score_str)}
+                    new_score = state_calculator.calculate_new_state(formula, current_state)
+                    crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
+            
+            elif node and node.get("type") == "task":
                 try:
                     button_idx_str, _ = call.data.split('|', 1)
                     button_idx = int(button_idx_str)
@@ -192,7 +216,12 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             button_idx_str, next_node_id = call.data.split('|', 1)
             button_idx = int(button_idx_str)
-            pressed_button_text = call.message.reply_markup.keyboard[button_idx][0].text
+
+            if node.get("type") == "circumstance":
+                pressed_button_text = node.get("option_text", "Далее")
+            else:
+                pressed_button_text = call.message.reply_markup.keyboard[button_idx][0].text
+
             if pressed_button_text != "N/A":
                 crud.create_response(db, session_id=session_data['session_id'], node_id=session_data['node_id'], answer_text=pressed_button_text)
             
@@ -239,14 +268,14 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             db = SessionLocal()
             try:
                 session_id = session_data['session_id']
-                # ИЗМЕНЕНИЕ: Получаем user и передаем его ID в функцию сборки контекста
                 user = crud.get_or_create_user(db, chat_id)
                 system_prompt_context = crud.build_full_context_for_ai(
                     db, 
                     session_id, 
                     user.id,
                     node.get("text", ""), 
-                    node.get("options", [])
+                    node.get("options", []),
+                    node.get("event_type") # Передаем тип события
                 )
                 
                 ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)
@@ -254,7 +283,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if ai_answer:
                     crud.create_ai_dialogue(db, session_id, current_node_id, message.text, ai_answer)
                     bot.reply_to(message, ai_answer, parse_mode="Markdown")
-                    # Отправляем текущий узел еще раз, чтобы пользователь снова увидел вопрос и кнопки
                     send_node_message(chat_id, current_node_id)
                 else: 
                     bot.reply_to(message, "К сожалению, не удалось получить ответ от ассистента.")
@@ -266,5 +294,4 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 db.close()
         
         else:
-            bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
-            
+            bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")          

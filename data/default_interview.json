@@ -44,12 +44,12 @@
       "text": "Ваш капитал: {score:,.0f} руб.\\n\\nВыберите инвестиционную стратегию на этот раунд:",
       "options": [
         {
-          "text": "*Осторожная (+5,000 руб. гарантированно)*",
+          "text": "Осторожная (+5,000 руб. гарантированно)",
           "next_node_id": "pause1",
           "formula": "score + 5000"
         },
         {
-          "text": "*Рискованная (Шанс: +20,000 или -10,000)*",
+          "text": "Рискованная (Шанс: +20,000 или -10,000)",
           "next_node_id": "pause1",
           "formula": "score + random.choice([-10000, 20000])"
         }
@@ -106,15 +106,11 @@
       "state_message": "*Итоги Раунда 2:\\n\\n- Было: {capital_before:,.0f} руб.\\n\\n- Стало: {score:,.0f} руб.*"
     },
     "round_2_shock": {
-      "type": "task",
+      "type": "circumstance",
       "text": "❗ *ШОКОВОЕ СОБЫТИЕ!\\n\\nСрочный ремонт автомобиля потребовал непредвиденных трат: -140,000 руб.*",
-      "options": [
-        {
-          "text": "Ох...",
-          "next_node_id": "round_2_choice",
-          "formula": "score - 140000"
-        }
-      ]
+      "next_node_id": "round_2_choice",
+      "option_text": "Ох...",
+      "formula": "score - 140000"
     },
     "round_3_choice": {
       "type": "task",
