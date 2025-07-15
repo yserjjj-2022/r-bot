@@ -3,10 +3,13 @@
   "start_node_id": "game_start",
   "nodes": {
     "game_end": {
-      "type": "circumstance",
       "text": "Поздравляю с завершением игры!",
-      "next_node_id": "",
-      "option_text": ""
+      "type": "question",
+      "options": [
+        {
+          "text": "завершить"
+        }
+      ]
     },
     "game_end_check": {
       "type": "condition",
