@@ -1,5 +1,5 @@
 # app/modules/database/crud.py
-# Финальная версия 5.14: Промпт переписан для проактивного поведения ИИ
+# Финальная версия 5.15: Исправлена ошибка NameError
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -69,7 +69,6 @@ def build_full_context_for_ai(db: Session, session_id: int, user_id: int, curren
     game_history = []
 
     for r in all_responses:
-        # Ответ является частью профиля, если у него есть трактовка (содержит ':') или ID узла содержит ключ
         is_profile_data = (':' in r.answer_text and len(r.answer_text.split(':')[0]) < 30) or \
                           any(key in r.node_id.lower() for key in soc_dem_keys)
         if is_profile_data:
@@ -78,6 +77,8 @@ def build_full_context_for_ai(db: Session, session_id: int, user_id: int, curren
             game_history.append(f"- На шаге '{r.node_id}' игрок выбрал: «{r.answer_text}»")
     
     profile_block = "\n".join(profile_info) if profile_info else "Не предоставлен."
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: Добавлена недостающая строка ---
+    game_history_block = "\n".join(game_history) if game_history else "Еще не было."
     last_player_action = game_history[-1] if game_history else "Это первое действие в игре."
 
     score = get_user_state(db, user_id, session_id, 'score', '0')
