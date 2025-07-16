@@ -1,10 +1,11 @@
 # app/modules/database/crud.py
-# Финальная версия 5.19: Добавлен отдельный промпт для финального чата
+# Финальная версия 5.18: Промпт доработан для генерации естественного, а не пошагового ответа
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from . import models
 
+# --- Функции для работы с пользователями (без изменений) ---
 def get_or_create_user(db: Session, telegram_id: int):
     user = db.query(models.User).filter(models.User.telegram_id == str(telegram_id)).first()
     if not user:
@@ -14,6 +15,7 @@ def get_or_create_user(db: Session, telegram_id: int):
         db.refresh(user)
     return user
 
+# --- Функции для работы с сессиями опроса (без изменений) ---
 def create_session(db: Session, user_id: int, graph_id: str):
     session = models.Session(user_id=user_id, graph_id=graph_id)
     db.add(session)
@@ -27,6 +29,7 @@ def end_session(db: Session, session_id: int):
         session.end_time = func.now()
         db.commit()
 
+# --- Функции для работы с ответами (без изменений) ---
 def create_response(db: Session, session_id: int, node_id: str, answer_text: str):
     response = models.Response(session_id=session_id, node_id=node_id, answer_text=answer_text)
     db.add(response)
@@ -34,6 +37,7 @@ def create_response(db: Session, session_id: int, node_id: str, answer_text: str
     db.refresh(response)
     return response
 
+# --- Функции для работы с состояниями пользователя (без изменений) ---
 def get_user_state(db: Session, user_id: int, session_id: int, key: str, default: str = "0") -> str:
     state = db.query(models.UserState).filter(
         models.UserState.user_id == user_id,
@@ -54,30 +58,17 @@ def update_user_state(db: Session, user_id: int, session_id: int, key: str, valu
     db.refresh(new_state)
     return new_state
 
+# --- Функции для работы с диалогами GigaChat (без изменений) ---
 def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_message: str, ai_response: str):
     dialogue = models.AIDialogue(session_id=session_id, node_id=node_id, user_message=user_message, ai_response=ai_response)
     db.add(dialogue)
     db.commit()
     return dialogue
 
-def build_final_chat_prompt(db: Session, session_id: int) -> str:
-    """Создает простой промпт для финального, завершающего диалога."""
-    all_responses = db.query(models.Response).filter(models.Response.session_id == session_id).order_by(models.Response.id).all()
-    history = "\n".join([f"- {r.answer_text}" for r in all_responses])
-
-    system_prompt = (
-        "Ты — AI-ассистент, дружелюбный и эмпатичный собеседник. Финансовая игра для пользователя только что завершилась. Он может захотеть поделиться впечатлениями, задать вопрос или просто выпустить пар.\n\n"
-        f"**История его ответов в игре:**\n{history}\n\n"
-        "--- ТВОЯ ЗАДАЧА ---\n"
-        "1. **Выслушай пользователя.** Прояви понимание и эмпатию к его словам.\n"
-        "2. **Отвечай кратко и вежливо.** Твоя цель — поддержать и корректно завершить разговор.\n"
-        "3. **НЕ ДАВАЙ СОВЕТОВ!** Не анализируй игру, не предлагай стратегий, не возвращай пользователя к задачам. Игра окончена.\n"
-        "4. **Если пользователь прощается** (говорит 'спасибо', 'пока', 'все понятно'), вежливо попрощайся в ответ и пожелай хорошего дня."
-    )
-    return system_prompt
-
+# --- Финальная, улучшенная функция сборки контекста для ИИ ---
 def build_full_context_for_ai(db: Session, session_id: int, user_id: int, current_question: str, options: list, event_type: str = None) -> str:
     """Собирает полный, структурированный контекст для ИИ по принципам финансовой аналитики."""
+    
     all_responses = db.query(models.Response).filter(models.Response.session_id == session_id).order_by(models.Response.id).all()
     soc_dem_keys = ['возраст', 'пол', 'образование', 'доход', 'риск', 'приоритет', 'стратегия', 'цель']
     profile_info = []
@@ -92,7 +83,6 @@ def build_full_context_for_ai(db: Session, session_id: int, user_id: int, curren
             game_history.append(f"- На шаге '{r.node_id}' игрок выбрал: «{r.answer_text}»")
     
     profile_block = "\n".join(profile_info) if profile_info else "Не предоставлен."
-    game_history_block = "\n".join(game_history) if game_history else "Еще не было."
     last_player_action = game_history[-1] if game_history else "Это первое действие в игре."
 
     score = get_user_state(db, user_id, session_id, 'score', '0')
@@ -104,14 +94,15 @@ def build_full_context_for_ai(db: Session, session_id: int, user_id: int, curren
     
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Вариантов ответа нет."
     
+    # --- Финальный промпт, разделяющий внутренний анализ и итоговый ответ ---
     system_prompt = (
         "Ты — AI-ассистент, действующий как опытный и лаконичный финансовый консультант. Твоя задача — проанализировать данные и дать пользователю четкий, естественно звучащий ответ.\n\n"
         "--- ИСХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА ---\n"
         f"1. **Профиль игрока:**\n{profile_block}\n"
-        f"2. **История решений:**\n{game_history_block}\n"
-        f"3. **Текущее финансовое состояние:** {state_info}\n"
-        f"4. **Текущая задача:** {current_question.strip()}\n"
-        f"5. **Природа этого события:** {event_nature}\n"
+        f"2. **Последнее решение игрока:** {last_player_action}\n"
+        f"3. **Событие, произошедшее ПОСЛЕ этого решения:** {current_question.strip()}\n"
+        f"4. **Природа этого события:** {event_nature}\n"
+        f"5. **Текущее финансовое состояние:** {state_info}\n"
         f"6. **Доступные варианты для следующего шага:**\n{options_text}\n\n"
         "--- ТВОЙ ПЛАН ДЕЙСТВИЙ ---\n"
         "1. **ВНУТРЕННИЙ АНАЛИЗ (НЕ ПОКАЗЫВАТЬ ПОЛЬЗОВАТЕЛЮ):** Продумай свою логику. Установи, связано ли текущее событие с решением игрока. Сформулируй для себя обоснование (rationale) для будущей рекомендации, учитывая все исходные данные.\n"
