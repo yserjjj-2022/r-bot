@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.21: Исправлена логика извлечения формулы для "обстоятельств".
+# Финальная версия 5.22: Умная логика интерактивности для корректной обработки всех переходов.
 
 import random
 import re
@@ -160,12 +160,21 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if chat_id in user_sessions:
                     del user_sessions[chat_id]
                 return
-
-            has_user_interaction = node.get("options") or node.get("branches")
-            next_node_id_auto = node.get("next_node_id")
             
-            if not has_user_interaction and next_node_id_auto:
-                send_node_message(chat_id, next_node_id_auto)
+            # --- ИСПРАВЛЕНИЕ: Умная проверка на интерактивность для решения обеих проблем ---
+            # Определяем, требует ли узел какого-либо действия от пользователя
+            is_interactive_node = (
+                node_type == "circumstance" or  # Узел "обстоятельство" всегда ждет нажатия кнопки "Далее"
+                node_type == "input_text" or     # Узел ждет ввода текста
+                (node.get("options") and len(node.get("options")) > 0) # У узла есть варианты-кнопки
+            )
+            
+            next_node_id = node.get("next_node_id")
+
+            # Если узел НЕ интерактивный и есть куда переходить - делаем это автоматически.
+            # Это сработает для узлов типа state и для простых информационных узлов (question без options).
+            if not is_interactive_node and next_node_id:
+                send_node_message(chat_id, next_node_id)
         
         except Exception as e:
             print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в send_node_message для узла {node_id}!!!")
@@ -214,21 +223,16 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             pressed_button_text = "N/A"
             formula_to_execute = None
 
-            # --- НАЧАЛО ИСПРАВЛЕНИЙ ---
-            # Четко разделяем логику для разных типов узлов
             if node_type == "circumstance":
-                # Для 'обстоятельства' берем формулу с самого узла
                 pressed_button_text = node.get("option_text", "Далее")
                 text_to_save_in_db = pressed_button_text
                 formula_to_execute = node.get("formula")
             
             elif node_type in ["task", "question"] and node.get("options") and len(node["options"]) > button_idx:
-                # Для 'задачи' или 'вопроса' берем данные из конкретного варианта ответа
                 option_data = node["options"][button_idx]
                 pressed_button_text = option_data.get('text', '')
                 text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
-                formula_to_execute = option_data.get("formula") # Безопасно получаем формулу, если она есть
-            # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
+                formula_to_execute = option_data.get("formula")
             
             if formula_to_execute:
                 old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
@@ -236,7 +240,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 
                 current_state = {'score': float(old_score_str)}
                 new_score = state_calculator.calculate_new_state(formula_to_execute, current_state)
-                # Проверяем, что калькулятор не вернул ошибку
                 if new_score is not None:
                     crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
 
