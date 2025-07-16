@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.21: Логика переходов переписана с рекурсии на цикл while для надежности
+# Финальная версия 5.17: Добавлена диагностика для узлов-условий и исправлена логика AI-чата
 
 import random
 import re
@@ -20,10 +20,10 @@ def is_final_node(node_data):
     if not node_data: return True
     has_next_node = node_data.get("next_node_id") or node_data.get("then_node_id") or node_data.get("else_node_id")
     if has_next_node: return False
-    if "options" in node_data and node_data.get("options"):
+    if "options" in node_data and node_data["options"]:
         for option in node_data["options"]:
             if option.get("next_node_id"): return False
-    if "branches" in node_data and node_data.get("branches"): return False
+    if "branches" in node_data and node_data["branches"]: return False
     return True
 
 def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_id: int) -> bool:
@@ -48,66 +48,63 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
         try:
-            current_node_id = node_id
+            node = graph_data["nodes"].get(str(node_id))
             session_info = user_sessions.get(chat_id)
-            if not session_info: return
 
-            # --- НОВАЯ ЛОГИКА: Цикл для обработки транзитных узлов ---
-            while True:
-                node = graph_data["nodes"].get(str(current_node_id))
-                if not node:
-                    print(f"!!! ОШИБКА: Узел '{current_node_id}' не найден в сценарии.")
-                    return
+            if not node or not session_info: return
 
-                session_info['node_id'] = current_node_id
-                user = crud.get_or_create_user(db, chat_id)
-                node_type = node.get("type", "question")
+            session_info['node_id'] = node_id
+            user = crud.get_or_create_user(db, chat_id)
+            node_type = node.get("type", "question")
 
-                if node_type == "condition":
-                    result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                    current_node_id = node.get("then_node_id") if result else node.get("else_node_id")
-                    if not current_node_id:
-                        print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла '{session_info['node_id']}' нет пути для результата '{result}'.")
-                        return
-                    continue # Переходим на следующую итерацию цикла
+            if node_type == "condition":
+                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
+                branch_key = "then_node_id" if result else "else_node_id"
+                next_node_id = node.get(branch_key)
+                if next_node_id:
+                    send_node_message(chat_id, next_node_id)
+                else:
+                    print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла-условия '{node_id}' не определен путь для ветки '{branch_key}'.")
+                return
 
-                if node_type == "state":
-                    text_template = node.get("state_message", "")
-                    if text_template:
-                        current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
-                        capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
-                        state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
-                        try: formatted_text = text_template.format(**state_variables)
-                        except KeyError: formatted_text = text_template
-                        bot.send_message(chat_id, formatted_text.replace('\\n', '\n'), parse_mode="Markdown")
-                    
-                    current_node_id = node.get("next_node_id")
-                    if not current_node_id:
-                        print(f"!!! ОШИБКА СЦЕНАРИЯ: У узла 'state' '{session_info['node_id']}' нет next_node_id.")
-                        return
-                    continue
+            if node_type == "pause":
+                delay = float(node.get("delay", 1.0))
+                next_node_id = node.get("next_node_id")
+                if not next_node_id: return
+                pause_text = node.get("pause_text", "").replace('\\n', '\n')
+                temp_message_id = None
+                if pause_text:
+                    sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
+                    temp_message_id = sent_msg.message_id
+                else: bot.send_chat_action(chat_id, 'typing')
+                threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
+                return
 
-                if node_type == "pause":
-                    delay = float(node.get("delay", 1.0))
-                    next_node_id = node.get("next_node_id")
-                    if not next_node_id: return
-                    pause_text = node.get("pause_text", "").replace('\\n', '\n')
-                    temp_message_id = None
-                    if pause_text:
-                        sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
-                        temp_message_id = sent_msg.message_id
-                    else: bot.send_chat_action(chat_id, 'typing')
-                    threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
-                    return # Пауза асинхронна, поэтому выходим из функции
+            if node_type == "randomizer":
+                branches = node.get("branches", [])
+                if not branches: return
+                weights = [branch.get("weight", 1) for branch in branches]
+                chosen_branch = random.choices(branches, weights=weights, k=1)[0]
+                next_node_id = chosen_branch.get("next_node_id")
+                if next_node_id: send_node_message(chat_id, next_node_id)
+                return
+            
+            if node_type == "state":
+                text_template = node.get("state_message", "")
+                if text_template:
+                    current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
+                    capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
+                    state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
+                    try: formatted_text = text_template.format(**state_variables)
+                    except KeyError: formatted_text = text_template
+                    bot.send_message(chat_id, formatted_text.replace('\\n', '\n'), parse_mode="Markdown")
                 
-                # Если узел не транзитный, выходим из цикла
-                break
-
-            # --- Блок обработки интерактивных узлов ---
-            node = graph_data["nodes"].get(str(current_node_id))
+                next_node_id = node.get("next_node_id")
+                if next_node_id: send_node_message(chat_id, next_node_id)
+                return
+            
+            # --- Блок для интерактивных узлов ---
             text_template = node.get("text", "")
-            if not text_template: return
-
             current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
             capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
             state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
@@ -117,8 +114,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
 
             markup = InlineKeyboardMarkup()
             options = node.get("options", [])
-            node_type = node.get("type")
-
             if node_type == "circumstance":
                  markup.add(InlineKeyboardButton(text=node.get('option_text', 'Далее'), callback_data=f"0|{node.get('next_node_id')}"))
             elif node_type in ["question", "task"] and options:
@@ -174,8 +169,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             node_type = node.get("type")
 
             if node_type == "circumstance":
-                pressed_button_text = node.get("option_text", "Далее")
-                text_to_save_in_db = node.get('interpretation', pressed_button_text)
+                pressed_button_text = text_to_save_in_db = node.get("option_text", "Далее")
                 formula = node.get("formula")
                 if formula:
                     old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
