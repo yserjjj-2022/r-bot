@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.20: Универсальный авто-переход, защита от гонки состояний и улучшенная логика.
+# Финальная версия 5.21: Исправлена логика извлечения формулы для "обстоятельств".
 
 import random
 import re
@@ -22,18 +22,15 @@ def is_final_node(node_data):
     if not node_data:
         return True
     
-    # У узла не должно быть выходов
     has_next_node = node_data.get("next_node_id") or node_data.get("then_node_id") or node_data.get("else_node_id")
     if has_next_node:
         return False
         
-    # У узла не должно быть вариантов ответа с переходами
     if "options" in node_data and node_data["options"]:
         for option in node_data["options"]:
             if option.get("next_node_id"):
                 return False
 
-    # У рандомизатора не должно быть веток
     if "branches" in node_data and node_data["branches"]:
         return False
         
@@ -143,7 +140,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
 
             markup = InlineKeyboardMarkup()
             options = node.get("options", [])
-            # ИСПРАВЛЕНИЕ: В callback_data передаем ID текущего узла для защиты от гонки состояний.
             callback_prefix = f"{node_id}"
 
             if node_type == "circumstance":
@@ -165,8 +161,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     del user_sessions[chat_id]
                 return
 
-            # ИСПРАВЛЕНИЕ: Универсальный автоматический переход для узлов без кнопок.
-            # Это решает проблему "зависания" на узлах-сообщениях перед финальным.
             has_user_interaction = node.get("options") or node.get("branches")
             next_node_id_auto = node.get("next_node_id")
             
@@ -205,7 +199,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         
         db = SessionLocal()
         try:
-            # ИСПРАВЛЕНИЕ: Получаем ID узла из callback_data, а не из сессии, для защиты от гонки состояний.
             node_id_from_call, button_idx_str, next_node_id = call.data.split('|', 2)
             button_idx = int(button_idx_str)
 
@@ -220,35 +213,36 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             text_to_save_in_db = "N/A"
             pressed_button_text = "N/A"
             formula_to_execute = None
-            option_data = {}
 
+            # --- НАЧАЛО ИСПРАВЛЕНИЙ ---
+            # Четко разделяем логику для разных типов узлов
             if node_type == "circumstance":
+                # Для 'обстоятельства' берем формулу с самого узла
                 pressed_button_text = node.get("option_text", "Далее")
                 text_to_save_in_db = pressed_button_text
                 formula_to_execute = node.get("formula")
             
-            elif node and node.get("options") and len(node["options"]) > button_idx:
+            elif node_type in ["task", "question"] and node.get("options") and len(node["options"]) > button_idx:
+                # Для 'задачи' или 'вопроса' берем данные из конкретного варианта ответа
                 option_data = node["options"][button_idx]
                 pressed_button_text = option_data.get('text', '')
                 text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
-                if "formula" in option_data:
-                    formula_to_execute = option_data["formula"]
+                formula_to_execute = option_data.get("formula") # Безопасно получаем формулу, если она есть
+            # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
             
-            # ИСПРАВЛЕНИЕ: Универсальная логика расчета состояния, если есть формула
             if formula_to_execute:
                 old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-                # Сохраняем состояние *до* изменения для сообщений "Было/Стало"
                 crud.update_user_state(db, user.id, session_data['session_id'], 'capital_before', float(old_score_str))
                 
                 current_state = {'score': float(old_score_str)}
                 new_score = state_calculator.calculate_new_state(formula_to_execute, current_state)
-                crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
+                # Проверяем, что калькулятор не вернул ошибку
+                if new_score is not None:
+                    crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
 
-            # Запись ответа в БД
             if text_to_save_in_db != "N/A":
                 crud.create_response(db, session_id=session_data['session_id'], node_id=node_id_from_call, answer_text=text_to_save_in_db)
             
-            # Редактирование исходного сообщения
             original_template = node.get("text", "")
             score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
             capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
@@ -264,7 +258,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             bot.answer_callback_query(call.id)
             bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
             
-            # Переход на следующий узел
             send_node_message(chat_id, next_node_id)
         except Exception as e:
             traceback.print_exc()
@@ -302,7 +295,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, answer_text=user_input)
                 next_node_id = node.get("next_node_id")
                 if next_node_id:
-                    # После ввода текста сразу переходим дальше
                     send_node_message(chat_id, next_node_id)
             finally:
                 db.close()
@@ -328,7 +320,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if ai_answer:
                     crud.create_ai_dialogue(db, session_data['session_id'], current_node_id, message.text, ai_answer)
                     bot.reply_to(message, ai_answer, parse_mode="Markdown")
-                    # После консультации снова показываем исходный вопрос, не переходя дальше.
                     send_node_message(chat_id, current_node_id)
                 else: 
                     bot.reply_to(message, "К сожалению, не удалось получить ответ от ассистента.")
