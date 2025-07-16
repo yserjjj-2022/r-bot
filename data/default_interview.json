@@ -4,7 +4,12 @@
   "nodes": {
     "game_end": {
       "text": "Поздравляю с завершением игры!",
-      "type": "question"
+      "type": "question",
+      "options": [
+        {
+          "text": "завершить"
+        }
+      ]
     },
     "game_end_check": {
       "type": "condition",
@@ -15,6 +20,13 @@
     "game_failure": {
       "text": "❌ **К сожалению, цель не достигнута.**\\n\\nВаш итоговый капитал: {score:,.0f} руб.",
       "type": "question",
+      "next_node_id": "game_end",
+      "options": [
+        {
+          "text": "далее",
+          "interpretation": "Цель игры не достигнута"
+        }
+      ],
       "ai_enabled": true
     },
     "game_start": {
@@ -31,6 +43,13 @@
     "game_success": {
       "text": "✅ **Поздравляем!**\\n\\nВы успешно завершили игру, достигнув цели. Ваш итоговый капитал: {score:,.0f} руб.",
       "type": "question",
+      "next_node_id": "game_end",
+      "options": [
+        {
+          "text": "далее",
+          "interpretation": "Цель игры достигнута"
+        }
+      ],
       "ai_enabled": true
     },
     "pause1": {

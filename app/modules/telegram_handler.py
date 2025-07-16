@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.22: Умная логика интерактивности для корректной обработки всех переходов.
+# Финальная версия 5.24: Синхронизирована с новой БД и логикой CRUD для полного контекста.
 
 import random
 import re
@@ -88,7 +88,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
-            # --- Обработка узлов, не требующих отправки основного сообщения ---
             if node_type == "pause":
                 delay = float(node.get("delay", 1.0))
                 next_node_id = node.get("next_node_id")
@@ -122,7 +121,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if next_node_id: send_node_message(chat_id, next_node_id)
                 return
 
-            # --- Подготовка и отправка основного сообщения ---
             text_template = node.get("text", "")
             if node_type == "state":
                 text_template = node.get("state_message", "Состояние обновлено.")
@@ -153,7 +151,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
-            # --- Логика после отправки сообщения ---
             if is_final_node(node):
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
                 crud.end_session(db, session_info['session_id'])
@@ -161,18 +158,14 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     del user_sessions[chat_id]
                 return
             
-            # --- ИСПРАВЛЕНИЕ: Умная проверка на интерактивность для решения обеих проблем ---
-            # Определяем, требует ли узел какого-либо действия от пользователя
             is_interactive_node = (
-                node_type == "circumstance" or  # Узел "обстоятельство" всегда ждет нажатия кнопки "Далее"
-                node_type == "input_text" or     # Узел ждет ввода текста
-                (node.get("options") and len(node.get("options")) > 0) # У узла есть варианты-кнопки
+                node_type == "circumstance" or
+                node_type == "input_text" or
+                (node.get("options") and len(node.get("options")) > 0)
             )
             
             next_node_id = node.get("next_node_id")
 
-            # Если узел НЕ интерактивный и есть куда переходить - делаем это автоматически.
-            # Это сработает для узлов типа state и для простых информационных узлов (question без options).
             if not is_interactive_node and next_node_id:
                 send_node_message(chat_id, next_node_id)
         
@@ -243,8 +236,16 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if new_score is not None:
                     crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
 
+            # --- ИСПРАВЛЕНИЕ: Передаем полный контекст в БД ---
             if text_to_save_in_db != "N/A":
-                crud.create_response(db, session_id=session_data['session_id'], node_id=node_id_from_call, answer_text=text_to_save_in_db)
+                node_text_for_db = node.get('text', 'Текст узла не найден')
+                crud.create_response(
+                    db,
+                    session_id=session_data['session_id'],
+                    node_id=node_id_from_call,
+                    node_text=node_text_for_db, # Передаем текст вопроса/события
+                    answer_text=text_to_save_in_db   # Передаем текст ответа/трактовки
+                )
             
             original_template = node.get("text", "")
             score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
@@ -269,6 +270,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
 
     @bot.message_handler(content_types=['text'])
     def handle_text_message(message):
+        # ... (этот обработчик остается без изменений) ...
         if message.text.startswith('/start'):
             start_interview(message)
             return
@@ -295,7 +297,9 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             user_input = message.text
             db = SessionLocal()
             try:
-                crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, answer_text=user_input)
+                # Для ввода текста тоже сохраняем полный контекст
+                node_text_for_db = node.get('text', 'Текст узла не найден')
+                crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, node_text=node_text_for_db, answer_text=user_input)
                 next_node_id = node.get("next_node_id")
                 if next_node_id:
                     send_node_message(chat_id, next_node_id)
