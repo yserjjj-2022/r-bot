@@ -1,5 +1,6 @@
 # app/modules/telegram_handler.py
 # Финальная версия 5.24: Синхронизирована с новой БД и логикой CRUD для полного контекста.
+# ДОБАВЛЕНА ПОДДЕРЖКА КАРТИНОК
 
 import random
 import re
@@ -9,6 +10,7 @@ import traceback
 import operator
 import threading
 from sqlalchemy.orm import Session
+from decouple import config  # <-- ДОБАВЛЕН ИМПОРТ
 
 from app.modules.database import SessionLocal, crud
 from app.modules import gigachat_handler
@@ -65,7 +67,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
         send_node_message(chat_id, next_node_id)
 
-    # --- Основная функция отправки сообщений ---
+    # --- Основная функция отправки сообщений (ОБНОВЛЕННАЯ) ---
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
         try:
@@ -149,7 +151,30 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     if not next_node_id_for_button: continue
                     markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{callback_prefix}|{idx}|{next_node_id_for_button}"))
             
-            bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
+            # --- НОВАЯ ЛОГИКА: ПРОВЕРКА НА НАЛИЧИЕ КАРТИНКИ ---
+            image_id = node.get("image_id")
+            
+            if image_id:
+                # Если в узле есть image_id, отправляем фото с подписью
+                server_url = config("SERVER_URL")
+                image_url = f"{server_url}/images/{image_id}"
+                
+                try:
+                    bot.send_photo(
+                        chat_id=chat_id,
+                        photo=image_url,
+                        caption=final_text_to_send,
+                        reply_markup=markup,
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    print(f"ОШИБКА: Не удалось отправить фото {image_url}. {e}")
+                    # Отправляем текстовое сообщение, если фото не загрузилось
+                    bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
+            else:
+                # Если картинки нет, работаем как раньше
+                bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
+            # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
             if is_final_node(node):
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
