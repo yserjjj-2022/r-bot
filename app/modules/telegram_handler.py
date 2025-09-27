@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.25: Исправлена работа с кнопками для фото-сообщений
+# Версия 5.26: Добавлена рандомизация ответов для задач
 
 import random
 import re
@@ -145,10 +145,33 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                  markup.add(InlineKeyboardButton(text=node.get('option_text', 'Далее'), callback_data=f"{callback_prefix}|0|{node.get('next_node_id')}"))
             elif node_type in ["question", "task"] and options:
                 unconditional_next_id = node.get("next_node_id")
-                for idx, option in enumerate(options):
+                
+                # --- НОВАЯ ЛОГИКА: РАНДОМИЗАЦИЯ ОПЦИЙ ---
+                display_options = options.copy()  # Создаем копию для отображения
+                original_indices = {}  # Маппинг: новый индекс -> оригинальный индекс
+                
+                # Если для этого узла включена рандомизация, перемешиваем опции
+                if node.get("randomize_options", False):
+                    random.shuffle(display_options)
+                    print(f"--- [РАНДОМИЗАЦИЯ] Опции для узла {node_id} перемешаны ---")
+                
+                # Создаем маппинг индексов
+                for new_idx, option in enumerate(display_options):
+                    original_idx = options.index(option)  # Находим оригинальный индекс
+                    original_indices[new_idx] = original_idx
+                
+                # Создаем кнопки с перемешанными опциями, но правильными callback_data
+                for new_idx, option in enumerate(display_options):
+                    original_idx = original_indices[new_idx]
                     next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
                     if not next_node_id_for_button: continue
-                    markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{callback_prefix}|{idx}|{next_node_id_for_button}"))
+                    
+                    # Используем ОРИГИНАЛЬНЫЙ индекс в callback_data для правильной обработки
+                    markup.add(InlineKeyboardButton(
+                        text=option["text"], 
+                        callback_data=f"{callback_prefix}|{original_idx}|{next_node_id_for_button}"
+                    ))
+                # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
             
             # --- ЛОГИКА ОТПРАВКИ КАРТИНОК ---
             image_id = node.get("image_id")
