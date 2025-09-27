@@ -1,6 +1,6 @@
 # app/modules/telegram_handler.py
 # Финальная версия 5.24: Синхронизирована с новой БД и логикой CRUD для полного контекста.
-# ДОБАВЛЕНА ПОДДЕРЖКА КАРТИНОК
+# ДОБАВЛЕНА ПОДДЕРЖКА КАРТИНОК + ОТЛАДОЧНЫЕ ЛОГИ
 
 import random
 import re
@@ -10,7 +10,7 @@ import traceback
 import operator
 import threading
 from sqlalchemy.orm import Session
-from decouple import config  # <-- ДОБАВЛЕН ИМПОРТ
+from decouple import config
 
 from app.modules.database import SessionLocal, crud
 from app.modules import gigachat_handler
@@ -67,7 +67,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
         send_node_message(chat_id, next_node_id)
 
-    # --- Основная функция отправки сообщений (ОБНОВЛЕННАЯ) ---
+    # --- Основная функция отправки сообщений (С ОТЛАДОЧНЫМИ ЛОГАМИ) ---
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
         try:
@@ -151,30 +151,36 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     if not next_node_id_for_button: continue
                     markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{callback_prefix}|{idx}|{next_node_id_for_button}"))
             
-            # --- НОВАЯ ЛОГИКА: ПРОВЕРКА НА НАЛИЧИЕ КАРТИНКИ ---
+            # --- ОТЛАДОЧНАЯ ЛОГИКА ДЛЯ КАРТИНОК ---
             image_id = node.get("image_id")
+            print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Узел {node_id}, image_id = '{image_id}' ---")
             
             if image_id:
                 # Если в узле есть image_id, отправляем фото с подписью
                 server_url = config("SERVER_URL")
                 image_url = f"{server_url}/images/{image_id}"
+                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] SERVER_URL = '{server_url}' ---")
+                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Сформированный URL: '{image_url}' ---")
+                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Попытка отправки через send_photo ---")
                 
                 try:
-                    bot.send_photo(
+                    sent_msg = bot.send_photo(
                         chat_id=chat_id,
                         photo=image_url,
                         caption=final_text_to_send,
                         reply_markup=markup,
                         parse_mode="Markdown"
                     )
+                    print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] ✅ Фото успешно отправлено. Message ID: {sent_msg.message_id} ---")
                 except Exception as e:
-                    print(f"ОШИБКА: Не удалось отправить фото {image_url}. {e}")
+                    print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] ❌ ОШИБКА при отправке фото: {e} ---")
+                    print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Отправляю текстовое сообщение вместо фото ---")
                     # Отправляем текстовое сообщение, если фото не загрузилось
                     bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
             else:
+                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] image_id отсутствует, отправляем обычное текстовое сообщение ---")
                 # Если картинки нет, работаем как раньше
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
-            # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
 
             if is_final_node(node):
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
@@ -261,15 +267,14 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if new_score is not None:
                     crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
 
-            # --- ИСПРАВЛЕНИЕ: Передаем полный контекст в БД ---
             if text_to_save_in_db != "N/A":
                 node_text_for_db = node.get('text', 'Текст узла не найден')
                 crud.create_response(
                     db,
                     session_id=session_data['session_id'],
                     node_id=node_id_from_call,
-                    node_text=node_text_for_db, # Передаем текст вопроса/события
-                    answer_text=text_to_save_in_db   # Передаем текст ответа/трактовки
+                    node_text=node_text_for_db,
+                    answer_text=text_to_save_in_db
                 )
             
             original_template = node.get("text", "")
@@ -295,7 +300,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
 
     @bot.message_handler(content_types=['text'])
     def handle_text_message(message):
-        # ... (этот обработчик остается без изменений) ...
         if message.text.startswith('/start'):
             start_interview(message)
             return
@@ -322,7 +326,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             user_input = message.text
             db = SessionLocal()
             try:
-                # Для ввода текста тоже сохраняем полный контекст
                 node_text_for_db = node.get('text', 'Текст узла не найден')
                 crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, node_text=node_text_for_db, answer_text=user_input)
                 next_node_id = node.get("next_node_id")
