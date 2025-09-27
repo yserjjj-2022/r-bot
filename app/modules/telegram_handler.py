@@ -1,6 +1,5 @@
 # app/modules/telegram_handler.py
-# Финальная версия 5.24: Синхронизирована с новой БД и логикой CRUD для полного контекста.
-# ДОБАВЛЕНА ПОДДЕРЖКА КАРТИНОК + ОТЛАДОЧНЫЕ ЛОГИ
+# Финальная версия 5.25: Исправлена работа с кнопками для фото-сообщений
 
 import random
 import re
@@ -67,7 +66,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
         send_node_message(chat_id, next_node_id)
 
-    # --- Основная функция отправки сообщений (С ОТЛАДОЧНЫМИ ЛОГАМИ) ---
+    # --- Основная функция отправки сообщений ---
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
         try:
@@ -151,34 +150,27 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     if not next_node_id_for_button: continue
                     markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{callback_prefix}|{idx}|{next_node_id_for_button}"))
             
-            # --- ОТЛАДОЧНАЯ ЛОГИКА ДЛЯ КАРТИНОК ---
+            # --- ЛОГИКА ОТПРАВКИ КАРТИНОК ---
             image_id = node.get("image_id")
-            print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Узел {node_id}, image_id = '{image_id}' ---")
             
             if image_id:
                 # Если в узле есть image_id, отправляем фото с подписью
                 server_url = config("SERVER_URL")
                 image_url = f"{server_url}/images/{image_id}"
-                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] SERVER_URL = '{server_url}' ---")
-                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Сформированный URL: '{image_url}' ---")
-                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Попытка отправки через send_photo ---")
                 
                 try:
-                    sent_msg = bot.send_photo(
+                    bot.send_photo(
                         chat_id=chat_id,
                         photo=image_url,
                         caption=final_text_to_send,
                         reply_markup=markup,
                         parse_mode="Markdown"
                     )
-                    print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] ✅ Фото успешно отправлено. Message ID: {sent_msg.message_id} ---")
                 except Exception as e:
-                    print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] ❌ ОШИБКА при отправке фото: {e} ---")
-                    print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] Отправляю текстовое сообщение вместо фото ---")
+                    print(f"ОШИБКА: Не удалось отправить фото {image_url}. {e}")
                     # Отправляем текстовое сообщение, если фото не загрузилось
                     bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
             else:
-                print(f"--- [DEBUG ИЗОБРАЖЕНИЯ] image_id отсутствует, отправляем обычное текстовое сообщение ---")
                 # Если картинки нет, работаем как раньше
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
@@ -267,6 +259,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if new_score is not None:
                     crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
 
+            # --- ИСПРАВЛЕНИЕ: Передаем полный контекст в БД ---
             if text_to_save_in_db != "N/A":
                 node_text_for_db = node.get('text', 'Текст узла не найден')
                 crud.create_response(
@@ -290,7 +283,16 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
             
             bot.answer_callback_query(call.id)
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
+            
+            # --- ИСПРАВЛЕНИЕ: ПРАВИЛЬНАЯ РАБОТА С ФОТО-СООБЩЕНИЯМИ ---
+            try:
+                # Пытаемся отредактировать текст (работает для обычных сообщений)
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
+            except Exception as e:
+                # Если не получилось отредактировать (например, это фото), просто отправляем новое сообщение
+                print(f"--- [DEBUG] Не удалось отредактировать сообщение (вероятно, фото): {e}")
+                bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
+            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             
             send_node_message(chat_id, next_node_id)
         except Exception as e:
