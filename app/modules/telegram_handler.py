@@ -377,11 +377,13 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if node.get("type") == "circumstance":
                     options = [{"text": node.get("option_text", "Далее")}]
 
+                ai_persona = node.get("ai_enabled", "да")  # Берем из колонки "AI help"
                 system_prompt_context = crud.build_full_context_for_ai(
                     db, session_data['session_id'], user.id,
                     node.get("text", ""), 
                     options,
-                    node.get("event_type")
+                    node.get("event_type"),
+                    ai_persona  # Передаем тип ИИ
                 )
                 
                 ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)

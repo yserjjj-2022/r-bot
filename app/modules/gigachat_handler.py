@@ -1,4 +1,5 @@
-# app/modules/gigachat_handler.py (Версия 2.0 с однократной инициализацией и надежной обработкой ошибок)
+# app/modules/gigachat_handler.py
+# Версия 3.0: Убрана дублирующая роль, вся логика промптов в crud.py
 
 import time
 from gigachat import GigaChat
@@ -6,10 +7,7 @@ from gigachat.models import Chat, Messages, MessagesRole
 from decouple import config
 import traceback
 
-# --- ГЛАВНОЕ ИЗМЕНЕНИЕ: Однократная инициализация клиента GigaChat ---
-# Мы создаем клиент один раз при загрузке этого модуля.
-# Это значительно повышает производительность.
-
+# --- Однократная инициализация клиента GigaChat ---
 chat = None
 try:
     GIGACHAT_CREDENTIALS = config("GIGACHAT_CREDENTIALS")
@@ -29,30 +27,23 @@ try:
 except Exception as e:
     print("!!! КРИТИЧЕСКАЯ ОШИБКА при инициализации клиента GigaChat !!!")
     traceback.print_exc()
-    # Оставляем chat = None, чтобы функция get_ai_response знала о проблеме
-
+    chat = None
 
 def get_ai_response(user_message: str, system_prompt: str) -> str:
     """
-    Отправляет запрос в GigaChat, используя переданный системный промпт.
+    Отправляет запрос в GigaChat, используя готовый системный промпт.
     Возвращает текст ответа или пустую строку в случае ошибки.
     """
     # Проверяем, был ли клиент успешно инициализирован при старте
     if not chat:
         print("Ошибка вызова: Попытка использовать GigaChat, но клиент не был инициализирован.")
-        return "" # Возвращаем пустую строку, telegram_handler обработает это
+        return ""
 
-    # Основная роль ИИ, которая всегда будет в начале
-    base_role_prompt = (
-        "Ты — бот-исследователь, ведешь опрос. Твой стиль общения — вежливый, внимательный и вдумчивый."
-        "Твоя главная задача — помогать респонденту лучше понять вопросы опроса. "
-        "Если респондент задает вопросы, не связанные с темой опроса, мягко верни его к текущему вопросу.\n\n"
-    )
+    # --- УБРАНО: base_role_prompt больше не нужен ---
+    # Используем system_prompt как есть - вся логика ролей теперь в crud.py
     
-    full_system_prompt = base_role_prompt + system_prompt
-
     messages = [
-        Messages(role=MessagesRole.SYSTEM, content=full_system_prompt),
+        Messages(role=MessagesRole.SYSTEM, content=system_prompt),
         Messages(role=MessagesRole.USER, content=user_message)
     ]
 
@@ -61,11 +52,8 @@ def get_ai_response(user_message: str, system_prompt: str) -> str:
         try:
             print(f"Попытка №{attempt + 1} отправить запрос в GigaChat...")
             
-            # Используем уже созданный клиент 'chat'.
-            # Больше нет необходимости создавать его каждый раз в 'with' блоке.
             response = chat.chat(Chat(messages=messages))
             
-            # Убеждаемся, что в ответе есть контент
             if response.choices and response.choices[0].message.content:
                 return response.choices[0].message.content
             else:
@@ -76,9 +64,8 @@ def get_ai_response(user_message: str, system_prompt: str) -> str:
             print(f"!!! ОШИБКА на попытке №{attempt + 1} при обращении к GigaChat API: {e}")
             if attempt == max_retries - 1:
                 print("!!! Достигнуто максимальное количество попыток. Возвращаем пустую строку.")
-                traceback.print_exc() # Печатаем полную ошибку в лог для анализа
-                return "" # Сигнализируем об ошибке пустой строкой
-            time.sleep((attempt + 1) * 2) # Экспоненциальная задержка перед повторной попыткой
+                traceback.print_exc()
+                return ""
+            time.sleep((attempt + 1) * 2)
             
-    # Если цикл завершился без успешного ответа
     return ""
