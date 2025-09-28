@@ -282,7 +282,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 if new_score is not None:
                     crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
 
-            # --- ИСПРАВЛЕНИЕ: Передаем полный контекст в БД ---
             if text_to_save_in_db != "N/A":
                 node_text_for_db = node.get('text', 'Текст узла не найден')
                 crud.create_response(
@@ -293,28 +292,37 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     answer_text=text_to_save_in_db
                 )
             
-            original_template = node.get("text", "")
-            score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-            capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
-            try:
-                state_vars = {'score': int(float(score_str)), 'capital_before': int(float(capital_before_str))}
-                formatted_original = original_template.format(**state_vars)
-            except (KeyError, ValueError):
-                formatted_original = original_template
-
-            clean_original = formatted_original.replace('\\n', '\n')
-            new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
-            
             bot.answer_callback_query(call.id)
             
-            # --- ИСПРАВЛЕНИЕ: ПРАВИЛЬНАЯ РАБОТА С ФОТО-СООБЩЕНИЯМИ ---
+            # --- ИСПРАВЛЕНИЕ: ПРАВИЛЬНОЕ УДАЛЕНИЕ КНОПОК ДЛЯ ФОТО-СООБЩЕНИЙ ---
             try:
-                # Пытаемся отредактировать текст (работает для обычных сообщений)
+                # Для обычных текстовых сообщений - редактируем с новым текстом
+                original_template = node.get("text", "")
+                score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
+                capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
+                try:
+                    state_vars = {'score': int(float(score_str)), 'capital_before': int(float(capital_before_str))}
+                    formatted_original = original_template.format(**state_vars)
+                except (KeyError, ValueError):
+                    formatted_original = original_template
+
+                clean_original = formatted_original.replace('\\n', '\n')
+                new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
+                
                 bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
+                
             except Exception as e:
-                # Если не получилось отредактировать (например, это фото), просто отправляем новое сообщение
-                print(f"--- [DEBUG] Не удалось отредактировать сообщение (вероятно, фото): {e}")
-                bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
+                # Если это фото-сообщение, убираем только кнопки
+                print(f"--- [DEBUG] Не удалось отредактировать текст, убираем кнопки: {e}")
+                try:
+                    # Для фото-сообщений можем убрать только reply_markup (кнопки)
+                    bot.edit_message_reply_markup(chat_id=chat_id, message_id=call.message.message_id, reply_markup=None)
+                    # И отправляем подтверждение отдельным сообщением
+                    bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
+                except Exception as e2:
+                    print(f"--- [DEBUG] Не удалось убрать кнопки: {e2}")
+                    # Последний шанс - просто отправляем подтверждение
+                    bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
             # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             
             send_node_message(chat_id, next_node_id)
@@ -322,6 +330,7 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             traceback.print_exc()
         finally:
             db.close()
+
 
     @bot.message_handler(content_types=['text'])
     def handle_text_message(message):
