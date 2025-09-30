@@ -11,7 +11,7 @@ import traceback
 chat = None
 try:
     GIGACHAT_CREDENTIALS = config("GIGACHAT_CREDENTIALS")
-    GIGACHAT_MODEL = config("GIGACHAT_MODEL", default="GigaChat-Pro")
+    GIGACHAT_MODEL = config("GIGACHAT_MODEL", default="GigaChat-2-Pro")
     
     if GIGACHAT_CREDENTIALS:
         print("Инициализация клиента GigaChat...")
