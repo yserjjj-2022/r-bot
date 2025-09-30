@@ -1,5 +1,5 @@
 # app/modules/telegram_handler.py
-# Версия 5.26: Добавлена рандомизация ответов для задач
+# Версия 6.0: Адаптировано под hot-reload систему
 
 import random
 import re
@@ -14,6 +14,9 @@ from decouple import config
 from app.modules.database import SessionLocal, crud
 from app.modules import gigachat_handler
 from app.modules import state_calculator
+
+# --- ИМПОРТ HOT-RELOAD ---
+from app.modules.hot_reload import get_current_graph
 
 user_sessions = {}
 
@@ -55,7 +58,11 @@ def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_i
         print(f"ОШИБКА при вычислении условия '{condition_str}': {e}")
         return False
 
-def register_handlers(bot: telebot.TeleBot, graph_data: dict):
+def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
+    """
+    Регистрирует обработчики для Telegram-бота.
+    initial_graph_data теперь игнорируется — используем get_current_graph().
+    """
     
     def _resume_after_pause(chat_id, next_node_id, temp_message_id=None):
         """Вызывается таймером для продолжения сценария после паузы."""
@@ -71,6 +78,13 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         db = SessionLocal()
         try:
             print(f"--- [НАВИГАЦИЯ] Попытка перехода на узел: {node_id} для чата {chat_id} ---")
+            
+            # --- ГЛАВНОЕ ИЗМЕНЕНИЕ: Используем актуальный граф ---
+            graph_data = get_current_graph()
+            if not graph_data:
+                bot.send_message(chat_id, "Сценарий временно недоступен. Попробуйте позже.")
+                return
+            
             node = graph_data["nodes"].get(str(node_id))
             session_info = user_sessions.get(chat_id)
 
@@ -146,38 +160,32 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             elif node_type in ["question", "task"] and options:
                 unconditional_next_id = node.get("next_node_id")
                 
-                # --- НОВАЯ ЛОГИКА: РАНДОМИЗАЦИЯ ОПЦИЙ ---
-                display_options = options.copy()  # Создаем копию для отображения
-                original_indices = {}  # Маппинг: новый индекс -> оригинальный индекс
+                # --- РАНДОМИЗАЦИЯ ОПЦИЙ ---
+                display_options = options.copy()
+                original_indices = {}
                 
-                # Если для этого узла включена рандомизация, перемешиваем опции
                 if node.get("randomize_options", False):
                     random.shuffle(display_options)
                     print(f"--- [РАНДОМИЗАЦИЯ] Опции для узла {node_id} перемешаны ---")
                 
-                # Создаем маппинг индексов
                 for new_idx, option in enumerate(display_options):
-                    original_idx = options.index(option)  # Находим оригинальный индекс
+                    original_idx = options.index(option)
                     original_indices[new_idx] = original_idx
                 
-                # Создаем кнопки с перемешанными опциями, но правильными callback_data
                 for new_idx, option in enumerate(display_options):
                     original_idx = original_indices[new_idx]
                     next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
                     if not next_node_id_for_button: continue
                     
-                    # Используем ОРИГИНАЛЬНЫЙ индекс в callback_data для правильной обработки
                     markup.add(InlineKeyboardButton(
                         text=option["text"], 
                         callback_data=f"{callback_prefix}|{original_idx}|{next_node_id_for_button}"
                     ))
-                # --- КОНЕЦ НОВОЙ ЛОГИКИ ---
             
             # --- ЛОГИКА ОТПРАВКИ КАРТИНОК ---
             image_id = node.get("image_id")
             
             if image_id:
-                # Если в узле есть image_id, отправляем фото с подписью
                 server_url = config("SERVER_URL")
                 image_url = f"{server_url}/images/{image_id}"
                 
@@ -191,10 +199,8 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                     )
                 except Exception as e:
                     print(f"ОШИБКА: Не удалось отправить фото {image_url}. {e}")
-                    # Отправляем текстовое сообщение, если фото не загрузилось
                     bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
             else:
-                # Если картинки нет, работаем как раньше
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
             if is_final_node(node):
@@ -228,6 +234,12 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         chat_id = message.chat.id
         db = SessionLocal()
         try:
+            # --- ИСПОЛЬЗУЕМ АКТУАЛЬНЫЙ ГРАФ ---
+            graph_data = get_current_graph()
+            if not graph_data:
+                bot.send_message(chat_id, "Сценарий временно недоступен. Попробуйте позже.")
+                return
+            
             user = crud.get_or_create_user(db, telegram_id=chat_id)
             session = crud.create_session(db, user_id=user.id, graph_id=graph_data["graph_id"])
             user_sessions[chat_id] = {'session_id': session.id, 'node_id': None}
@@ -249,6 +261,12 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
         try:
             node_id_from_call, button_idx_str, next_node_id = call.data.split('|', 2)
             button_idx = int(button_idx_str)
+
+            # --- ИСПОЛЬЗУЕМ АКТУАЛЬНЫЙ ГРАФ ---
+            graph_data = get_current_graph()
+            if not graph_data:
+                bot.answer_callback_query(call.id, "Сценарий недоступен.", show_alert=True)
+                return
 
             node = graph_data["nodes"].get(node_id_from_call)
             if not node:
@@ -296,7 +314,6 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             
             # --- ИСПРАВЛЕНИЕ: ПРАВИЛЬНОЕ УДАЛЕНИЕ КНОПОК ДЛЯ ФОТО-СООБЩЕНИЙ ---
             try:
-                # Для обычных текстовых сообщений - редактируем с новым текстом
                 original_template = node.get("text", "")
                 score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
                 capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
@@ -312,25 +329,19 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
                 bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
                 
             except Exception as e:
-                # Если это фото-сообщение, убираем только кнопки
                 print(f"--- [DEBUG] Не удалось отредактировать текст, убираем кнопки: {e}")
                 try:
-                    # Для фото-сообщений можем убрать только reply_markup (кнопки)
                     bot.edit_message_reply_markup(chat_id=chat_id, message_id=call.message.message_id, reply_markup=None)
-                    # И отправляем подтверждение отдельным сообщением
                     bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
                 except Exception as e2:
                     print(f"--- [DEBUG] Не удалось убрать кнопки: {e2}")
-                    # Последний шанс - просто отправляем подтверждение
                     bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
-            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
             
             send_node_message(chat_id, next_node_id)
         except Exception as e:
             traceback.print_exc()
         finally:
             db.close()
-
 
     @bot.message_handler(content_types=['text'])
     def handle_text_message(message):
@@ -346,6 +357,13 @@ def register_handlers(bot: telebot.TeleBot, graph_data: dict):
             return
         
         current_node_id = session_data['node_id']
+        
+        # --- ИСПОЛЬЗУЕМ АКТУАЛЬНЫЙ ГРАФ ---
+        graph_data = get_current_graph()
+        if not graph_data:
+            bot.reply_to(message, "Сценарий временно недоступен.")
+            return
+        
         node = graph_data["nodes"].get(current_node_id)
         
         if is_final_node(node):
