@@ -1,5 +1,9 @@
 # app/modules/database/crud.py
-# Версия 6.0: Добавлена поддержка мобильных ИИ-ролей
+# Версия 7.2:
+# - Универсальная сводка состояния для ИИ (current/previous/delta/action/total) для всех переменных
+# - Изоляция финансового промпта (только для роли financial_advisor и legacy "да"/"yes")
+# - Поддержка ролей из data/prompts.json с кешированием
+# - Обратная совместимость с текущей БД и логикой
 
 import json
 import os
@@ -11,7 +15,11 @@ from . import models
 _prompts_cache = None
 
 def load_prompts():
-    """Загружает промпты из файла, кеширует в память."""
+    """
+    Загружает роле-вые промпты из data/prompts.json.
+    Если файла нет или ошибка — возвращает базовый набор.
+    Кеширует результат в памяти.
+    """
     global _prompts_cache
     if _prompts_cache is not None:
         return _prompts_cache
@@ -26,15 +34,15 @@ def load_prompts():
     except Exception as e:
         print(f"--- [ПРОМПТЫ] Ошибка загрузки {prompts_path}: {e} ---")
     
-    # Fallback - базовые промпты в коде (безопасность)
+    # Fallback - базовые промпты в коде
     _prompts_cache = {
         "default": "Ты умный помощник в интерактивном сценарии. Отвечай кратко и по существу. Помогай пользователю в контексте текущей ситуации.",
-        "financial_advisor": "legacy_financial_prompt"  # Будет заменен на проверенную логику
+        "financial_advisor": "Ты финансовый консультант. Помогай с учетом профиля и целей, анализируй риски и доходность."
     }
     print(f"--- [ПРОМПТЫ] Используются встроенные промпты (файл не найден) ---")
     return _prompts_cache
 
-# --- Базовые CRUD функции (без изменений) ---
+# --- Базовые CRUD функции (как были) ---
 def get_or_create_user(db: Session, telegram_id: int):
     user = db.query(models.User).filter(models.User.telegram_id == str(telegram_id)).first()
     if not user:
@@ -95,7 +103,129 @@ def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_message:
     db.commit()
     return dialogue
 
-# --- НОВАЯ СИСТЕМА ПРОМПТОВ ---
+# =========================
+# УНИВЕРСАЛЬНОЕ СОСТОЯНИЕ
+# =========================
+
+# Алиасы для человекочитаемых названий переменных (можно дополнять)
+STATE_ALIASES = {
+    "score": "капитал",
+    "capital_before": "капитал (прошл.)",
+    "health": "здоровье",
+    "coins": "монеты",
+    "debt": "задолженность",
+    "deposit": "вклад",
+}
+
+def _safe_to_number(val: str):
+    """Преобразует строковое значение переменной к float, если возможно, иначе None."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+def collect_state_history(db: Session, user_id: int, session_id: int):
+    """
+    Собирает историю значений всех переменных пользователя в сессии.
+    Возвращает dict: { key: [ (id, value_str), ... ] } в порядке времени (возрастание id).
+    """
+    rows = db.query(models.UserState).filter(
+        models.UserState.user_id == user_id,
+        models.UserState.session_id == session_id
+    ).order_by(models.UserState.id.asc()).all()
+
+    hist = {}
+    for r in rows:
+        hist.setdefault(r.state_key, []).append((r.id, r.state_value))
+    return hist
+
+def _format_delta(number):
+    """Форматирует дельту со знаком и пробелами тысяч: +12 345 / -7 000 / +3.5"""
+    if number is None:
+        return "n/a"
+    if isinstance(number, float) and number.is_integer():
+        number = int(number)
+    try:
+        s = f"{number:+,}".replace(",", " ")
+        return s
+    except Exception:
+        return str(number)
+
+def _format_number(number):
+    """Форматирует число с пробелами тысяч."""
+    if number is None:
+        return "n/a"
+    if isinstance(number, float) and number.is_integer():
+        number = int(number)
+    try:
+        return f"{number:,}".replace(",", " ")
+    except Exception:
+        return str(number)
+
+def _last_user_action_text(db: Session, session_id: int) -> str:
+    """
+    Возвращает краткое описание последнего действия игрока в сессии:
+    «<Текст узла> — <Ответ/интерпретация>».
+    Если нет записей — возвращает пустую строку.
+    """
+    last_resp = db.query(models.Response).filter(models.Response.session_id == session_id)\
+        .order_by(models.Response.id.desc()).first()
+    if not last_resp:
+        return ""
+    node = (last_resp.node_text or "").strip()
+    ans = (last_resp.answer_text or "").strip()
+    if node and ans:
+        return f"{node} — {ans}"
+    return node or ans or ""
+
+def build_universal_state_summary(db: Session, user_id: int, session_id: int) -> str:
+    """
+    Формирует компактный текстовый блок состояния всех переменных:
+    <alias|key>: current=..., previous=..., delta=...(действие: "..."), total=...
+    """
+    hist = collect_state_history(db, user_id, session_id)
+    if not hist:
+        return "Игровое состояние: нет данных."
+
+    last_action = _last_user_action_text(db, session_id)
+    lines = ["Игровое состояние:"]
+
+    for key, seq in hist.items():
+        # Находим initial, previous, current
+        initial_str = seq[0][1] if seq else None
+        current_str = seq[-1][1] if seq else None
+        previous_str = seq[-2][1] if len(seq) >= 2 else None
+
+        initial = _safe_to_number(initial_str)
+        previous = _safe_to_number(previous_str)
+        current = _safe_to_number(current_str)
+
+        # Вычисляем метрики
+        delta = current - previous if (current is not None and previous is not None) else None
+        total = current - initial if (current is not None and initial is not None) else None
+
+        # Красивые подписи
+        label = STATE_ALIASES.get(key, key)
+        cur_txt = _format_number(current)
+        prev_txt = _format_number(previous)
+        delta_txt = _format_delta(delta)
+        total_txt = _format_delta(total)
+
+        # Формируем строку (включаем действие, если есть последняя запись и была дельта)
+        if last_action and delta is not None:
+            line = f"- {label}: current={cur_txt}; previous={prev_txt}; delta={delta_txt} (действие: «{last_action}»); total={total_txt}"
+        else:
+            line = f"- {label}: current={cur_txt}; previous={prev_txt}; delta={delta_txt}; total={total_txt}"
+        lines.append(line)
+
+    summary = "\n".join(lines)
+    # Для отладки (можно убрать позже)
+    print(f"--- [STATE] Сводка состояния для session={session_id} ---\n{summary}")
+    return summary
+
+# =========================
+# ПОСТРОЕНИЕ ПРОМПТОВ ДЛЯ ИИ
+# =========================
 
 def build_full_context_for_ai(
     db: Session, 
@@ -104,24 +234,26 @@ def build_full_context_for_ai(
     current_question: str, 
     options: list, 
     event_type: str = None,
-    ai_persona: str = "да",  # НОВЫЙ ПАРАМЕТР
+    ai_persona: str = "да",
     ai_risk_appetite: int = 3
 ) -> str:
-    """Собирает контекст для ИИ с поддержкой разных ролей."""
-    
-    # Если это стандартные значения — используем проверенную финансовую логику  
-    if ai_persona in ["да", "yes", "financial_advisor"]:
-        return build_current_financial_prompt(
+    """
+    Собирает контекст для ИИ с поддержкой разных ролей.
+    Изоляция: финансовый промпт только для financial_advisor/да/yes, остальным — универсальный.
+    """
+    persona_norm = (ai_persona or "").strip().lower()
+    if persona_norm in ["да", "yes", "financial_advisor"]:
+        print(f"--- [AI-CONTEXT] persona={ai_persona} → financial_advisor_prompt")
+        return build_financial_advisor_prompt(
             db, session_id, user_id, current_question, options, event_type, ai_risk_appetite
         )
-    
-    # Для новых ролей — используем промпт-шаблоны
     else:
+        print(f"--- [AI-CONTEXT] persona={ai_persona} → persona_prompt")
         return build_persona_prompt(
-            db, session_id, user_id, current_question, options, ai_persona
+            db, session_id, user_id, current_question, options, persona_norm
         )
 
-def build_current_financial_prompt(
+def build_financial_advisor_prompt(
     db: Session, 
     session_id: int, 
     user_id: int, 
@@ -130,9 +262,11 @@ def build_current_financial_prompt(
     event_type: str = None,
     ai_risk_appetite: int = 3
 ) -> str:
-    """Текущий проверенный промпт для финансового консультанта."""
-    
-    # "Переводчик" числового уровня риска в понятную для ИИ инструкцию
+    """
+    Специализированный промпт для финансового консультанта.
+    Внимание: упоминает инвестиционную философию — используется ТОЛЬКО для роли financial_advisor/да/yes.
+    """
+    # "Переводчик" числового уровня риска в инструкцию
     risk_philosophy_map = {
         1: "Крайне консервативная. Приоритет — сохранение капитала любой ценой.",
         2: "Консервативная. Сохранение капитала важнее высокой доходности.",
@@ -142,15 +276,16 @@ def build_current_financial_prompt(
     }
     ai_philosophy = risk_philosophy_map.get(ai_risk_appetite, risk_philosophy_map[3])
 
+    # Профиль и история
     all_responses = db.query(models.Response).filter(models.Response.session_id == session_id).order_by(models.Response.id).all()
     soc_dem_keys = ['возраст', 'пол', 'образование', 'доход', 'риск', 'приоритет', 'стратегия', 'цель']
     
     profile_info = []
     game_history = []
     for r in all_responses:
-        is_profile_data = any(key in r.node_id.lower() for key in soc_dem_keys)
-        event_text = ' '.join(r.node_text.split())
-        choice_text = ' '.join(r.answer_text.split())
+        is_profile_data = any(key in (r.node_id or "").lower() for key in soc_dem_keys)
+        event_text = ' '.join((r.node_text or "").split())
+        choice_text = ' '.join((r.answer_text or "").split())
 
         if is_profile_data:
             profile_info.append(f"- {choice_text}")
@@ -159,23 +294,24 @@ def build_current_financial_prompt(
     
     profile_block = "\n".join(profile_info) if profile_info else "Еще не собран."
     history_block = "\n".join(game_history) if game_history else "Это первое действие в игре."
-    score = get_user_state(db, user_id, session_id, 'score', '0')
-    state_info = f"- Текущий капитал: {int(float(score)):,} руб.".replace(",", " ")
+
+    # Универсальная сводка всех переменных
+    state_summary = build_universal_state_summary(db, user_id, session_id)
+
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Вариантов ответа нет."
     
-    # --- Финальный промпт с "Регулятором Риска" ---
     system_prompt = (
         "Ты — AI-ассистент, действующий как опытный финансовый консультант с четко заданной инвестиционной философией.\n\n"
         "--- ИСХОДНЫЕ ДАННЫЕ ДЛЯ АНАЛИЗА ---\n\n"
-        f"**ТВОЯ ИНВЕСТИЦИОННАЯ ФИЛОСОФИЯ (твой главный ориентир):**\n{ai_philosophy}\n\n"
-        f"1. **ДОСЬЕ ИГРОКА (его личность и предпочтения):**\n{profile_block}\n\n"
-        f"2. **ХРОНОЛОГИЯ ИГРЫ (события и решения):**\n{history_block}\n\n"
-        f"3. **ТЕКУЩАЯ СИТУАЦИЯ (вопрос пользователя):**\n{current_question.strip()}\n\n"
-        f"4. **ТЕКУЩЕЕ ФИНАНСОВОЕ СОСТОЯНИЕ:**\n{state_info}\n\n"
-        f"5. **ДОСТУПНЫЕ ВАРИАНТЫ ДЕЙСТВИЙ:**\n{options_text}\n\n"
+        f"ТВОЯ ИНВЕСТИЦИОННАЯ ФИЛОСОФИЯ:\n{ai_philosophy}\n\n"
+        f"1) ДОСЬЕ ИГРОКА:\n{profile_block}\n\n"
+        f"2) ХРОНОЛОГИЯ ИГРЫ:\n{history_block}\n\n"
+        f"3) ИГРОВОЕ СОСТОЯНИЕ:\n{state_summary}\n\n"
+        f"4) ТЕКУЩАЯ СИТУАЦИЯ:\n{(current_question or '').strip()}\n\n"
+        f"5) ВАРИАНТЫ ДЕЙСТВИЙ:\n{options_text}\n\n"
         "--- ТВОЙ ПЛАН ДЕЙСТВИЙ ---\n"
-        "1. **ВНУТРЕННИЙ АНАЛИЗ (НЕ ПОКАЗЫВАТЬ ПОЛЬЗОВАТЕЛЮ):** Твоя главная задача — помочь игроку принять лучшее решение в рамках **его Досье**. Используй Твою инвестиционную философию лишь как дополнительный фильтр для выбора решения. Если игрок склонен к риску, а твоя философия консервативна, найди самый безопасный из рискованных вариантов. Никогда не пытайся переубедить игрока сменить его стратегию, а лишь помогай ему действовать в ней максимально эффективно.»\n"
-        "2. **ИТОГОВЫЙ ОТВЕТ ДЛЯ ПОЛЬЗОВАТЕЛЯ (ЕДИНЫЙ АБЗАЦ):** На основе своего анализа, напиши **единый и связный** ответ. Твой ответ должен звучать как совет от уверенного эксперта со своей точкой зрения. **Не используй слова 'Шаг 1', 'Шаг 2' и т.д., НЕ УПОМИНАЙ ИНВЕСТИЦИОННУЮ ФИЛОСОФИЮ**"
+        "1) Анализируй ситуацию в контексте ДОСЬЕ и Игрового состояния. "
+        "2) Дай единый связный ответ. Не используй 'Шаг 1/2' и не упоминай философию явно."
     )
     return system_prompt
 
@@ -187,55 +323,45 @@ def build_persona_prompt(
     options: list, 
     ai_persona: str
 ) -> str:
-    """Простой промпт-шаблон для новых ролей."""
-    
+    """
+    Универсальный промпт для любых ролей (detective, teacher, therapist, game_master и т.д.).
+    НЕ содержит финансовых терминов. Включает историю, универсальную сводку состояния и текущую задачу.
+    """
     prompts = load_prompts()
-    base_template = prompts.get(ai_persona, prompts["default"])
-    
-    # Упрощенный контекст для новых ролей
-    all_responses = db.query(models.Response).filter(models.Response.session_id == session_id).order_by(models.Response.id.desc()).limit(5).all()
-    
-    profile_info = []
+    base_template = prompts.get(ai_persona, prompts.get("default", ""))
+
+    # Короткая недавняя история (последние 5)
+    recent = db.query(models.Response).filter(models.Response.session_id == session_id)\
+        .order_by(models.Response.id.desc()).limit(5).all()
     recent_history = []
-    
-    for r in all_responses:
-        event_text = ' '.join(r.node_text.split())
-        choice_text = ' '.join(r.answer_text.split())
-        recent_history.append(f"- {event_text} → {choice_text}")
-    
-    profile_block = "Информация накапливается по ходу взаимодействия."
+    for r in reversed(recent):
+        event_text = ' '.join((r.node_text or "").split())
+        choice_text = ' '.join((r.answer_text or "").split())
+        if event_text or choice_text:
+            recent_history.append(f"• {event_text} → {choice_text}")
     history_block = "\n".join(recent_history) if recent_history else "Это первое взаимодействие."
-    
-    # Получаем состояние пользователя
-    score = get_user_state(db, user_id, session_id, 'score', '0')
-    state_info = f"Текущий счет: {score}"
-    
-    # Форматируем опции
+
+    # Универсальная сводка всех переменных
+    state_summary = build_universal_state_summary(db, user_id, session_id)
+
+    # Варианты
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Нет вариантов ответа."
     
-    # Собираем финальный промпт
-    full_prompt = f"""{base_template}
-
-КОНТЕКСТ ВЗАИМОДЕЙСТВИЯ:
-
-Профиль пользователя: {profile_block}
-
-Недавняя история: 
-{history_block}
-
-Текущая ситуация: {current_question.strip()}
-
-Состояние: {state_info}
-
-Доступные варианты:
-{options_text}
-
-Ответь в своей профессиональной роли, учитывая весь контекст."""
+    full_prompt = (
+        f"{base_template}\n\n"
+        f"КОНТЕКСТ ВЗАИМОДЕЙСТВИЯ:\n\n"
+        f"История:\n{history_block}\n\n"
+        f"Игровое состояние:\n{state_summary}\n\n"
+        f"Текущая ситуация: {(current_question or '').strip()}\n\n"
+        f"Доступные варианты:\n{options_text}\n\n"
+        f"Ответь в своей роли, учитывая весь контекст."
+    )
 
     print(f"--- [ИИ-РОЛЬ] Использован промпт для роли: {ai_persona} ---")
     return full_prompt
 
-# --- Вспомогательные функции для контекста (можно расширять) ---
+# --- Опциональные вспомогательные функции профиля/истории (если нужны в других местах) ---
+
 def get_simple_profile_context(db: Session, session_id: int) -> str:
     """Упрощенный профиль пользователя для новых ролей."""
     responses = db.query(models.Response).filter(models.Response.session_id == session_id).limit(10).all()
@@ -243,8 +369,9 @@ def get_simple_profile_context(db: Session, session_id: int) -> str:
     
     profile_data = []
     for r in responses:
-        if any(key in r.node_id.lower() for key in soc_dem_keys):
-            profile_data.append(r.answer_text)
+        if any(key in (r.node_id or "").lower() for key in soc_dem_keys):
+            if r.answer_text:
+                profile_data.append(r.answer_text)
     
     return "Профиль: " + ", ".join(profile_data) if profile_data else "Профиль пока не собран"
 
@@ -254,11 +381,12 @@ def get_recent_history_context(db: Session, session_id: int, limit: int = 5) -> 
     
     history_items = []
     for r in reversed(recent):  # Показываем в хронологическом порядке
-        history_items.append(f"• {r.node_text[:50]}... → {r.answer_text}")
+        if r.node_text or r.answer_text:
+            history_items.append(f"• {str(r.node_text)[:50]}... → {r.answer_text}")
     
     return "История:\n" + "\n".join(history_items) if history_items else "Это первое взаимодействие"
 
 def get_current_state_context(db: Session, user_id: int, session_id: int) -> str:
-    """Текущее состояние пользователя."""
+    """Текущее состояние пользователя (сохранена для совместимости)."""
     score = get_user_state(db, user_id, session_id, 'score', '0')
     return f"Счет: {score}"
