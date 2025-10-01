@@ -1,9 +1,9 @@
 # app/modules/database/crud.py
-# Версия 7.2:
-# - Универсальная сводка состояния для ИИ (current/previous/delta/action/total) для всех переменных
+# Версия 7.3:
+# - Универсальная сводка состояния для ИИ (current/previous/delta/action/total)
 # - Изоляция финансового промпта (только для роли financial_advisor и legacy "да"/"yes")
+# - Нормализация ai_persona к строке (поддержка bool/None), чтобы не падать на .strip()
 # - Поддержка ролей из data/prompts.json с кешированием
-# - Обратная совместимость с текущей БД и логикой
 
 import json
 import os
@@ -16,7 +16,7 @@ _prompts_cache = None
 
 def load_prompts():
     """
-    Загружает роле-вые промпты из data/prompts.json.
+    Загружает роли/промпты из data/prompts.json.
     Если файла нет или ошибка — возвращает базовый набор.
     Кеширует результат в памяти.
     """
@@ -42,7 +42,7 @@ def load_prompts():
     print(f"--- [ПРОМПТЫ] Используются встроенные промпты (файл не найден) ---")
     return _prompts_cache
 
-# --- Базовые CRUD функции (как были) ---
+# --- Базовые CRUD функции ---
 def get_or_create_user(db: Session, telegram_id: int):
     user = db.query(models.User).filter(models.User.telegram_id == str(telegram_id)).first()
     if not user:
@@ -240,8 +240,21 @@ def build_full_context_for_ai(
     """
     Собирает контекст для ИИ с поддержкой разных ролей.
     Изоляция: финансовый промпт только для financial_advisor/да/yes, остальным — универсальный.
+    Нормализация ai_persona к строке (поддержка bool/None).
     """
-    persona_norm = (ai_persona or "").strip().lower()
+    # НОРМАЛИЗАЦИЯ ПЕРСОНЫ К СТРОКЕ (важно для совместимости с булевыми полями)
+    if isinstance(ai_persona, bool):
+        ai_persona = "да" if ai_persona else "нет"
+    elif ai_persona is None:
+        ai_persona = "нет"
+    else:
+        try:
+            ai_persona = str(ai_persona)
+        except Exception:
+            ai_persona = "нет"
+
+    persona_norm = ai_persona.strip().lower()
+
     if persona_norm in ["да", "yes", "financial_advisor"]:
         print(f"--- [AI-CONTEXT] persona={ai_persona} → financial_advisor_prompt")
         return build_financial_advisor_prompt(
@@ -360,7 +373,7 @@ def build_persona_prompt(
     print(f"--- [ИИ-РОЛЬ] Использован промпт для роли: {ai_persona} ---")
     return full_prompt
 
-# --- Опциональные вспомогательные функции профиля/истории (если нужны в других местах) ---
+# --- Доп. утилиты (на случай использования в других местах) ---
 
 def get_simple_profile_context(db: Session, session_id: int) -> str:
     """Упрощенный профиль пользователя для новых ролей."""
