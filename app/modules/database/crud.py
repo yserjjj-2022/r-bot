@@ -1,5 +1,5 @@
 # app/modules/database/crud.py
-# Версия 6.0: Добавлена поддержка мобильных ИИ-ролей
+# Версия 6.1: Исправлена передача полного состояния в ИИ
 
 import json
 import os
@@ -95,6 +95,50 @@ def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_message:
     db.commit()
     return dialogue
 
+# --- НОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+def get_user_financial_state(db: Session, user_id: int, session_id: int) -> dict:
+    """Возвращает полное финансовое состояние пользователя с расчетами."""
+    score = get_user_state(db, user_id, session_id, 'score', '0')
+    capital_before = get_user_state(db, user_id, session_id, 'capital_before', '0')
+    
+    current_score = int(float(score))
+    previous_score = int(float(capital_before))
+    delta = current_score - previous_score
+    
+    # Пытаемся найти начальное значение (первая запись score)
+    first_score_record = db.query(models.UserState).filter(
+        models.UserState.user_id == user_id,
+        models.UserState.session_id == session_id,
+        models.UserState.state_key == 'score'
+    ).order_by(models.UserState.id.asc()).first()
+    
+    initial_score = int(float(first_score_record.state_value)) if first_score_record else current_score
+    total_change = current_score - initial_score
+    
+    return {
+        'current': current_score,
+        'previous': previous_score,
+        'delta': delta,
+        'initial': initial_score,
+        'total_change': total_change
+    }
+
+def get_all_user_state(db: Session, user_id: int, session_id: int) -> dict:
+    """Возвращает все переменные состояния пользователя."""
+    states = db.query(models.UserState).filter(
+        models.UserState.user_id == user_id,
+        models.UserState.session_id == session_id
+    ).all()
+    
+    # Группируем по ключам, берем последние значения
+    state_dict = {}
+    for state in states:
+        if state.state_key not in state_dict:
+            state_dict[state.state_key] = state.state_value
+    
+    return state_dict
+
 # --- НОВАЯ СИСТЕМА ПРОМПТОВ ---
 
 def build_full_context_for_ai(
@@ -130,7 +174,7 @@ def build_current_financial_prompt(
     event_type: str = None,
     ai_risk_appetite: int = 3
 ) -> str:
-    """Текущий проверенный промпт для финансового консультанта."""
+    """Текущий проверенный промпт для финансового консультанта с ПОЛНЫМ состоянием."""
     
     # "Переводчик" числового уровня риска в понятную для ИИ инструкцию
     risk_philosophy_map = {
@@ -159,8 +203,25 @@ def build_current_financial_prompt(
     
     profile_block = "\n".join(profile_info) if profile_info else "Еще не собран."
     history_block = "\n".join(game_history) if game_history else "Это первое действие в игре."
-    score = get_user_state(db, user_id, session_id, 'score', '0')
-    state_info = f"- Текущий капитал: {int(float(score)):,} руб.".replace(",", " ")
+    
+    # --- ИСПРАВЛЕНИЕ: ПОЛУЧАЕМ ПОЛНОЕ ФИНАНСОВОЕ СОСТОЯНИЕ ---
+    financial_state = get_user_financial_state(db, user_id, session_id)
+    
+    state_info = f"""- Текущий капитал: {financial_state['current']:,} руб.
+- Предыдущий капитал: {financial_state['previous']:,} руб.
+- Изменение за последний ход: {financial_state['delta']:+,} руб.
+- Общий результат с начала игры: {financial_state['total_change']:+,} руб.""".replace(",", " ")
+    
+    # Получаем все остальные переменные (если есть)
+    all_state = get_all_user_state(db, user_id, session_id)
+    additional_vars = []
+    for key, value in all_state.items():
+        if key not in ['score', 'capital_before']:  # Исключаем уже показанные
+            additional_vars.append(f"- {key}: {value}")
+    
+    if additional_vars:
+        state_info += "\n" + "\n".join(additional_vars)
+    
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Вариантов ответа нет."
     
     # --- Финальный промпт с "Регулятором Риска" ---
@@ -171,7 +232,7 @@ def build_current_financial_prompt(
         f"1. **ДОСЬЕ ИГРОКА (его личность и предпочтения):**\n{profile_block}\n\n"
         f"2. **ХРОНОЛОГИЯ ИГРЫ (события и решения):**\n{history_block}\n\n"
         f"3. **ТЕКУЩАЯ СИТУАЦИЯ (вопрос пользователя):**\n{current_question.strip()}\n\n"
-        f"4. **ТЕКУЩЕЕ ФИНАНСОВОЕ СОСТОЯНИЕ:**\n{state_info}\n\n"
+        f"4. **ПОЛНОЕ ФИНАНСОВОЕ СОСТОЯНИЕ:**\n{state_info}\n\n"
         f"5. **ДОСТУПНЫЕ ВАРИАНТЫ ДЕЙСТВИЙ:**\n{options_text}\n\n"
         "--- ТВОЙ ПЛАН ДЕЙСТВИЙ ---\n"
         "1. **ВНУТРЕННИЙ АНАЛИЗ (НЕ ПОКАЗЫВАТЬ ПОЛЬЗОВАТЕЛЮ):** Твоя главная задача — помочь игроку принять лучшее решение в рамках **его Досье**. Используй Твою инвестиционную философию лишь как дополнительный фильтр для выбора решения. Если игрок склонен к риску, а твоя философия консервативна, найди самый безопасный из рискованных вариантов. Никогда не пытайся переубедить игрока сменить его стратегию, а лишь помогай ему действовать в ней максимально эффективно.»\n"
@@ -187,7 +248,7 @@ def build_persona_prompt(
     options: list, 
     ai_persona: str
 ) -> str:
-    """Простой промпт-шаблон для новых ролей."""
+    """Простой промпт-шаблон для новых ролей с полным состоянием."""
     
     prompts = load_prompts()
     base_template = prompts.get(ai_persona, prompts["default"])
@@ -206,9 +267,14 @@ def build_persona_prompt(
     profile_block = "Информация накапливается по ходу взаимодействия."
     history_block = "\n".join(recent_history) if recent_history else "Это первое взаимодействие."
     
-    # Получаем состояние пользователя
-    score = get_user_state(db, user_id, session_id, 'score', '0')
-    state_info = f"Текущий счет: {score}"
+    # --- ИСПРАВЛЕНИЕ: ПОЛУЧАЕМ ПОЛНОЕ СОСТОЯНИЕ ---
+    all_state = get_all_user_state(db, user_id, session_id)
+    
+    state_lines = []
+    for key, value in all_state.items():
+        state_lines.append(f"- {key}: {value}")
+    
+    state_info = "\n".join(state_lines) if state_lines else "Состояние пока не установлено"
     
     # Форматируем опции
     options_text = "\n".join([f"- {opt['text']}" for opt in options]) if options else "Нет вариантов ответа."
@@ -225,7 +291,8 @@ def build_persona_prompt(
 
 Текущая ситуация: {current_question.strip()}
 
-Состояние: {state_info}
+Полное состояние:
+{state_info}
 
 Доступные варианты:
 {options_text}
