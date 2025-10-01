@@ -221,7 +221,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     text=node.get('option_text', 'Далее'), 
                     callback_data=f"{callback_prefix}|0|{node.get('next_node_id')}"
                 ))
-            elif node.get("type") in ["question", "task"] and options:
+            elif (node.get("type") in ["question", "task"] or "ai_proactive:" in str(node.get("type", ""))) and options:
                 unconditional_next_id = node.get("next_node_id")
                 
                 # РАНДОМИЗАЦИЯ ОПЦИЙ (с сохранением правильных индексов в callback_data)
