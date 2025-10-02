@@ -10,6 +10,7 @@ R-Bot Timing Engine - система временных механик для be
 
 Автор: Sergey Ershov
 Создано: 02.10.2025
+Исправлено: 02.10.2025 - включен по умолчанию + логирование
 """
 
 import threading
@@ -19,11 +20,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Callable, Optional, List
 
-# Feature flag для безопасного поэтапного внедрения
-TIMING_ENABLED = False  # На старте отключено!
+# ИСПРАВЛЕНО: Feature flag включен по умолчанию для PHASE 1
+TIMING_ENABLED = True  # ✅ ВКЛЮЧЕНО ПО УМОЛЧАНИЮ!
 
 logger = logging.getLogger(__name__)
-
 
 class TimingEngine:
     """
@@ -44,6 +44,7 @@ class TimingEngine:
         self.executors = self._init_executors()
         
         logger.info(f"TimingEngine initialized. Enabled: {self.enabled}")
+        print(f"[INIT] TimingEngine initialized with enabled={self.enabled}")  # ✅ ДОБАВЛЕНО
     
     def _init_parsers(self) -> Dict[str, Any]:
         """Инициализация DSL парсеров (расширяемо для PHASE 2-4)"""
@@ -87,13 +88,17 @@ class TimingEngine:
         """
         if not self.enabled:
             # Если timing отключен - просто вызываем callback
+            print(f"[WARNING] TimingEngine disabled, executing callback immediately")
             logger.info(f"TimingEngine disabled, executing callback immediately")
             callback()
             return
         
         try:
+            print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")  # ✅ ДОБАВЛЕНО
+            
             # Парсим DSL строку
             commands = self._parse_timing_dsl(timing_config)
+            print(f"[INFO] TimingEngine: Parsed commands: {commands}")  # ✅ ДОБАВЛЕНО
             
             # Выполняем команды
             self._execute_timing_commands(
@@ -102,6 +107,7 @@ class TimingEngine:
             
         except Exception as e:
             logger.error(f"TimingEngine error: {e}")
+            print(f"[ERROR] TimingEngine error: {e}")  # ✅ ДОБАВЛЕНО
             # Graceful degradation - если timing не работает, просто продолжаем
             callback()
     
@@ -153,6 +159,7 @@ class TimingEngine:
                 commands.append(parsed)
             else:
                 logger.warning(f"Unknown timing command: {cmd_str}")
+                print(f"[WARNING] Unknown timing command: {cmd_str}")  # ✅ ДОБАВЛЕНО
         
         return commands
     
@@ -166,6 +173,7 @@ class TimingEngine:
         """Выполнение списка timing команд"""
         
         if not commands:
+            print(f"[INFO] No timing commands to execute, calling callback immediately")
             callback()
             return
         
@@ -176,11 +184,13 @@ class TimingEngine:
             cmd_type = command.get('type')
             
             if cmd_type in self.executors:
+                print(f"[INFO] Executing command: {command}")  # ✅ ДОБАВЛЕНО
                 self.executors[cmd_type](
                     command, user_id, session_id, node_id, callback, **context
                 )
             else:
                 logger.warning(f"No executor for command type: {cmd_type}")
+                print(f"[WARNING] No executor for command type: {cmd_type}")
     
     # =================================================================
     # DSL ПАРСЕРЫ (PHASE 1)  
@@ -304,6 +314,7 @@ class TimingEngine:
                       node_id: str, callback: Callable, **context) -> None:
         """Выполнение простой паузы"""
         duration = command['duration']
+        print(f"[INFO] TimingEngine: Executing pause: {duration}s for user {user_id}")  # ✅ ИСПРАВЛЕНО
         logger.info(f"Executing pause: {duration}s for user {user_id}")
         
         # Создаем таймер для отложенного вызова callback
@@ -318,6 +329,7 @@ class TimingEngine:
                        node_id: str, callback: Callable, **context) -> None:
         """Выполнение typing анимации"""
         duration = command['duration']
+        print(f"[INFO] TimingEngine: Executing typing animation: {duration}s for user {user_id}")  # ✅ ИСПРАВЛЕНО
         logger.info(f"Executing typing animation: {duration}s for user {user_id}")
         
         # TODO: Интеграция с telegram_handler для отправки typing action
@@ -332,10 +344,12 @@ class TimingEngine:
     def _execute_daily(self, command: Dict[str, Any], user_id: int, session_id: int,
                       node_id: str, callback: Callable, **context) -> None:
         """Выполнение daily расписания"""
+        print(f"[INFO] Scheduling daily task: {command['original']} for user {user_id}")
         logger.info(f"Scheduling daily task: {command['original']} for user {user_id}")
         
         # TODO: PHASE 2 - интеграция с APScheduler
         # Пока просто логируем и вызываем callback
+        print(f"[WARNING] Daily scheduling not implemented yet - executing immediately")
         logger.warning("Daily scheduling not implemented yet - executing immediately")
         callback()
     
@@ -343,10 +357,12 @@ class TimingEngine:
                        node_id: str, callback: Callable, **context) -> None:
         """Выполнение системы напоминаний"""
         intervals = command['intervals']
+        print(f"[INFO] Setting up reminders: {intervals} for user {user_id}")
         logger.info(f"Setting up reminders: {intervals} for user {user_id}")
         
         # TODO: PHASE 2 - полная система напоминаний
         # Пока просто логируем
+        print(f"[WARNING] Reminder system not implemented yet")
         logger.warning("Reminder system not implemented yet")
         callback()
     
@@ -354,10 +370,12 @@ class TimingEngine:
                          node_id: str, callback: Callable, **context) -> None:
         """Выполнение дедлайна"""
         duration = command['duration']
+        print(f"[INFO] Setting deadline: {duration}s for user {user_id}")
         logger.info(f"Setting deadline: {duration}s for user {user_id}")
         
         # TODO: PHASE 2 - система дедлайнов с базой данных
         # Пока просто вызываем callback
+        print(f"[WARNING] Deadline system not implemented yet")
         logger.warning("Deadline system not implemented yet")
         callback()
     
@@ -365,9 +383,11 @@ class TimingEngine:
                         node_id: str, callback: Callable, **context) -> None:
         """Выполнение timeout"""
         duration = command['duration']
+        print(f"[INFO] Setting timeout: {duration}s for user {user_id}")
         logger.info(f"Setting timeout: {duration}s for user {user_id}")
         
         # TODO: PHASE 2 - система таймаутов с автопереходом
+        print(f"[WARNING] Timeout system not implemented yet")
         logger.warning("Timeout system not implemented yet")
         callback()
     
@@ -383,6 +403,7 @@ class TimingEngine:
             timer = self.active_timers.pop(key)
             timer.cancel()
             logger.info(f"Cancelled timer: {key}")
+            print(f"[INFO] Cancelled timer: {key}")
     
     def get_status(self) -> Dict[str, Any]:
         """Получить статус timing движка"""
@@ -396,6 +417,7 @@ class TimingEngine:
     def enable(self) -> None:
         """Включить timing систему (для поэтапного развертывания)"""
         self.enabled = True
+        print(f"[INFO] TimingEngine ENABLED")  # ✅ ДОБАВЛЕНО
         logger.info("TimingEngine ENABLED")
     
     def disable(self) -> None:
@@ -405,12 +427,11 @@ class TimingEngine:
         for timer in self.active_timers.values():
             timer.cancel()
         self.active_timers.clear()
+        print(f"[INFO] TimingEngine DISABLED")  # ✅ ДОБАВЛЕНО
         logger.info("TimingEngine DISABLED")
-
 
 # Глобальный экземпляр для использования в telegram_handler
 timing_engine = TimingEngine()
-
 
 # =================================================================
 # ФУНКЦИИ ДЛЯ ИНТЕГРАЦИИ С СУЩЕСТВУЮЩИМ КОДОМ
@@ -418,41 +439,23 @@ timing_engine = TimingEngine()
 
 def process_node_timing(user_id: int, session_id: int, node_id: str, 
                        timing_config: str, callback: Callable, **context) -> None:
-    """
-    Публичная функция для интеграции с telegram_handler.py
-    
-    Использование в telegram_handler.py:
-    
-    from app.modules.timing_engine import process_node_timing
-    
-    def send_node_message(chat_id, node_id):
-        # ... существующий код ...
-        
-        # НОВОЕ: поддержка timing
-        timing_config = node.get("Timing") or node.get("Задержка (сек)")  # обратная совместимость
-        if timing_config:
-            process_node_timing(
-                user_id=user.id,
-                session_id=session_info['session_id'],
-                node_id=node_id, 
-                timing_config=str(timing_config),
-                callback=lambda: send_node_message(chat_id, next_node_id)
-            )
-            return  # timing_engine вызовет callback когда нужно
-        
-        # ... остальной код без изменений ...
-    """
+    """Публичная функция для интеграции с telegram_handler.py"""
     return timing_engine.process_timing(
         user_id, session_id, node_id, timing_config, callback, **context
     )
-
 
 def enable_timing() -> None:
     """Включить timing систему глобально"""
     global TIMING_ENABLED
     TIMING_ENABLED = True
     timing_engine.enable()
-
+    
+    # ✅ ИСПРАВЛЕНО: Проверяем что активация прошла успешно
+    status = timing_engine.get_status()
+    if status['enabled']:
+        print(f"🕐 Timing system activated: enabled")
+    else:
+        print(f"❌ Failed to activate timing system")
 
 def disable_timing() -> None:
     """Отключить timing систему глобально"""
@@ -460,11 +463,9 @@ def disable_timing() -> None:
     TIMING_ENABLED = False
     timing_engine.disable()
 
-
 def get_timing_status() -> Dict[str, Any]:
     """Получить статус timing системы"""
     return timing_engine.get_status()
-
 
 if __name__ == "__main__":
     # Тестирование DSL парсера
