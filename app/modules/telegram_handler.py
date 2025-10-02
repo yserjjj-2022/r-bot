@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.0: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций + TimingEngine
+# Версия 8.1: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций + TimingEngine ИСПРАВЛЕНО
 
 import random
 import re
@@ -129,23 +129,8 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
-            # НОВОЕ: Проверка timing DSL (ПРИОРИТЕТ перед всеми остальными типами узлов)
-            timing_config = node.get("Timing") or node.get("Задержка (сек)")
-            if timing_config:
-                print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
-                # Определяем следующий узел для callback
-                next_node_id_cb = (node.get("next_node_id") or 
-                                   node.get("then_node_id") or 
-                                   node.get("else_node_id"))
-                
-                process_node_timing(
-                    user_id=user.id,
-                    session_id=session_info['session_id'],
-                    node_id=node_id,
-                    timing_config=str(timing_config),
-                    callback=lambda: send_node_message(chat_id, next_node_id_cb)
-                )
-                return  # timing_engine сам вызовет callback когда нужно
+            # ИСПРАВЛЕНО: УБРАНА ПРОВЕРКА TIMING ОТСЮДА! 
+            # Теперь timing обрабатывается ПОСЛЕ отправки сообщения
 
             # --- Тип "pause" (СТАРАЯ СИСТЕМА - оставляем для обратной совместимости) ---
             if node_type == "pause":
@@ -288,6 +273,24 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
             else:
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
+
+            # ИСПРАВЛЕНО: TIMING ПРОВЕРКА ПЕРЕНЕСЕНА СЮДА - ПОСЛЕ ОТПРАВКИ СООБЩЕНИЯ!
+            timing_config = node.get("Timing") or node.get("Задержка (сек)")
+            if timing_config:
+                print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
+                # Определяем следующий узел для callback
+                next_node_id_cb = (node.get("next_node_id") or 
+                                   node.get("then_node_id") or 
+                                   node.get("else_node_id"))
+                
+                process_node_timing(
+                    user_id=user.id,
+                    session_id=session_info['session_id'],
+                    node_id=node_id,
+                    timing_config=str(timing_config),
+                    callback=lambda: send_node_message(chat_id, next_node_id_cb)
+                )
+                return  # timing_engine сам вызовет callback когда нужно
 
             # Финальный узел — завершаем сессию
             if is_final_node(node):
