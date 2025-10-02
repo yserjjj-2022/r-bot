@@ -357,12 +357,11 @@ class TimingEngine:
         
         # Если анимация длинная, повторяем typing каждые 4 секунды  
         if duration > 4:
-            def repeat_typing():
-                remaining = duration
-                while remaining > 4:
-                    threading.Timer(4, send_typing_action).start()
-                    remaining -= 4
-            repeat_typing()
+            for i in range(1, int(duration // 4) + 1):
+                delay = i * 4
+                if delay < duration:  # Не отправляем после окончания
+                    threading.Timer(delay, send_typing_action).start()
+                    print(f"[TYPING] Scheduled typing action in {delay}s")
         
         # ГЛАВНОЕ: Запускаем основной таймер для завершения
         timer = threading.Timer(duration, finish_typing)
