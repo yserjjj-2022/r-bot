@@ -288,7 +288,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     session_id=session_info['session_id'],
                     node_id=node_id,
                     timing_config=str(timing_config),
-                    callback=lambda: send_node_message(chat_id, next_node_id_cb)
+                    callback=lambda: send_node_message(chat_id, next_node_id_cb),
+                    bot = bot,
+                    chat_id = chat_id
                 )
                 return  # timing_engine сам вызовет callback когда нужно
 

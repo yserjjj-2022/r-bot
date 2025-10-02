@@ -326,19 +326,50 @@ class TimingEngine:
         self.active_timers[timer_key] = timer
     
     def _execute_typing(self, command: Dict[str, Any], user_id: int, session_id: int,
-                       node_id: str, callback: Callable, **context) -> None:
+                    node_id: str, callback: Callable, **context) -> None:
         """Выполнение typing анимации"""
         duration = command['duration']
-        print(f"[INFO] TimingEngine: Executing typing animation: {duration}s for user {user_id}")  # ✅ ИСПРАВЛЕНО
+        print(f"[INFO] TimingEngine: Executing typing animation: {duration}s for user {user_id}")
         logger.info(f"Executing typing animation: {duration}s for user {user_id}")
         
-        # TODO: Интеграция с telegram_handler для отправки typing action
-        # Пока просто пауза, в PHASE 2 добавим bot.send_chat_action('typing')
+        # ИСПРАВЛЕНО: ДОБАВЛЯЕМ РЕАЛЬНУЮ РЕАЛИЗАЦИЮ
         
-        timer = threading.Timer(duration, callback)
+        # Получаем chat_id из context
+        chat_id = context.get('chat_id')
+        bot = context.get('bot')  # Нужно передавать bot из telegram_handler
+        
+        def send_typing_action():
+            """Отправляет typing action в Telegram"""
+            if bot and chat_id:
+                try:
+                    bot.send_chat_action(chat_id, 'typing')
+                    print(f"[TYPING] Sent typing action to chat {chat_id}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to send typing action: {e}")
+        
+        def finish_typing():
+            """Завершает typing анимацию и вызывает callback"""
+            print(f"[INFO] TimingEngine: Typing animation completed for user {user_id}")
+            callback()  # ← ЭТО ВАЖНО!
+        
+        # Отправляем typing action сразу
+        send_typing_action()
+        
+        # Если анимация длинная, повторяем typing каждые 4 секунды  
+        if duration > 4:
+            def repeat_typing():
+                remaining = duration
+                while remaining > 4:
+                    threading.Timer(4, send_typing_action).start()
+                    remaining -= 4
+            repeat_typing()
+        
+        # ГЛАВНОЕ: Запускаем основной таймер для завершения
+        timer = threading.Timer(duration, finish_typing)
         timer.start()
         
-        timer_key = f"{user_id}_{node_id}_typing"
+        # Сохраняем timer для возможной отмены
+        timer_key = f"{user_id}_{session_id}_{node_id}_typing"
         self.active_timers[timer_key] = timer
     
     def _execute_daily(self, command: Dict[str, Any], user_id: int, session_id: int,
