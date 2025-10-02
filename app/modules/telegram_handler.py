@@ -1,5 +1,6 @@
+# -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 7.0: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций
+# Версия 8.0: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций + TimingEngine
 
 import random
 import re
@@ -17,6 +18,9 @@ from app.modules import state_calculator
 
 # Берем актуальный граф на каждом обращении
 from app.modules.hot_reload import get_current_graph
+
+# НОВОЕ: Интеграция timing системы
+from app.modules.timing_engine import process_node_timing, enable_timing, get_timing_status
 
 user_sessions = {}
 
@@ -81,6 +85,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     initial_graph_data теперь игнорируется — используем get_current_graph() для hot-reload.
     """
     
+    # НОВОЕ: Активируем timing систему
+    enable_timing()
+    print(f"🕐 Timing system activated: {get_timing_status()}")
+    
     def _resume_after_pause(chat_id, next_node_id, temp_message_id=None):
         """Вызывается таймером для продолжения сценария после паузы."""
         if temp_message_id:
@@ -121,16 +129,34 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
-            # --- Тип "pause" ---
+            # НОВОЕ: Проверка timing DSL (ПРИОРИТЕТ перед всеми остальными типами узлов)
+            timing_config = node.get("Timing") or node.get("Задержка (сек)")
+            if timing_config:
+                print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
+                # Определяем следующий узел для callback
+                next_node_id_cb = (node.get("next_node_id") or 
+                                   node.get("then_node_id") or 
+                                   node.get("else_node_id"))
+                
+                process_node_timing(
+                    user_id=user.id,
+                    session_id=session_info['session_id'],
+                    node_id=node_id,
+                    timing_config=str(timing_config),
+                    callback=lambda: send_node_message(chat_id, next_node_id_cb)
+                )
+                return  # timing_engine сам вызовет callback когда нужно
+
+            # --- Тип "pause" (СТАРАЯ СИСТЕМА - оставляем для обратной совместимости) ---
             if node_type == "pause":
                 delay = float(node.get("delay", 1.0))
-                next_node_id = node.get("next_node_id")
-                pause_text = node.get("pause_text", "").replace('\\n', '\n')
+                next_node_id_next = node.get("next_node_id")
+                pause_text = node.get("pause_text", "").replace('\n', '\n')
                 temp_message_id = None
-                if not next_node_id: 
+                if not next_node_id_next: 
                     return
                 
-                print(f"--- [ПАУЗА] Задержка на {delay} сек. для чата {chat_id}, затем переход на {next_node_id} ---")
+                print(f"--- [ПАУЗА-СТАРАЯ] Задержка на {delay} сек. для чата {chat_id}, затем переход на {next_node_id_next} ---")
                 
                 if pause_text:
                     sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
@@ -138,15 +164,15 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 else:
                     bot.send_chat_action(chat_id, 'typing')
                 
-                threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id, temp_message_id]).start()
+                threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id_next, temp_message_id]).start()
                 return
 
             # --- Тип "condition" ---
             if node_type == "condition":
                 result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                next_node_id = node.get("then_node_id") if result else node.get("else_node_id")
-                if next_node_id: 
-                    send_node_message(chat_id, next_node_id)
+                next_node_id_next = node.get("then_node_id") if result else node.get("else_node_id")
+                if next_node_id_next: 
+                    send_node_message(chat_id, next_node_id_next)
                 return
 
             # --- Тип "randomizer" ---
@@ -156,9 +182,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     return
                 weights = [branch.get("weight", 1) for branch in branches]
                 chosen_branch = random.choices(branches, weights=weights, k=1)[0]
-                next_node_id = chosen_branch.get("next_node_id")
-                if next_node_id: 
-                    send_node_message(chat_id, next_node_id)
+                next_node_id_next = chosen_branch.get("next_node_id")
+                if next_node_id_next: 
+                    send_node_message(chat_id, next_node_id_next)
                 return
 
             # --- НОВОЕ: Тип "ai_proactive" с мини-DSL ---
@@ -171,7 +197,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if node.get("type") == "state":
                 text_template = node.get("state_message", "Состояние обновлено.")
 
-            # Подстановка переменных состояния в текст узла (score/capital_before и др. — оставляем как есть)
+            # Подстановка переменных состояния в текст узла
             current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
             capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
             state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
@@ -179,7 +205,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 formatted_text = text_template.format(**state_variables)
             except (KeyError, ValueError):
                 formatted_text = text_template
-            final_text_to_send = formatted_text.replace('\\n', '\n')
+            final_text_to_send = formatted_text.replace('\n', '\n')
 
             # Подготовка клавиатуры
             markup = InlineKeyboardMarkup()
@@ -189,23 +215,21 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             # Если узел проактивный — генерируем проактивную реплику ИИ перед основным текстом/кнопками
             if is_proactive:
                 print(f"--- [AI-PROACTIVE] role={ai_role}, prompt='{local_prompt}', node={node_id} ---")
-                # Готовим контекст для ИИ: локальный промпт как текущий вопрос, опции узла, выбранная роль
                 opts_for_context = options
                 if node.get("type") == "circumstance":
-                    # Если экранированный случай единственной кнопки "Далее"
                     opts_for_context = [{"text": node.get("option_text", "Далее")}]
                 try:
                     system_prompt_context = crud.build_full_context_for_ai(
                         db=db,
                         session_id=session_info['session_id'],
                         user_id=user.id,
-                        current_question=local_prompt,   # локальная задача момента
+                        current_question=local_prompt,
                         options=opts_for_context,
                         event_type=node.get("event_type"),
-                        ai_persona=ai_role               # роль из DSL
+                        ai_persona=ai_role
                     )
                     ai_message = gigachat_handler.get_ai_response(
-                        user_message="",                  # проактивная реплика не требует входного сообщения
+                        user_message="",
                         system_prompt=system_prompt_context
                     )
                     if ai_message:
@@ -224,7 +248,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             elif (node.get("type") in ["question", "task"] or "ai_proactive:" in str(node.get("type", ""))) and options:
                 unconditional_next_id = node.get("next_node_id")
                 
-                # РАНДОМИЗАЦИЯ ОПЦИЙ (с сохранением правильных индексов в callback_data)
+                # РАНДОМИЗАЦИЯ ОПЦИЙ
                 display_options = options.copy()
                 original_indices = {}
                 if node.get("randomize_options", False):
@@ -273,22 +297,22 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     del user_sessions[chat_id]
                 return
             
-            # Определяем, интерактивный ли узел
+            # Интерактивность узла
             is_interactive_node = (
                 node.get("type") == "circumstance" or
                 node.get("type") == "input_text" or
                 (node.get("options") and len(node.get("options")) > 0)
             )
-            next_node_id = node.get("next_node_id")
+            next_node_id_next = node.get("next_node_id")
 
-            # НОВОЕ: если узел проактивный и нет опций — авто-переход (реплика ИИ уже отправлена)
-            if is_proactive and (not node.get("options") or len(node.get("options")) == 0) and next_node_id:
-                send_node_message(chat_id, next_node_id)
+            # НОВОЕ: если узел проактивный и нет опций — авто-переход
+            if is_proactive and (not node.get("options") or len(node.get("options")) == 0) and next_node_id_next:
+                send_node_message(chat_id, next_node_id_next)
                 return
 
             # Если узел неинтерактивный — сразу переходим дальше
-            if not is_interactive_node and next_node_id:
-                send_node_message(chat_id, next_node_id)
+            if not is_interactive_node and next_node_id_next:
+                send_node_message(chat_id, next_node_id_next)
         
         except Exception:
             print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в send_node_message для узла {node_id}!!!")
@@ -393,7 +417,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 except (KeyError, ValueError):
                     formatted_original = original_template
 
-                clean_original = formatted_original.replace('\\n', '\n')
+                clean_original = formatted_original.replace('\n', '\n')
                 new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
                 bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
             except Exception as e:
