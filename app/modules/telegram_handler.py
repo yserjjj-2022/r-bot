@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.1: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций + TimingEngine ИСПРАВЛЕНО
+# Версия 8.2: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций + TimingEngine + ПОДДЕРЖКА ТЕКСТА ПАУЗ
 
 import random
 import re
@@ -128,9 +128,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
-
-            # ИСПРАВЛЕНО: УБРАНА ПРОВЕРКА TIMING ОТСЮДА! 
-            # Теперь timing обрабатывается ПОСЛЕ отправки сообщения
 
             # --- Тип "pause" (СТАРАЯ СИСТЕМА - оставляем для обратной совместимости) ---
             if node_type == "pause":
@@ -274,7 +271,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             else:
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
-            # ИСПРАВЛЕНО: TIMING ПРОВЕРКА ПЕРЕНЕСЕНА СЮДА - ПОСЛЕ ОТПРАВКИ СООБЩЕНИЯ!
+            # ← ИЗМЕНЕНО: РАСШИРЕННАЯ ОБРАБОТКА TIMING С ТЕКСТОМ ПАУЗ
             timing_config = node.get("Timing") or node.get("Задержка (сек)")
             if timing_config:
                 print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
@@ -283,14 +280,19 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                                    node.get("then_node_id") or 
                                    node.get("else_node_id"))
                 
+                # ← ИЗМЕНЕНО: Добавляем поддержку текста паузы
+                pause_text = node.get("pause_text") or node.get("Текст паузы") or ""
+                
+                # ← ИЗМЕНЕНО: Расширенный контекст для timing_engine
                 process_node_timing(
                     user_id=user.id,
                     session_id=session_info['session_id'],
                     node_id=node_id,
                     timing_config=str(timing_config),
                     callback=lambda: send_node_message(chat_id, next_node_id_cb),
-                    bot = bot,
-                    chat_id = chat_id
+                    bot=bot,
+                    chat_id=chat_id,
+                    pause_text=pause_text  # ← ИЗМЕНЕНО: Передаем текст паузы
                 )
                 return  # timing_engine сам вызовет callback когда нужно
 
@@ -320,7 +322,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if timing_check_for_auto:
                 print(f"--- [TIMING] Узел {node_id} содержит timing, автопереход отключен ---")
                 return
-
 
             # Автопереход только для узлов БЕЗ timing
             if not is_interactive_node and next_node_id_next:
@@ -390,6 +391,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 formula_to_execute = node.get("formula")
             
             elif node_type in ["task", "question"] and node.get("options") and len(node["options"]) > button_idx:
+                option_data = node["options"][button_idx]
+                pressed_button_text = option_data.get('text', '')
+                text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
+                formula_to_execute = option_data.get("formula")
+            
+            # ← ИЗМЕНЕНО: Добавлена обработка AI проактивных узлов
+            elif "ai_proactive:" in str(node_type) and node.get("options") and len(node["options"]) > button_idx:
                 option_data = node["options"][button_idx]
                 pressed_button_text = option_data.get('text', '')
                 text_to_save_in_db = option_data.get('interpretation', pressed_button_text)

@@ -290,31 +290,24 @@ class TimingEngine:
     # =================================================================
     
     def _execute_pause(self, command: Dict[str, Any], callback: Callable, **context) -> None:
-        """Выполнение паузы с прогресс-баром"""
+        """Выполнение простой паузы БЕЗ прогресс-бара"""
         duration = command['duration']
-        process_name = command.get('process_name', 'Пауза')
-        
-        print(f"[INFO] TimingEngine: Executing pause with progress: {duration}s ({process_name})")
-        logger.info(f"Executing pause with progress: {duration}s for {process_name}")
+        pause_text = command.get('pause_text', '')
         
         bot = context.get('bot')
         chat_id = context.get('chat_id')
         
-        if bot and chat_id:
-            # Показываем прогресс-бар в отдельном потоке
-            def show_progress_and_callback():
-                try:
-                    self._show_progress_bar(bot, chat_id, duration, process_name)
-                    callback()
-                except Exception as e:
-                    print(f"[ERROR] Progress bar failed: {e}")
-                    callback()
-            
-            threading.Thread(target=show_progress_and_callback).start()
-        else:
-            # Fallback: простая пауза
-            timer = threading.Timer(duration, callback)
-            timer.start()
+        print(f"[INFO] TimingEngine: Executing simple pause: {duration}s")
+        
+        # Если есть текст паузы - отправить его
+        if pause_text and bot and chat_id:
+            bot.send_message(chat_id, pause_text)
+            print(f"[INFO] Sent pause text: {pause_text}")
+        
+        # ПРОСТАЯ ПАУЗА БЕЗ ВИЗУАЛИЗАЦИИ
+        timer = threading.Timer(duration, callback)
+        timer.start()
+
     
     def _execute_typing(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """Выполнение прогресс-бара вместо typing анимации"""
