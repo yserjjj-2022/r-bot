@@ -315,7 +315,14 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 send_node_message(chat_id, next_node_id_next)
                 return
 
-            # Если узел неинтерактивный — сразу переходим дальше
+            # ИСПРАВЛЕНО: Узлы с timing НЕ ДЕЛАЮТ автопереход
+            timing_check_for_auto = node.get("Timing") or node.get("Задержка (сек)")
+            if timing_check_for_auto:
+                print(f"--- [TIMING] Узел {node_id} содержит timing, автопереход отключен ---")
+                return
+
+
+            # Автопереход только для узлов БЕЗ timing
             if not is_interactive_node and next_node_id_next:
                 send_node_message(chat_id, next_node_id_next)
         
