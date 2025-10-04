@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.2: Hot-reload + Проактивный ИИ (DSL ai_proactive: role("prompt")) + рандомизация опций + TimingEngine + ПОДДЕРЖКА ТЕКСТА ПАУЗ
+# Версия 8.3: Интеграция с обновленным TimingEngine (preset'ы + timeout_task)
 
 import random
 import re
@@ -19,21 +19,24 @@ from app.modules import state_calculator
 # Берем актуальный граф на каждом обращении
 from app.modules.hot_reload import get_current_graph
 
-# НОВОЕ: Интеграция timing системы
-from app.modules.timing_engine import process_node_timing, enable_timing, get_timing_status
+# ИЗМЕНЕНО: Обновленная интеграция timing системы с timeout_task
+from app.modules.timing_engine import process_node_timing, cancel_timeout_for_session, enable_timing, get_timing_status
 
 user_sessions = {}
+
+# НОВОЕ: Для отслеживания активных timeout_task
+active_timeout_sessions = {}  # session_id -> {'fallback_node': str, 'node_id': str}
 
 # --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
     """Проверяет, является ли узел конечным в сценарии."""
     if not node_data:
         return True
-    
+
     has_next_node = node_data.get("next_node_id") or node_data.get("then_node_id") or node_data.get("else_node_id")
     if has_next_node:
         return False
-        
+
     if "options" in node_data and node_data["options"]:
         for option in node_data["options"]:
             if option.get("next_node_id"):
@@ -41,7 +44,7 @@ def is_final_node(node_data):
 
     if "branches" in node_data and node_data["branches"]:
         return False
-        
+
     return True
 
 # --- Вспомогательная функция для безопасного сравнения ---
@@ -84,11 +87,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     Регистрирует обработчики для Telegram-бота.
     initial_graph_data теперь игнорируется — используем get_current_graph() для hot-reload.
     """
-    
-    # НОВОЕ: Активируем timing систему
+
+    # ОБНОВЛЕНО: Активируем обновленную timing систему с timeout_task
     enable_timing()
-    print(f"🕐 Timing system activated: {get_timing_status()}")
-    
+    timing_status = get_timing_status()
+    print(f"🕐 Timing system activated: {timing_status}")
+    print(f"🚀 Available timing commands: {timing_status.get('available_parsers', [])}")
+
     def _resume_after_pause(chat_id, next_node_id, temp_message_id=None):
         """Вызывается таймером для продолжения сценария после паузы."""
         if temp_message_id:
@@ -98,18 +103,40 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
         send_node_message(chat_id, next_node_id)
 
+    # НОВОЕ: Обработчик timeout_task fallback
+    def handle_timeout_fallback(session_id: int, fallback_node: str):
+        """Обрабатывает истечение времени timeout_task"""
+        print(f"[TIMEOUT_TASK] Timeout expired for session {session_id} → fallback: {fallback_node}")
+
+        # Найти chat_id по session_id
+        chat_id = None
+        for cid, sess_info in user_sessions.items():
+            if sess_info.get('session_id') == session_id:
+                chat_id = cid
+                break
+
+        if chat_id:
+            # Очистить активный timeout
+            if session_id in active_timeout_sessions:
+                del active_timeout_sessions[session_id]
+
+            # Перейти к fallback узлу
+            send_node_message(chat_id, fallback_node)
+        else:
+            print(f"[WARNING] Chat not found for session {session_id}")
+
     # --- Основная функция отправки сообщений ---
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
         try:
             print(f"--- [НАВИГАЦИЯ] Попытка перехода на узел: {node_id} для чата {chat_id} ---")
-            
+
             # Всегда берем актуальный граф
             graph_data = get_current_graph()
             if not graph_data:
                 bot.send_message(chat_id, "Сценарий временно недоступен. Попробуйте позже.")
                 return
-            
+
             node = graph_data["nodes"].get(str(node_id))
             session_info = user_sessions.get(chat_id)
 
@@ -118,14 +145,14 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 if chat_id in user_sessions: 
                     del user_sessions[chat_id]
                 return
-            
+
             if not session_info:
                 bot.send_message(chat_id, "Игра завершена. Для нового начала, используйте /start.")
                 return
 
             session_info['node_id'] = node_id
             print(f"--- [СЕССИЯ] Установлен текущий узел: {node_id} ---")
-            
+
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type", "question")
 
@@ -137,15 +164,15 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 temp_message_id = None
                 if not next_node_id_next: 
                     return
-                
+
                 print(f"--- [ПАУЗА-СТАРАЯ] Задержка на {delay} сек. для чата {chat_id}, затем переход на {next_node_id_next} ---")
-                
+
                 if pause_text:
                     sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
                     temp_message_id = sent_msg.message_id
                 else:
                     bot.send_chat_action(chat_id, 'typing')
-                
+
                 threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id_next, temp_message_id]).start()
                 return
 
@@ -170,7 +197,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 return
 
             # --- НОВОЕ: Тип "ai_proactive" с мини-DSL ---
-            # Допускаем, что поле "type" может содержать команду DSL
             ai_role, local_prompt = parse_ai_proactive_command(node_type)
             is_proactive = ai_role is not None and local_prompt is not None
 
@@ -229,29 +255,29 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 ))
             elif (node.get("type") in ["question", "task"] or "ai_proactive:" in str(node.get("type", ""))) and options:
                 unconditional_next_id = node.get("next_node_id")
-                
+
                 # РАНДОМИЗАЦИЯ ОПЦИЙ
                 display_options = options.copy()
                 original_indices = {}
                 if node.get("randomize_options", False):
                     random.shuffle(display_options)
                     print(f"--- [РАНДОМИЗАЦИЯ] Опции для узла {node_id} перемешаны ---")
-                
+
                 for new_idx, option in enumerate(display_options):
                     original_idx = options.index(option)
                     original_indices[new_idx] = original_idx
-                
+
                 for new_idx, option in enumerate(display_options):
                     original_idx = original_indices[new_idx]
                     next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
                     if not next_node_id_for_button: 
                         continue
-                    
+
                     markup.add(InlineKeyboardButton(
                         text=option["text"], 
                         callback_data=f"{callback_prefix}|{original_idx}|{next_node_id_for_button}"
                     ))
-            
+
             # --- ЛОГИКА ОТПРАВКИ КАРТИНОК ---
             image_id = node.get("image_id")
             if image_id:
@@ -271,28 +297,59 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             else:
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
-            # ← ИЗМЕНЕНО: РАСШИРЕННАЯ ОБРАБОТКА TIMING С ТЕКСТОМ ПАУЗ
-            timing_config = node.get("Timing") or node.get("Задержка (сек)")
+            # ИЗМЕНЕНО: ОБНОВЛЕННАЯ ОБРАБОТКА TIMING С ПОДДЕРЖКОЙ timeout_task
+            timing_config = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
             if timing_config:
                 print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
-                # Определяем следующий узел для callback
+
+                # НОВОЕ: Проверяем, содержит ли timing конфигурацию timeout_task
+                if 'timeout_task:' in str(timing_config):
+                    # Парсим fallback узел для timeout_task
+                    try:
+                        # Формат: timeout_task:30s:fallback_node
+                        parts = str(timing_config).split(':')
+                        if len(parts) >= 3:
+                            fallback_node = parts[2]
+                            # Регистрируем активный timeout
+                            active_timeout_sessions[session_info['session_id']] = {
+                                'fallback_node': fallback_node,
+                                'node_id': node_id
+                            }
+                            print(f"[TIMEOUT_TASK] Registered timeout for session {session_info['session_id']} → {fallback_node}")
+                    except Exception as e:
+                        print(f"[WARNING] Failed to parse timeout_task config: {e}")
+
+                # Определяем следующий узел для обычного callback
                 next_node_id_cb = (node.get("next_node_id") or 
                                    node.get("then_node_id") or 
                                    node.get("else_node_id"))
-                
-                # ← ИЗМЕНЕНО: Добавляем поддержку текста паузы
+
+                # Поддержка текста паузы
                 pause_text = node.get("pause_text") or node.get("Текст паузы") or ""
-                
-                # ← ИЗМЕНЕНО: Расширенный контекст для timing_engine
+
+                # ОБНОВЛЕНО: Расширенный контекст для нового timing_engine с timeout_task
+                def timing_callback():
+                    """Callback после завершения timing процесса"""
+                    # Проверить, не сработал ли timeout_task
+                    if hasattr(timing_callback, 'timeout_fallback_node'):
+                        fallback_node = timing_callback.timeout_fallback_node
+                        print(f"[TIMEOUT_TASK] Executing fallback: {fallback_node}")
+                        handle_timeout_fallback(session_info['session_id'], fallback_node)
+                    elif next_node_id_cb:
+                        # Обычный переход
+                        send_node_message(chat_id, next_node_id_cb)
+
                 process_node_timing(
                     user_id=user.id,
                     session_id=session_info['session_id'],
                     node_id=node_id,
                     timing_config=str(timing_config),
-                    callback=lambda: send_node_message(chat_id, next_node_id_cb),
+                    callback=timing_callback,
                     bot=bot,
                     chat_id=chat_id,
-                    pause_text=pause_text  # ← ИЗМЕНЕНО: Передаем текст паузы
+                    pause_text=pause_text,
+                    # НОВОЕ: Передаем функцию обработки timeout fallback
+                    timeout_fallback_handler=handle_timeout_fallback
                 )
                 return  # timing_engine сам вызовет callback когда нужно
 
@@ -300,10 +357,15 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if is_final_node(node):
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
                 crud.end_session(db, session_info['session_id'])
+
+                # НОВОЕ: Очистка активных timeout при завершении сессии
+                if session_info['session_id'] in active_timeout_sessions:
+                    del active_timeout_sessions[session_info['session_id']]
+
                 if chat_id in user_sessions:
                     del user_sessions[chat_id]
                 return
-            
+
             # Интерактивность узла
             is_interactive_node = (
                 node.get("type") == "circumstance" or
@@ -318,7 +380,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 return
 
             # ИСПРАВЛЕНО: Узлы с timing НЕ ДЕЛАЮТ автопереход
-            timing_check_for_auto = node.get("Timing") or node.get("Задержка (сек)")
+            timing_check_for_auto = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
             if timing_check_for_auto:
                 print(f"--- [TIMING] Узел {node_id} содержит timing, автопереход отключен ---")
                 return
@@ -326,7 +388,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             # Автопереход только для узлов БЕЗ timing
             if not is_interactive_node and next_node_id_next:
                 send_node_message(chat_id, next_node_id_next)
-        
+
         except Exception:
             print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в send_node_message для узла {node_id}!!!")
             traceback.print_exc()
@@ -345,7 +407,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if not graph_data:
                 bot.send_message(chat_id, "Сценарий временно недоступен. Попробуйте позже.")
                 return
-            
+
             user = crud.get_or_create_user(db, telegram_id=chat_id)
             session = crud.create_session(db, user_id=user.id, graph_id=graph_data["graph_id"])
             user_sessions[chat_id] = {'session_id': session.id, 'node_id': None}
@@ -357,12 +419,26 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback_query(call):
+        """
+        ИЗМЕНЕНО: Обработчик кнопок с поддержкой отмены timeout_task
+        """
         chat_id = call.message.chat.id
         session_data = user_sessions.get(chat_id)
         if not session_data:
             bot.answer_callback_query(call.id, "Сессия истекла. Начните заново: /start.", show_alert=True)
             return
-        
+
+        # НОВОЕ: Отмена активного timeout_task при нажатии кнопки
+        session_id = session_data.get('session_id')
+        if session_id and session_id in active_timeout_sessions:
+            # Отменить timeout в timing_engine
+            success = cancel_timeout_for_session(session_id)
+            if success:
+                print(f"[TIMEOUT_TASK] Cancelled timeout for session {session_id} due to button press")
+
+            # Удалить из локального трекинга
+            del active_timeout_sessions[session_id]
+
         db = SessionLocal()
         try:
             node_id_from_call, button_idx_str, next_node_id = call.data.split('|', 2)
@@ -380,7 +456,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             user = crud.get_or_create_user(db, chat_id)
             node_type = node.get("type")
-            
+
             text_to_save_in_db = "N/A"
             pressed_button_text = "N/A"
             formula_to_execute = None
@@ -389,25 +465,25 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 pressed_button_text = node.get("option_text", "Далее")
                 text_to_save_in_db = pressed_button_text
                 formula_to_execute = node.get("formula")
-            
+
             elif node_type in ["task", "question"] and node.get("options") and len(node["options"]) > button_idx:
                 option_data = node["options"][button_idx]
                 pressed_button_text = option_data.get('text', '')
                 text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
                 formula_to_execute = option_data.get("formula")
-            
-            # ← ИЗМЕНЕНО: Добавлена обработка AI проактивных узлов
+
+            # Добавлена обработка AI проактивных узлов
             elif "ai_proactive:" in str(node_type) and node.get("options") and len(node["options"]) > button_idx:
                 option_data = node["options"][button_idx]
                 pressed_button_text = option_data.get('text', '')
                 text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
                 formula_to_execute = option_data.get("formula")
-            
+
             # Выполнение формулы состояния (если есть)
             if formula_to_execute:
                 old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
                 crud.update_user_state(db, user.id, session_data['session_id'], 'capital_before', float(old_score_str))
-                
+
                 current_state = {'score': float(old_score_str)}
                 new_score = state_calculator.calculate_new_state(formula_to_execute, current_state)
                 if new_score is not None:
@@ -423,9 +499,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     node_text=node_text_for_db,
                     answer_text=text_to_save_in_db
                 )
-            
+
             bot.answer_callback_query(call.id)
-            
+
             # Удаление кнопок / подтверждение
             try:
                 original_template = node.get("text", "")
@@ -448,7 +524,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 except Exception as e2:
                     print(f"--- [DEBUG] Не удалось убрать кнопки: {e2}")
                     bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
-            
+
             send_node_message(chat_id, next_node_id)
         except Exception:
             traceback.print_exc()
@@ -467,16 +543,16 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if not session_data or not session_data.get('node_id'):
             bot.reply_to(message, "Игра уже завершена. Чтобы начать новую, используйте команду /start.")
             return
-        
+
         current_node_id = session_data['node_id']
-        
+
         graph_data = get_current_graph()
         if not graph_data:
             bot.reply_to(message, "Сценарий временно недоступен.")
             return
-        
+
         node = graph_data["nodes"].get(current_node_id)
-        
+
         if is_final_node(node):
             bot.reply_to(message, "Игра окончена. Спасибо за участие! Для начала новой игры используйте /start.")
             if chat_id in user_sessions:
@@ -484,7 +560,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             return
 
         node_type = node.get("type", "question")
-        
+
         if node_type == "input_text":
             user_input = message.text
             db = SessionLocal()
@@ -496,7 +572,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     send_node_message(chat_id, next_node_id)
             finally:
                 db.close()
-        
+
         elif node.get("ai_enabled", False):
             # Реактивный режим ИИ (как и раньше)
             bot.send_chat_action(chat_id, 'typing')
@@ -515,21 +591,21 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     node.get("event_type"),
                     ai_persona  # Передаем тип ИИ/роль
                 )
-                
+
                 ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)
-                
+
                 if ai_answer:
                     crud.create_ai_dialogue(db, session_data['session_id'], current_node_id, message.text, ai_answer)
                     bot.reply_to(message, ai_answer, parse_mode="Markdown")
                     send_node_message(chat_id, current_node_id)
                 else: 
                     bot.reply_to(message, "К сожалению, не удалось получить ответ от ассистента.")
-            
+
             except Exception:
                 traceback.print_exc()
                 bot.reply_to(message, "Произошла внутренняя ошибка при обращении к AI-ассистенту.")
             finally:
                 db.close()
-        
+
         else:
             bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
