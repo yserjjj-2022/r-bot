@@ -1,11 +1,18 @@
 # app/modules/database/models.py
-# Финальная версия 5.24: Добавлено поле node_text в модель Response для полного контекста.
+# Финальная версия 6.0: Этап 0 - добавлены новые модели + исправлен deprecated datetime.utcnow
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from datetime import datetime, timezone
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from .database import Base
+
+# Utility функция для современного UTC времени
+def utc_now():
+    """Возвращает текущее время в UTC (современная замена datetime.utcnow)"""
+    return datetime.now(timezone.utc)
+
 
 class User(Base):
     """Модель пользователя. Хранит основную информацию."""
@@ -18,6 +25,7 @@ class User(Base):
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
     states = relationship("UserState", back_populates="user", cascade="all, delete-orphan")
 
+
 class Session(Base):
     """Модель сессии. Каждая новая команда /start создает новую сессию."""
     __tablename__ = 'sessions'
@@ -28,10 +36,15 @@ class Session(Base):
     start_time = Column(DateTime(timezone=True), server_default=func.now())
     end_time = Column(DateTime(timezone=True), nullable=True)
     
+    # === НОВЫЕ ПОЛЯ ЭТАПА 0 ===
+    group_id = Column(Integer, default=None)
+    session_metadata = Column(JSON, default={})
+    
     user = relationship("User", back_populates="sessions")
     responses = relationship("Response", back_populates="session", cascade="all, delete-orphan")
     ai_dialogues = relationship("AIDialogue", back_populates="session", cascade="all, delete-orphan")
     states = relationship("UserState", back_populates="session", cascade="all, delete-orphan")
+
 
 class Response(Base):
     """Модель ответа пользователя на узел сценария."""
@@ -48,7 +61,11 @@ class Response(Base):
     answer_text = Column(Text, nullable=False) # Текст трактовки или кнопки
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
+    # === НОВОЕ ПОЛЕ ЭТАПА 0 ===
+    importance = Column(String(20), default='medium')  # ИИ-определяемая важность события
+    
     session = relationship("Session", back_populates="responses")
+
 
 class AIDialogue(Base):
     """Модель для хранения диалогов пользователя с AI-ассистентом."""
@@ -63,6 +80,7 @@ class AIDialogue(Base):
     
     session = relationship("Session", back_populates="ai_dialogues")
 
+
 class UserState(Base):
     """Модель для хранения произвольных состояний пользователя в рамках сессии."""
     __tablename__ = "user_states"
@@ -76,3 +94,60 @@ class UserState(Base):
 
     user = relationship("User", back_populates="states")
     session = relationship("Session", back_populates="states")
+
+
+# === НОВЫЕ МОДЕЛИ ДЛЯ ЭТАПА 0 ===
+
+class ActiveTimer(Base):
+    """Активные таймеры для timing механик"""
+    __tablename__ = 'active_timers'
+    
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey('sessions.id'))
+    timer_type = Column(String(50), default='remind')  # remind, timeout, cooldown
+    target_timestamp = Column(DateTime)  # когда сработать
+    message_text = Column(Text, default='')
+    callback_node_id = Column(String(50))  # на какой узел перейти
+    callback_data = Column(JSON, default={})
+    status = Column(String(20), default='pending')  # pending, executed, cancelled
+    created_at = Column(DateTime, default=utc_now)  # ИСПРАВЛЕНО: современный UTC
+
+
+class ResearchGroup(Base):
+    """Группы для групповых исследований"""
+    __tablename__ = 'research_groups'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), default='Unnamed Group')
+    scenario_id = Column(String(50))  # ID сценария
+    group_type = Column(String(50), default='individual')  # individual, competition, cooperation
+    max_participants = Column(Integer, default=1)
+    status = Column(String(20), default='forming')  # forming, active, completed
+    group_data = Column(JSON, default={})  # дополнительные данные группы
+    created_at = Column(DateTime, default=utc_now)  # ИСПРАВЛЕНО: современный UTC
+
+
+class GroupParticipant(Base):
+    """Участники групповых исследований"""
+    __tablename__ = 'group_participants'
+    
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey('research_groups.id'))
+    user_id = Column(Integer, ForeignKey('users.id'))
+    session_id = Column(Integer, ForeignKey('sessions.id'))
+    role = Column(String(50), default='participant')  # participant, observer, leader
+    joined_at = Column(DateTime, default=utc_now)  # ИСПРАВЛЕНО: современный UTC
+    status = Column(String(20), default='active')  # active, finished, dropped_out
+
+
+class GroupEvent(Base):
+    """События в групповых исследованиях"""
+    __tablename__ = 'group_events'
+    
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey('research_groups.id'))
+    participant_id = Column(Integer, ForeignKey('group_participants.id'))
+    event_type = Column(String(50))  # decision, reveal, round_end, game_over
+    event_data = Column(JSON, default={})  # данные события
+    round_number = Column(Integer, default=1)
+    created_at = Column(DateTime, default=utc_now)  # ИСПРАВЛЕНО: современный UTC
