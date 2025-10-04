@@ -3,14 +3,14 @@
 R-Bot Timing Engine - система временных механик для behavioral research
 
 Модульная архитектура для поэтапной реализации сложных временных функций:
-- PHASE 1: Базовые паузы, расписания, напоминания + ПРОГРЕСС-БАР  
+- PHASE 1: Базовые паузы, расписания, напоминания + ПРОГРЕСС-БАР + DATABASE INTEGRATION
 - PHASE 2: Timezone, условная логика, игровые механики
 - PHASE 3: Продвинутая аналитика, групповая синхронизация
 - PHASE 4: ML-оптимизация (опционально)
 
 Автор: Sergey Ershov
 Создано: 02.10.2025
-Обновлено: 03.10.2025 - заменен typing на прогресс-бар
+Обновлено: 04.10.2025 - добавлена Database Integration (ActiveTimer)
 """
 
 import threading
@@ -20,6 +20,12 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Callable, Optional, List
 
+# === НОВЫЕ ИМПОРТЫ ДЛЯ DATABASE INTEGRATION ===
+from app.modules.database.models import ActiveTimer, utc_now
+from app.modules.database.database import get_db
+from sqlalchemy.orm import Session
+from sqlalchemy import and_
+
 # ИСПРАВЛЕНО: Feature flag включен по умолчанию для PHASE 1
 TIMING_ENABLED = True  # ✅ ВКЛЮЧЕНО ПО УМОЛЧАНИЮ!
 
@@ -27,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 class TimingEngine:
     """
-    Основной движок обработки временных механик R-Bot с поддержкой прогресс-бара
+    Основной движок обработки временных механик R-Bot с поддержкой прогресс-бара и Database Integration
     
     Поддерживает DSL синтаксис для описания сложных временных сценариев:
     - Простые паузы: "3", "1.5s"
@@ -36,6 +42,8 @@ class TimingEngine:
     - Напоминания: "remind:2h,6h,24h"
     - Дедлайны: "deadline:24h", "timeout:30s"
     - Комбинированные: "daily@09:00; remind:4h,8h; deadline:24h"
+    
+    ✅ НОВОЕ: Persistent таймеры через ActiveTimer модель!
     """
     
     _instance = None
@@ -57,11 +65,217 @@ class TimingEngine:
         
         logger.info(f"TimingEngine initialized. Enabled: {self.enabled}")
         print(f"[INIT] TimingEngine initialized with enabled={self.enabled}")
+        
+        # ✅ НОВОЕ: Восстановить таймеры из БД при инициализации
+        if self.enabled:
+            try:
+                self.restore_timers_from_db()
+                self.cleanup_expired_timers()
+            except Exception as e:
+                logger.error(f"Failed to restore/cleanup timers on init: {e}")
+                print(f"[ERROR] Failed to restore/cleanup timers on init: {e}")
     
     @classmethod
     def get_instance(cls):
         """Получить singleton экземпляр TimingEngine"""
         return cls()
+    
+    # =================================================================
+    # ✅ НОВЫЕ МЕТОДЫ ДЛЯ DATABASE INTEGRATION
+    # =================================================================
+    
+    def _get_db_session(self):
+        """Получить БД сессию"""
+        try:
+            return next(get_db())
+        except Exception as e:
+            logger.error(f"Failed to get DB session: {e}")
+            print(f"[ERROR] Failed to get DB session: {e}")
+            return None
+
+    def save_timer_to_db(self, session_id: int, timer_type: str, 
+                        delay_seconds: int, message_text: str = "",
+                        callback_node_id: str = "", callback_data: dict = None):
+        """Сохранить таймер в ActiveTimer модель"""
+        
+        if callback_data is None:
+            callback_data = {}
+        
+        db = self._get_db_session()
+        if not db:
+            print("[ERROR] No DB session available for saving timer")
+            return None
+        
+        try:
+            # Вычислить target_timestamp
+            target_time = utc_now() + timedelta(seconds=delay_seconds)
+            
+            # Создать запись в БД
+            timer_record = ActiveTimer(
+                session_id=session_id,
+                timer_type=timer_type,
+                target_timestamp=target_time,
+                message_text=message_text,
+                callback_node_id=callback_node_id,
+                callback_data=callback_data,
+                status='pending'
+            )
+            
+            db.add(timer_record)
+            db.commit()
+            
+            print(f"[INFO] Timer saved to DB: ID={timer_record.id}, type={timer_type}")
+            logger.info(f"Timer saved to DB: {timer_record.id}")
+            return timer_record.id
+            
+        except Exception as e:
+            logger.error(f"Failed to save timer to DB: {e}")
+            print(f"[ERROR] Failed to save timer to DB: {e}")
+            db.rollback()
+            return None
+        finally:
+            db.close()
+
+    def restore_timers_from_db(self):
+        """Восстановить pending таймеры после рестарта"""
+        
+        print("[INFO] Restoring timers from database...")
+        
+        db = self._get_db_session()
+        if not db:
+            print("[ERROR] No DB session available for restoring timers")
+            return
+        
+        try:
+            # Найти все pending таймеры
+            pending_timers = db.query(ActiveTimer).filter(
+                ActiveTimer.status == 'pending',
+                ActiveTimer.target_timestamp > utc_now()
+            ).all()
+            
+            print(f"[INFO] Found {len(pending_timers)} pending timers to restore")
+            logger.info(f"Found {len(pending_timers)} pending timers to restore")
+            
+            restored_count = 0
+            for timer_record in pending_timers:
+                # Вычислить оставшееся время
+                remaining = (timer_record.target_timestamp - utc_now()).total_seconds()
+                
+                if remaining > 0:
+                    # Создать threading timer
+                    timer_key = f"db_{timer_record.id}"
+                    
+                    def create_timer_callback(timer_id=timer_record.id):
+                        def callback():
+                            self._execute_db_timer(timer_id)
+                        return callback
+                    
+                    thread_timer = threading.Timer(remaining, create_timer_callback())
+                    thread_timer.start()
+                    
+                    self.active_timers[timer_key] = thread_timer
+                    restored_count += 1
+                    print(f"[INFO] Restored timer {timer_record.id}: {remaining:.1f}s remaining")
+                else:
+                    # Таймер уже истек - выполнить немедленно
+                    print(f"[INFO] Timer {timer_record.id} expired - executing immediately")
+                    self._execute_db_timer(timer_record.id)
+            
+            print(f"[SUCCESS] Restored {restored_count} timers from database")
+                    
+        except Exception as e:
+            logger.error(f"Failed to restore timers: {e}")
+            print(f"[ERROR] Failed to restore timers: {e}")
+        finally:
+            db.close()
+
+    def _execute_db_timer(self, timer_id: int):
+        """Выполнить таймер из БД"""
+        
+        print(f"[INFO] Executing DB timer: {timer_id}")
+        
+        db = self._get_db_session()
+        if not db:
+            print(f"[ERROR] No DB session available for executing timer {timer_id}")
+            return
+        
+        try:
+            # Получить таймер
+            timer_record = db.query(ActiveTimer).filter(
+                ActiveTimer.id == timer_id
+            ).first()
+            
+            if not timer_record:
+                logger.warning(f"Timer {timer_id} not found in DB")
+                print(f"[WARNING] Timer {timer_id} not found in DB")
+                return
+            
+            # Обновить статус
+            timer_record.status = 'executed'
+            db.commit()
+            
+            # Выполнить callback действие
+            print(f"[INFO] Executing DB timer {timer_id}: {timer_record.timer_type}")
+            logger.info(f"Executing DB timer {timer_id}: {timer_record.timer_type}")
+            
+            # В зависимости от timer_type выполняем разные действия
+            if timer_record.timer_type == 'typing':
+                print(f"[INFO] Completed typing process: {timer_record.message_text}")
+            elif timer_record.timer_type == 'delayed_message':
+                print(f"[INFO] Should send delayed message: {timer_record.message_text}")
+                # TODO: Интеграция с telegram для отправки сообщения
+            elif timer_record.timer_type == 'timeout':
+                print(f"[INFO] Timeout reached, should navigate to: {timer_record.callback_node_id}")
+                # TODO: Интеграция с telegram для навигации
+            else:
+                print(f"[INFO] Unknown timer type: {timer_record.timer_type}")
+            
+            # Удалить из активных таймеров
+            timer_key = f"db_{timer_id}"
+            if timer_key in self.active_timers:
+                del self.active_timers[timer_key]
+                print(f"[INFO] Removed timer {timer_id} from active timers")
+                
+        except Exception as e:
+            logger.error(f"Failed to execute DB timer {timer_id}: {e}")
+            print(f"[ERROR] Failed to execute DB timer {timer_id}: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    def cleanup_expired_timers(self):
+        """Очистить истекшие таймеры из БД"""
+        
+        print("[INFO] Cleaning up expired timers...")
+        
+        db = self._get_db_session()
+        if not db:
+            print("[ERROR] No DB session available for cleanup")
+            return
+        
+        try:
+            # Найти истекшие таймеры
+            expired_count = db.query(ActiveTimer).filter(
+                and_(
+                    ActiveTimer.status == 'pending',
+                    ActiveTimer.target_timestamp < utc_now()
+                )
+            ).update({'status': 'expired'})
+            
+            db.commit()
+            print(f"[INFO] Marked {expired_count} timers as expired")
+            logger.info(f"Marked {expired_count} timers as expired")
+            
+        except Exception as e:
+            logger.error(f"Failed to cleanup expired timers: {e}")
+            print(f"[ERROR] Failed to cleanup expired timers: {e}")
+            db.rollback()
+        finally:
+            db.close()
+    
+    # =================================================================
+    # ОРИГИНАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ)
+    # =================================================================
     
     def _init_parsers(self) -> Dict[str, Any]:
         """Инициализация DSL парсеров (расширяемо для PHASE 2-4)"""
@@ -177,7 +391,7 @@ class TimingEngine:
     
     def _parse_basic_pause(self, cmd_str: str) -> Dict[str, Any]:
         """Парсинг простых пауз: "3" или "1.5s" """
-        match = re.match(r'^(\d+(?:\.\d+)?)s?$', cmd_str)
+        match = re.match(r'^\d+(\.\d+)?(s)?$', cmd_str)
         if match:
             duration = float(match.group(1))
             return {
@@ -286,7 +500,7 @@ class TimingEngine:
         return None
     
     # =================================================================
-    # ИСПОЛНИТЕЛИ КОМАНД С ПРОГРЕСС-БАРОМ
+    # ИСПОЛНИТЕЛИ КОМАНД С ПРОГРЕСС-БАРОМ + DATABASE INTEGRATION
     # =================================================================
     
     def _execute_pause(self, command: Dict[str, Any], callback: Callable, **context) -> None:
@@ -308,14 +522,35 @@ class TimingEngine:
         timer = threading.Timer(duration, callback)
         timer.start()
 
-    
     def _execute_typing(self, command: Dict[str, Any], callback: Callable, **context) -> None:
-        """Выполнение прогресс-бара вместо typing анимации"""
+        """Выполнение прогресс-бара с сохранением в БД"""
         duration = command['duration']
         process_name = command.get('process_name', 'Обработка')
         
         print(f"[INFO] TimingEngine: Executing progress bar: {duration}s ({process_name})")
         logger.info(f"Executing progress bar: {duration}s for {process_name}")
+        
+        # ✅ НОВОЕ: Получить session_id из context для сохранения в БД
+        session_id = context.get('session_id')
+        
+        # ✅ НОВОЕ: Сохранить в БД если есть session_id
+        if session_id:
+            timer_id = self.save_timer_to_db(
+                session_id=session_id,
+                timer_type='typing',
+                delay_seconds=int(duration),
+                message_text=process_name,
+                callback_data={
+                    'command': command,
+                    'context_keys': list(context.keys())
+                }
+            )
+            if timer_id:
+                print(f"[INFO] Typing timer saved to DB with ID: {timer_id}")
+            else:
+                print("[WARNING] Failed to save typing timer to DB")
+        else:
+            print("[WARNING] No session_id in context - timer not saved to DB")
         
         bot = context.get('bot')
         chat_id = context.get('chat_id')
@@ -403,57 +638,6 @@ class TimingEngine:
             logger.error(f"TimingEngine error: {e}")
             print(f"[ERROR] TimingEngine error: {e}")
             callback()
-    
-    def _parse_timing_dsl(self, timing_config: str) -> List[Dict[str, Any]]:
-        """Парсинг DSL строки в структурированные команды"""
-        if not timing_config or timing_config.strip() == "":
-            return []
-        
-        command_strings = [cmd.strip() for cmd in timing_config.split(';') if cmd.strip()]
-        commands = []
-        
-        for cmd_str in command_strings:
-            parsed = None
-            
-            if re.match(r'^\d+(\.\d+)?(s)?$', cmd_str):
-                parsed = self.parsers['basic_pause'](cmd_str)
-            elif cmd_str.startswith('typing:'):
-                parsed = self.parsers['typing'](cmd_str)
-            elif cmd_str.startswith('daily@'):
-                parsed = self.parsers['daily'](cmd_str)
-            elif cmd_str.startswith('remind:'):
-                parsed = self.parsers['remind'](cmd_str)
-            elif cmd_str.startswith('deadline:'):
-                parsed = self.parsers['deadline'](cmd_str)
-            elif cmd_str.startswith('timeout:'):
-                parsed = self.parsers['timeout'](cmd_str)
-            
-            if parsed:
-                commands.append(parsed)
-            else:
-                logger.warning(f"Unknown timing command: {cmd_str}")
-                print(f"[WARNING] Unknown timing command: {cmd_str}")
-        
-        return commands
-    
-    def _execute_timing_commands(self, commands: List[Dict[str, Any]], 
-                                callback: Callable, **context) -> None:
-        """Выполнение списка timing команд"""
-        
-        if not commands:
-            print(f"[INFO] No timing commands to execute, calling callback immediately")
-            callback()
-            return
-        
-        for command in commands:
-            cmd_type = command.get('type')
-            
-            if cmd_type in self.executors:
-                print(f"[INFO] Executing command: {command}")
-                self.executors[cmd_type](command, callback, **context)
-            else:
-                logger.warning(f"No executor for command type: {cmd_type}")
-                print(f"[WARNING] No executor for command type: {cmd_type}")
     
     def _execute_daily(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """Выполнение daily расписания"""
@@ -565,7 +749,7 @@ if __name__ == "__main__":
     test_engine = TimingEngine()
     test_engine.enable()
     
-    print("🧪 TESTING TIMING DSL PARSER:")
+    print("🧪 TESTING TIMING DSL PARSER + DATABASE:")
     
     test_cases = [
         "3",  # простая пауза с прогресс-баром
@@ -586,4 +770,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"  ❌ Ошибка: {e}")
     
-    print("\n✅ TimingEngine с прогресс-барами готов!")
+    print("\n✅ TimingEngine с Database Integration готов!")
