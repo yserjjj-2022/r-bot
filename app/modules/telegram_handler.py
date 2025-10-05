@@ -66,7 +66,7 @@ def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_i
         return False
 
 # --- Парсер мини-DSL для проактивного ИИ ---
-AI_PROACTIVE_REGEX = re.compile(r'^ai_proactive:\s*([a-zA-Z_][\w-]*)\s*\("([^"]+)")\s*$')
+AI_PROACTIVE_REGEX = re.compile(r'^ai_proactive:\s*([A-Za-z_][\w-])\s"([^"]+)"\s*$')
 
 def parse_ai_proactive_command(type_field: str):
     """
