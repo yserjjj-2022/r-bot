@@ -1,19 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-R-Bot Timing Engine - система временных механик с preset'ами и контролем экспозиции
+R-Bot Timing Engine - система временных механик с timeout и удалением кнопок
 
 ОБНОВЛЕНИЯ:
-05.10.2025 - ИСПРАВЛЕН timeout с живым обратным отсчетом
-05.10.2025 - Автоудаление служебных сообщений
-05.10.2025 - Различение preset'ов и узлов назначения
-05.10.2025 - Улучшенная диагностика и отмена timeout
+06.10.2025 - ИСПРАВЛЕНО: timeout теперь убирает кнопки из исходного сообщения
+06.10.2025 - Добавлена поддержка question_message_id в контексте
+06.10.2025 - Живой обратный отсчет с правильной отменой
 
 DSL команды:
-- timeout:15s:no_answer - переход на узел no_answer через 15s
-- timeout:5s:slow - переход на next_node_id через 5s с preset slow
-- timeout:30s - переход на next_node_id через 30s с preset clean
-- typing:5s:Анализ:fast - прогресс-бар с preset fast
-- process:3s:Загрузка:keep - статическое сообщение с preset keep
+- timeout:15s:no_answer - переход на узел no_answer через 15s + убрать кнопки
+- timeout:5s:slow - переход на next_node_id через 5s с preset slow + убрать кнопки
 """
 
 import threading
@@ -282,7 +278,7 @@ class TimingEngine:
             parsed = None
 
             # Обратная совместимость: простые числа
-            if re.match(r'^\d+(\.\d+)?(s)?$', cmd_str):
+            if re.match(r'^\d+(\. \d+)?(s)?$', cmd_str):
                 parsed = self.parsers['basic_pause'](cmd_str)
                 print(f"[TIMING-ENGINE] Parsed as basic_pause: {parsed}")
             # process команды
@@ -342,7 +338,7 @@ class TimingEngine:
 
     # === DSL парсеры ===
     def _parse_basic_pause(self, cmd_str: str) -> Dict[str, Any]:
-        match = re.match(r'^\d+(\.\d+)?(s)?$', cmd_str)
+        match = re.match(r'^\d+(\. \d+)?(s)?$', cmd_str)
         if match:
             duration = float(cmd_str.replace('s', ''))
             return {'type': 'pause', 'duration': duration, 'process_name': 'Пауза', 'original': cmd_str}
@@ -350,7 +346,7 @@ class TimingEngine:
 
     def _parse_typing(self, cmd_str: str) -> Dict[str, Any]:
         """Парсинг typing команд с preset'ами"""
-        pattern = r'^typing:(\d+(?:\.\d+)?)s?(?::([^:]+))?(?::([^:]+))?$'
+        pattern = r'^typing:(\d+(?:\. \d+)?)s?(?::([^:]+))?(?::([^:]+))?$'
         match = re.match(pattern, cmd_str)
         if match:
             duration = float(match.group(1))
@@ -374,7 +370,7 @@ class TimingEngine:
 
     def _parse_process(self, cmd_str: str) -> Dict[str, Any]:
         """Парсинг process команд (замена state: true)"""
-        pattern = r'^process:(\d+(?:\.\d+)?)s?:([^:]+)(?::([^:]+))?$'
+        pattern = r'^process:(\d+(?:\. \d+)?)s?:([^:]+)(?::([^:]+))?$'
         match = re.match(pattern, cmd_str)
         if match:
             duration = float(match.group(1))
@@ -399,11 +395,6 @@ class TimingEngine:
     def _parse_timeout(self, cmd_str: str) -> Dict[str, Any]:
         """
         ИСПРАВЛЕНО: Парсинг timeout команды с различением preset'ов и узлов назначения
-
-        Синтаксис:
-        - timeout:15s:no_answer - переход на узел no_answer через 15s
-        - timeout:5s:slow - переход на next_node_id через 5s с preset slow  
-        - timeout:30s - переход на next_node_id через 30s с preset clean
         """
         print(f"[TIMING-ENGINE] _parse_timeout called with: '{cmd_str}'")
 
@@ -412,8 +403,8 @@ class TimingEngine:
         print(f"[TIMING-ENGINE] Known presets: {known_presets}")
 
         # Проверяем форматы
-        pattern_with_arg = r'^timeout:(\d+(?:\.\d+)?)s:([^:]+)$'
-        pattern_simple = r'^timeout:(\d+(?:\.\d+)?)s$'
+        pattern_with_arg = r'^timeout:(\d+(?:\. \d+)?)s:([^:]+)$'
+        pattern_simple = r'^timeout:(\d+(?:\. \d+)?)s$'
 
         # Формат с аргументом: timeout:15s:xxx
         match_with_arg = re.match(pattern_with_arg, cmd_str)
@@ -586,7 +577,7 @@ class TimingEngine:
 
     def _execute_timeout(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """
-        ИСПРАВЛЕНО: Timeout с живым обратным отсчетом и автоудалением служебных сообщений
+        ИСПРАВЛЕНО: Timeout с живым обратным отсчетом и удалением кнопок из исходного сообщения
         """
         print(f"[TIMING-ENGINE] _execute_timeout called with command: {command}")
         print(f"[TIMING-ENGINE] _execute_timeout context keys: {list(context.keys())}")
@@ -615,8 +606,10 @@ class TimingEngine:
         session_id = context.get('session_id')
         bot = context.get('bot')
         chat_id = context.get('chat_id')
+        question_message_id = context.get('question_message_id')  # НОВОЕ: ID сообщения с кнопками
 
         print(f"[TIMING-ENGINE] Starting timeout: {duration}s → {target_node} (session: {session_id}) preset: {preset}")
+        print(f"[TIMING-ENGINE] Question message_id for button removal: {question_message_id}")
 
         # КРИТИЧЕСКИ ВАЖНО: Установить timeout_target_node в контекст ПЕРЕД callback
         context['timeout_target_node'] = target_node
@@ -642,14 +635,15 @@ class TimingEngine:
             'target_node': target_node,
             'preset': preset,
             'started_at': time.time(),
-            'chat_id': chat_id
+            'chat_id': chat_id,
+            'question_message_id': question_message_id
         }
         print(f"[TIMING-ENGINE] Timeout registered in debug_timers for session {session_id}")
 
         if not bot or not chat_id:
             print("[TIMING-ENGINE] No bot/chat_id for timeout, using simple timer")
             threading.Timer(duration, lambda: self._execute_timeout_callback(
-                session_id, target_node, preset_config, callback
+                session_id, target_node, preset_config, callback, bot, chat_id, question_message_id
             )).start()
             return
 
@@ -711,6 +705,18 @@ class TimingEngine:
                 self.cancelled_tasks.discard(session_id)
                 return
 
+            # НОВОЕ: Убрать кнопки из исходного сообщения ПЕРЕД переходом
+            if question_message_id:
+                try:
+                    bot.edit_message_reply_markup(
+                        chat_id=chat_id, 
+                        message_id=question_message_id, 
+                        reply_markup=None
+                    )
+                    print(f"[TIMING-ENGINE] Removed buttons from question message {question_message_id}")
+                except Exception as e:
+                    print(f"[TIMING-ENGINE] Failed to remove buttons: {e}")
+
             # ИСПРАВЛЕНО: Показать сообщение о переходе
             try:
                 bot.edit_message_text(
@@ -722,7 +728,7 @@ class TimingEngine:
                 print(f"[TIMING-ENGINE] Failed to show timeout message: {e}")
 
             # Выполнить callback с preset задержками
-            self._execute_timeout_callback(session_id, target_node, preset_config, callback)
+            self._execute_timeout_callback(session_id, target_node, preset_config, callback, bot, chat_id, question_message_id)
 
             # ИСПРАВЛЕНО: Удалить служебные сообщения после обработки
             try:
@@ -740,7 +746,8 @@ class TimingEngine:
         if session_id:
             self.active_timeouts[session_id] = countdown_thread
 
-    def _execute_timeout_callback(self, session_id: int, target_node: str, preset_config: dict, callback: Callable):
+    def _execute_timeout_callback(self, session_id: int, target_node: str, preset_config: dict, 
+                                 callback: Callable, bot=None, chat_id=None, question_message_id=None):
         """Выполнить callback с применением preset задержек"""
         print(f"[TIMING-ENGINE] TIMEOUT FIRED for session {session_id} → {target_node}")
 

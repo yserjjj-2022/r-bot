@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.6: ИСПРАВЛЕНЫ timeout с живым отсчетом и удалением служебных сообщений
+# Версия 8.7: ИСПРАВЛЕНО удаление кнопок при timeout
 
 import random
 import re
@@ -25,7 +25,7 @@ from app.modules.timing_engine import process_node_timing, cancel_timeout_for_se
 user_sessions = {}
 
 # ОБНОВЛЕНО: Для отслеживания активных timeout (универсальных)
-active_timeout_sessions = {}  # session_id -> {'target_node': str, 'node_id': str}
+active_timeout_sessions = {}  # session_id -> {'target_node': str, 'node_id': str, 'message_id': int}
 
 # --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
@@ -116,9 +116,24 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 break
 
         if chat_id:
-            # Очистить активный timeout
+            # НОВОЕ: Убрать кнопки из сообщения с timeout
             if session_id in active_timeout_sessions:
-                print(f"[TIMEOUT] Clearing active timeout session: {session_id}")
+                timeout_info = active_timeout_sessions[session_id]
+                message_id = timeout_info.get('message_id')
+
+                if message_id:
+                    try:
+                        # Убрать кнопки из исходного сообщения
+                        bot.edit_message_reply_markup(
+                            chat_id=chat_id, 
+                            message_id=message_id, 
+                            reply_markup=None
+                        )
+                        print(f"[TIMEOUT] Removed buttons from message {message_id}")
+                    except Exception as e:
+                        print(f"[TIMEOUT] Failed to remove buttons from message {message_id}: {e}")
+
+                # Очистить активный timeout
                 del active_timeout_sessions[session_id]
 
             # Перейти к target узлу (служебные сообщения уже удалены в timing_engine)
@@ -280,12 +295,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     ))
 
             # --- ЛОГИКА ОТПРАВКИ КАРТИНОК ---
+            sent_message = None
             image_id = node.get("image_id")
             if image_id:
                 server_url = config("SERVER_URL")
                 image_url = f"{server_url}/images/{image_id}"
                 try:
-                    bot.send_photo(
+                    sent_message = bot.send_photo(
                         chat_id=chat_id,
                         photo=image_url,
                         caption=final_text_to_send,
@@ -294,9 +310,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     )
                 except Exception as e:
                     print(f"ОШИБКА: Не удалось отправить фото {image_url}. {e}")
-                    bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
+                    sent_message = bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
             else:
-                bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
+                sent_message = bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
             # ИСПРАВЛЕНО: УНИВЕРСАЛЬНАЯ ОБРАБОТКА TIMEOUT КОМАНДЫ
             timing_config = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
@@ -306,12 +322,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 # ДОБАВЛЕНО: Отладочный лог для timeout команд
                 if 'timeout:' in str(timing_config):
                     print(f"[TIMEOUT] Detected timeout command in timing_config: {timing_config}")
-                    # Регистрируем активный timeout для отмены по клику кнопки
+                    # НОВОЕ: Регистрируем активный timeout с message_id для удаления кнопок
                     active_timeout_sessions[session_info['session_id']] = {
                         'node_id': node_id,
-                        'timing_config': timing_config
+                        'timing_config': timing_config,
+                        'message_id': sent_message.message_id if sent_message else None
                     }
-                    print(f"[TIMEOUT] Registered timeout for session {session_info['session_id']}")
+                    print(f"[TIMEOUT] Registered timeout for session {session_info['session_id']} with message_id {sent_message.message_id if sent_message else None}")
 
                 # Определяем следующий узел для обычного callback
                 next_node_id_cb = (node.get("next_node_id") or 
@@ -338,8 +355,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     'bot': bot,
                     'chat_id': chat_id,
                     'pause_text': pause_text,
-                    'next_node_id': next_node_id_cb
-                    # session_id НЕ ВКЛЮЧАЕМ в context - передается отдельно
+                    'next_node_id': next_node_id_cb,
+                    # НОВОЕ: Добавляем message_id для удаления кнопок при timeout
+                    'question_message_id': sent_message.message_id if sent_message else None
                 }
 
                 # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Установить контекст ДО вызова process_node_timing
