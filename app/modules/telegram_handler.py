@@ -332,12 +332,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                         send_node_message(chat_id, next_node_id_cb)
 
                 # ОБНОВЛЕНО: Передаем контекст для универсального timeout
+                # ИСПРАВЛЕННЫЙ КОД:
                 context = {
                     'bot': bot,
                     'chat_id': chat_id,
                     'pause_text': pause_text,
-                    'next_node_id': next_node_id_cb,  # Для timeout:30s без override
-                    'session_id': session_info['session_id']
+                    'next_node_id': next_node_id_cb
+                    # session_id НЕ ВКЛЮЧАЕМ в context - передается отдельно
                 }
 
                 process_node_timing(
@@ -348,6 +349,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     callback=timing_callback,
                     **context
                 )
+
                 
                 # Сохранить контекст в callback для доступа к timeout_target_node
                 timing_callback.context = context
