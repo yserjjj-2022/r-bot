@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.4: Интеграция с универсальной timeout командой
+# Версия 8.5: ИСПРАВЛЕНА обработка timeout команд
 
 import random
 import re
@@ -297,13 +297,14 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             else:
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
-            # ОБНОВЛЕНО: УНИВЕРСАЛЬНАЯ ОБРАБОТКА TIMEOUT КОМАНДЫ
+            # ИСПРАВЛЕНО: УНИВЕРСАЛЬНАЯ ОБРАБОТКА TIMEOUT КОМАНДЫ
             timing_config = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
             if timing_config:
                 print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
 
-                # ОБНОВЛЕНО: Проверяем, содержит ли timing универсальную timeout команду
+                # ДОБАВЛЕНО: Отладочный лог для timeout команд
                 if 'timeout:' in str(timing_config):
+                    print(f"[TIMEOUT] Detected timeout command in timing_config: {timing_config}")
                     # Регистрируем активный timeout для отмены по клику кнопки
                     active_timeout_sessions[session_info['session_id']] = {
                         'node_id': node_id,
@@ -319,7 +320,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 # Поддержка текста паузы
                 pause_text = node.get("pause_text") or node.get("Текст паузы") or ""
 
-                # ОБНОВЛЕНО: Расширенный контекст для универсального timeout
+                # ИСПРАВЛЕНО: Расширенный контекст для универсального timeout
                 def timing_callback():
                     """Callback после завершения timing процесса"""
                     # Проверить, установлен ли timeout_target_node в контексте
@@ -331,8 +332,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                         # Обычный переход
                         send_node_message(chat_id, next_node_id_cb)
 
-                # ОБНОВЛЕНО: Передаем контекст для универсального timeout
-                # ИСПРАВЛЕННЫЙ КОД:
+                # ИСПРАВЛЕНО: Передаем контекст для универсального timeout
                 context = {
                     'bot': bot,
                     'chat_id': chat_id,
@@ -340,6 +340,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     'next_node_id': next_node_id_cb
                     # session_id НЕ ВКЛЮЧАЕМ в context - передается отдельно
                 }
+
+                # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Установить контекст ДО вызова process_node_timing
+                timing_callback.context = context
 
                 process_node_timing(
                     user_id=user.id,
@@ -349,10 +352,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     callback=timing_callback,
                     **context
                 )
-
-                
-                # Сохранить контекст в callback для доступа к timeout_target_node
-                timing_callback.context = context
                 
                 return  # timing_engine сам вызовет callback когда нужно
 
