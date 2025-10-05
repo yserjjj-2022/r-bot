@@ -116,8 +116,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 break
 
         if chat_id:
-            # Очистить активный timeout
+            # ИСПРАВЛЕНО: Очистка timeout перед переходом
             if session_id in active_timeout_sessions:
+                print(f"[TIMEOUT] Clearing active timeout session: {session_id}")
                 del active_timeout_sessions[session_id]
 
             # Перейти к target узлу
