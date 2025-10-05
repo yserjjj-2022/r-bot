@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.5: ИСПРАВЛЕНА обработка timeout команд
+# Версия 8.6: ИСПРАВЛЕНЫ timeout с живым отсчетом и удалением служебных сообщений
 
 import random
 import re
@@ -103,7 +103,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
         send_node_message(chat_id, next_node_id)
 
-    # ОБНОВЛЕНО: Обработчик универсального timeout fallback
+    # ИСПРАВЛЕНО: Обработчик универсального timeout fallback
     def handle_timeout_fallback(session_id: int, target_node: str):
         """Обрабатывает истечение времени универсального timeout"""
         print(f"[TIMEOUT] Timeout expired for session {session_id} → target: {target_node}")
@@ -116,12 +116,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 break
 
         if chat_id:
-            # ИСПРАВЛЕНО: Очистка timeout перед переходом
+            # Очистить активный timeout
             if session_id in active_timeout_sessions:
                 print(f"[TIMEOUT] Clearing active timeout session: {session_id}")
                 del active_timeout_sessions[session_id]
 
-            # Перейти к target узлу
+            # Перейти к target узлу (служебные сообщения уже удалены в timing_engine)
             send_node_message(chat_id, target_node)
         else:
             print(f"[WARNING] Chat not found for session {session_id}")
@@ -353,7 +353,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     callback=timing_callback,
                     **context
                 )
-                
+
                 return  # timing_engine сам вызовет callback когда нужно
 
             # Финальный узел — завершаем сессию
@@ -423,7 +423,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback_query(call):
         """
-        ОБНОВЛЕНО: Обработчик кнопок с поддержкой отмены универсального timeout
+        ИСПРАВЛЕНО: Обработчик кнопок с улучшенной отменой timeout
         """
         chat_id = call.message.chat.id
         session_data = user_sessions.get(chat_id)
@@ -431,10 +431,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             bot.answer_callback_query(call.id, "Сессия истекла. Начните заново: /start.", show_alert=True)
             return
 
-        # ОБНОВЛЕНО: Отмена активного универсального timeout при нажатии кнопки
+        # УЛУЧШЕНО: Отмена активного timeout при нажатии кнопки
         session_id = session_data.get('session_id')
         if session_id and session_id in active_timeout_sessions:
-            # Отменить timeout в timing_engine
+            # Отменить timeout в timing_engine (это остановит countdown и удалит служебные сообщения)
             success = cancel_timeout_for_session(session_id)
             if success:
                 print(f"[TIMEOUT] Cancelled timeout for session {session_id} due to button press")

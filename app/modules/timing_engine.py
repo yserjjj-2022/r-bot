@@ -3,15 +3,17 @@
 R-Bot Timing Engine - система временных механик с preset'ами и контролем экспозиции
 
 ОБНОВЛЕНИЯ:
-05.10.2025 - ИСПРАВЛЕНА обработка timeout команд с preset'ами
-05.10.2025 - Добавлено различение preset'ов от узлов назначения
-05.10.2025 - Исправлено удаление кнопок при timeout
-05.10.2025 - Добавлены диагностические логи
+05.10.2025 - ИСПРАВЛЕН timeout с живым обратным отсчетом
+05.10.2025 - Автоудаление служебных сообщений
+05.10.2025 - Различение preset'ов и узлов назначения
+05.10.2025 - Улучшенная диагностика и отмена timeout
 
 DSL команды:
 - timeout:15s:no_answer - переход на узел no_answer через 15s
 - timeout:5s:slow - переход на next_node_id через 5s с preset slow
 - timeout:30s - переход на next_node_id через 30s с preset clean
+- typing:5s:Анализ:fast - прогресс-бар с preset fast
+- process:3s:Загрузка:keep - статическое сообщение с preset keep
 """
 
 import threading
@@ -51,14 +53,14 @@ class TimingEngine:
         self.parsers = self._init_parsers()
         self.executors = self._init_executors()
         self.presets = self._init_presets()
-        
+
         # Для timeout задач
         self.cancelled_tasks: Set[int] = set()         # Отмененные timeout задачи
         self.active_timeouts: Dict[int, threading.Thread] = {}  # Активные timeout потоки
-        
+
         # ДОБАВЛЕНО: Простое хранение активных таймеров для отладки
         self.debug_timers: Dict[int, Dict] = {}  # session_id -> timer_info
-        
+
         self.initialized = True
 
         logger.info(f"TimingEngine initialized with universal timeout command. Enabled: {self.enabled}")
@@ -162,14 +164,14 @@ class TimingEngine:
                 ActiveTimer.target_timestamp > utc_now()
             ).all()
             print(f"[TIMING-ENGINE] Found {len(pending_timers)} pending timers to restore")
-            
+
             for timer_record in pending_timers:
                 remaining = (timer_record.target_timestamp - utc_now()).total_seconds()
                 if remaining > 0:
                     timer_key = f"db_{timer_record.id}"
                     def create_callback(tid=timer_record.id):
                         return lambda: self._execute_db_timer(tid)
-                    
+
                     thread_timer = threading.Timer(remaining, create_callback())
                     thread_timer.start()
                     self.active_timers[timer_key] = thread_timer
@@ -192,11 +194,11 @@ class TimingEngine:
             timer_record.status = 'executed'
             db.commit()
             print(f"[TIMING-ENGINE] Executed DB timer {timer_id}: {timer_record.timer_type}")
-            
+
             # Специальная обработка для timeout
             if timer_record.timer_type == 'timeout':
                 print(f"[TIMING-ENGINE] Timeout executed: {timer_record.callback_node_id}")
-            
+
             timer_key = f"db_{timer_id}"
             if timer_key in self.active_timers:
                 del self.active_timers[timer_key]
@@ -266,7 +268,7 @@ class TimingEngine:
 
     def _parse_timing_dsl(self, timing_config: str) -> List[Dict[str, Any]]:
         print(f"[TIMING-ENGINE] _parse_timing_dsl called with: '{timing_config}'")
-        
+
         if not timing_config or timing_config.strip() == "":
             print(f"[TIMING-ENGINE] Empty timing config")
             return []
@@ -278,7 +280,7 @@ class TimingEngine:
         for cmd_str in command_strings:
             print(f"[TIMING-ENGINE] Processing command: '{cmd_str}'")
             parsed = None
-            
+
             # Обратная совместимость: простые числа
             if re.match(r'^\d+(\.\d+)?(s)?$', cmd_str):
                 parsed = self.parsers['basic_pause'](cmd_str)
@@ -315,7 +317,7 @@ class TimingEngine:
     def _execute_timing_commands(self, commands: List[Dict[str, Any]], 
                                  callback: Callable, **context) -> None:
         print(f"[TIMING-ENGINE] _execute_timing_commands called with {len(commands)} commands")
-        
+
         if not commands:
             print(f"[TIMING-ENGINE] No timing commands to execute, calling callback immediately")
             callback()
@@ -324,7 +326,7 @@ class TimingEngine:
         for command in commands:
             cmd_type = command.get('type')
             print(f"[TIMING-ENGINE] Executing command type: {cmd_type}")
-            
+
             if cmd_type in self.executors:
                 print(f"[TIMING-ENGINE] Found executor for {cmd_type}, executing...")
                 try:
@@ -397,30 +399,30 @@ class TimingEngine:
     def _parse_timeout(self, cmd_str: str) -> Dict[str, Any]:
         """
         ИСПРАВЛЕНО: Парсинг timeout команды с различением preset'ов и узлов назначения
-        
+
         Синтаксис:
         - timeout:15s:no_answer - переход на узел no_answer через 15s
         - timeout:5s:slow - переход на next_node_id через 5s с preset slow  
         - timeout:30s - переход на next_node_id через 30s с preset clean
         """
         print(f"[TIMING-ENGINE] _parse_timeout called with: '{cmd_str}'")
-        
+
         # Список известных preset'ов
         known_presets = set(self.presets.keys())  # {'clean', 'keep', 'fast', 'slow', 'instant'}
         print(f"[TIMING-ENGINE] Known presets: {known_presets}")
-        
+
         # Проверяем форматы
         pattern_with_arg = r'^timeout:(\d+(?:\.\d+)?)s:([^:]+)$'
         pattern_simple = r'^timeout:(\d+(?:\.\d+)?)s$'
-        
+
         # Формат с аргументом: timeout:15s:xxx
         match_with_arg = re.match(pattern_with_arg, cmd_str)
         if match_with_arg:
             duration = float(match_with_arg.group(1))
             arg = match_with_arg.group(2).strip()
-            
+
             print(f"[TIMING-ENGINE] Found arg: '{arg}', checking if it's a preset...")
-            
+
             # Проверить, это preset или узел
             if arg in known_presets:
                 # Это preset - используем next_node_id с preset настройками
@@ -448,12 +450,12 @@ class TimingEngine:
                 }
                 print(f"[TIMING-ENGINE] _parse_timeout SUCCESS (with target node): {result}")
                 return result
-        
+
         # Простой формат: timeout:30s
         match_simple = re.match(pattern_simple, cmd_str)
         if match_simple:
             duration = float(match_simple.group(1))
-            
+
             result = {
                 'type': 'timeout',
                 'duration': duration,
@@ -465,7 +467,7 @@ class TimingEngine:
             }
             print(f"[TIMING-ENGINE] _parse_timeout SUCCESS (simple): {result}")
             return result
-        
+
         print(f"[TIMING-ENGINE] _parse_timeout FAILED to parse: '{cmd_str}'")
         return None
 
@@ -540,7 +542,7 @@ class TimingEngine:
                 except Exception as e:
                     print(f"[TIMING-ENGINE] Progress bar failed: {e}")
                     callback()
-            
+
             threading.Thread(target=show_progress_with_presets).start()
         else:
             threading.Timer(duration, callback).start()
@@ -577,29 +579,27 @@ class TimingEngine:
                 except Exception as e:
                     print(f"[TIMING-ENGINE] Static process failed: {e}")
                     callback()
-            
+
             threading.Thread(target=show_static_process).start()
         else:
             threading.Timer(duration, callback).start()
 
     def _execute_timeout(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """
-        ИСПРАВЛЕНО: Timeout с поддержкой preset'ов и удалением кнопок
+        ИСПРАВЛЕНО: Timeout с живым обратным отсчетом и автоудалением служебных сообщений
         """
         print(f"[TIMING-ENGINE] _execute_timeout called with command: {command}")
         print(f"[TIMING-ENGINE] _execute_timeout context keys: {list(context.keys())}")
-        
+
         duration = int(command['duration'])
         use_next_node_id = command.get('use_next_node_id', False)
         explicit_target = command.get('target_node')
         preset = command.get('preset', 'clean')
-        
-        print(f"[TIMING-ENGINE] Timeout config: duration={duration}, use_next_node_id={use_next_node_id}, explicit_target={explicit_target}, preset={preset}")
-        
+
         # Получить preset конфигурацию
         preset_config = self.presets.get(preset, self.presets['clean'])
         print(f"[TIMING-ENGINE] Using preset '{preset}': {preset_config}")
-        
+
         # Определяем целевой узел
         if use_next_node_id:
             target_node = context.get('next_node_id')
@@ -611,19 +611,19 @@ class TimingEngine:
         else:
             target_node = explicit_target
             print(f"[TIMING-ENGINE] Using explicit target: {target_node}")
-            
+
         session_id = context.get('session_id')
         bot = context.get('bot')
         chat_id = context.get('chat_id')
-        
+
         print(f"[TIMING-ENGINE] Starting timeout: {duration}s → {target_node} (session: {session_id}) preset: {preset}")
-        
+
         # КРИТИЧЕСКИ ВАЖНО: Установить timeout_target_node в контекст ПЕРЕД callback
         context['timeout_target_node'] = target_node
         if hasattr(callback, 'context'):
             callback.context.update(context)
         print(f"[TIMING-ENGINE] Set timeout_target_node in context: {target_node}")
-        
+
         # Сохранить в БД
         if session_id:
             timer_id = self.save_timer_to_db(
@@ -634,7 +634,7 @@ class TimingEngine:
             )
             if timer_id:
                 print(f"[TIMING-ENGINE] Timeout saved to DB with ID: {timer_id}")
-        
+
         # Сохранить для отладки
         self.debug_timers[session_id] = {
             'type': 'timeout',
@@ -645,72 +645,139 @@ class TimingEngine:
             'chat_id': chat_id
         }
         print(f"[TIMING-ENGINE] Timeout registered in debug_timers for session {session_id}")
-        
-        def timeout_handler():
-            print(f"[TIMING-ENGINE] TIMEOUT FIRED for session {session_id} after {duration}s")
-            
-            # Проверить отмену
+
+        if not bot or not chat_id:
+            print("[TIMING-ENGINE] No bot/chat_id for timeout, using simple timer")
+            threading.Timer(duration, lambda: self._execute_timeout_callback(
+                session_id, target_node, preset_config, callback
+            )).start()
+            return
+
+        # ИСПРАВЛЕНО: Показать обратный отсчет с живым обновлением
+        if preset == 'clean':
+            preset_desc = ""
+        else:
+            preset_desc = f" (режим: {preset})"
+
+        countdown_msg = bot.send_message(
+            chat_id, 
+            f"⏳ Автопереход через {duration} секунд к узлу: {target_node}{preset_desc}"
+        )
+
+        def countdown_timer():
+            """Живой обратный отсчет с обновлением каждую секунду"""
+            print(f"[TIMING-ENGINE] Starting countdown timer for {duration}s")
+
+            for remaining in range(duration-1, 0, -1):
+                time.sleep(1)
+
+                # Проверить отмену
+                if session_id in self.cancelled_tasks:
+                    print(f"[TIMING-ENGINE] Countdown cancelled for session {session_id}")
+                    try:
+                        bot.edit_message_text(
+                            chat_id=chat_id, 
+                            message_id=countdown_msg.message_id,
+                            text="✅ Выбор сделан, автопереход отменен"
+                        )
+                        time.sleep(1.5)  # Дать время прочитать
+                        bot.delete_message(chat_id, countdown_msg.message_id)
+                        print(f"[TIMING-ENGINE] Deleted cancelled countdown message")
+                    except Exception as e:
+                        print(f"[TIMING-ENGINE] Failed to update cancelled message: {e}")
+
+                    self.cancelled_tasks.discard(session_id)
+                    return
+
+                # Обновить счетчик
+                try:
+                    if remaining == 1:
+                        plural = "секунду"
+                    elif 2 <= remaining <= 4:
+                        plural = "секунды"
+                    else:
+                        plural = "секунд"
+
+                    bot.edit_message_text(
+                        chat_id=chat_id, 
+                        message_id=countdown_msg.message_id,
+                        text=f"⏳ Автопереход через {remaining} {plural} к узлу: {target_node}{preset_desc}"
+                    )
+                except Exception as e:
+                    print(f"[TIMING-ENGINE] Failed to update countdown: {e}")
+
+            # Финальная проверка на отмену
             if session_id in self.cancelled_tasks:
-                print(f"[TIMING-ENGINE] Timeout was cancelled for session {session_id}")
                 self.cancelled_tasks.discard(session_id)
                 return
-            
-            # НОВОЕ: Сообщить о срабатывании timeout в чат
-            if bot and chat_id:
-                try:
-                    bot.send_message(chat_id, "⏰ Время истекло! Переход к следующему этапу...")
-                except Exception as e:
-                    print(f"[TIMING-ENGINE] Failed to send timeout message: {e}")
-            
-            # НОВОЕ: Применить preset перед callback
-            exposure_time = preset_config.get('exposure_time', 0)
-            anti_flicker_delay = preset_config.get('anti_flicker_delay', 0)
-            
-            if exposure_time > 0:
-                print(f"[TIMING-ENGINE] Applying exposure time: {exposure_time}s")
-                time.sleep(exposure_time)
-            
-            print(f"[TIMING-ENGINE] Executing timeout callback → {target_node}")
-            print(f"[TIMING-ENGINE] Callback context: {getattr(callback, 'context', {})}")
-            
+
+            # ИСПРАВЛЕНО: Показать сообщение о переходе
             try:
-                callback()
-                print(f"[TIMING-ENGINE] Timeout callback executed successfully")
+                bot.edit_message_text(
+                    chat_id=chat_id, 
+                    message_id=countdown_msg.message_id, 
+                    text="⏰ Время истекло! Переход к следующему этапу..."
+                )
             except Exception as e:
-                print(f"[TIMING-ENGINE] ERROR in timeout callback: {e}")
-                import traceback
-                traceback.print_exc()
-            
-            # НОВОЕ: Anti-flicker задержка после callback
-            if anti_flicker_delay > 0:
-                print(f"[TIMING-ENGINE] Applying anti-flicker delay: {anti_flicker_delay}s")
-                time.sleep(anti_flicker_delay)
-            
-            # Очистка
-            if session_id in self.debug_timers:
-                del self.debug_timers[session_id]
-            if session_id in self.active_timeouts:
-                del self.active_timeouts[session_id]
-        
-        print(f"[TIMING-ENGINE] Creating Timer for {duration} seconds...")
-        timer = threading.Timer(duration, timeout_handler)
-        timer.start()
-        
-        # Сохранить ссылку на таймер
-        timer_key = f"timeout_{session_id}"
-        self.active_timers[timer_key] = timer
-        print(f"[TIMING-ENGINE] Timer started and saved with key: {timer_key}")
-        
-        # Показать информацию о timeout в чате
-        if bot and chat_id:
+                print(f"[TIMING-ENGINE] Failed to show timeout message: {e}")
+
+            # Выполнить callback с preset задержками
+            self._execute_timeout_callback(session_id, target_node, preset_config, callback)
+
+            # ИСПРАВЛЕНО: Удалить служебные сообщения после обработки
             try:
-                if preset == 'clean':
-                    preset_desc = ""
-                else:
-                    preset_desc = f" (режим: {preset})"
-                bot.send_message(chat_id, f"⏳ Автопереход через {duration} секунд к узлу: {target_node}{preset_desc}")
+                time.sleep(1)  # Дать время пользователю прочитать "Время истекло!"
+                bot.delete_message(chat_id, countdown_msg.message_id)
+                print(f"[TIMING-ENGINE] Deleted countdown message")
             except Exception as e:
-                print(f"[TIMING-ENGINE] Failed to send countdown message: {e}")
+                print(f"[TIMING-ENGINE] Failed to delete countdown message: {e}")
+
+        # Запустить поток обратного отсчета
+        countdown_thread = threading.Thread(target=countdown_timer, daemon=True)
+        countdown_thread.start()
+
+        # Сохранить ссылку на поток
+        if session_id:
+            self.active_timeouts[session_id] = countdown_thread
+
+    def _execute_timeout_callback(self, session_id: int, target_node: str, preset_config: dict, callback: Callable):
+        """Выполнить callback с применением preset задержек"""
+        print(f"[TIMING-ENGINE] TIMEOUT FIRED for session {session_id} → {target_node}")
+
+        # Проверить отмену еще раз
+        if session_id in self.cancelled_tasks:
+            print(f"[TIMING-ENGINE] Timeout was cancelled for session {session_id}")
+            self.cancelled_tasks.discard(session_id)
+            return
+
+        # Применить preset перед callback
+        exposure_time = preset_config.get('exposure_time', 0)
+        anti_flicker_delay = preset_config.get('anti_flicker_delay', 0)
+
+        if exposure_time > 0:
+            print(f"[TIMING-ENGINE] Applying exposure time: {exposure_time}s")
+            time.sleep(exposure_time)
+
+        print(f"[TIMING-ENGINE] Executing timeout callback → {target_node}")
+
+        try:
+            callback()
+            print(f"[TIMING-ENGINE] Timeout callback executed successfully")
+        except Exception as e:
+            print(f"[TIMING-ENGINE] ERROR in timeout callback: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Anti-flicker задержка после callback
+        if anti_flicker_delay > 0:
+            print(f"[TIMING-ENGINE] Applying anti-flicker delay: {anti_flicker_delay}s")
+            time.sleep(anti_flicker_delay)
+
+        # Очистка
+        if session_id in self.debug_timers:
+            del self.debug_timers[session_id]
+        if session_id in self.active_timeouts:
+            del self.active_timeouts[session_id]
 
     def _show_progress_bar_with_presets(self, bot, chat_id, duration, process_name, 
                                        show_progress=True, exposure_time=1.5, 
@@ -720,7 +787,7 @@ class TimingEngine:
             if show_progress:
                 # ПРОГРЕСС-БАР
                 msg = bot.send_message(chat_id, f"🚀 {process_name}\n⬜⬜⬜⬜⬜ 0%")
-                
+
                 steps = 5
                 step_duration = duration / steps
                 for i in range(1, steps + 1):
@@ -728,7 +795,7 @@ class TimingEngine:
                     progress = int((i / steps) * 100)
                     filled = "🟩" * i
                     empty = "⬜" * (steps - i)
-                    
+
                     try:
                         bot.edit_message_text(
                             chat_id=chat_id, message_id=msg.message_id,
@@ -736,7 +803,7 @@ class TimingEngine:
                         )
                     except Exception:
                         pass
-                
+
                 try:
                     bot.edit_message_text(
                         chat_id=chat_id, message_id=msg.message_id,
@@ -744,12 +811,12 @@ class TimingEngine:
                     )
                 except Exception:
                     pass
-                    
+
             else:
                 # СТАТИЧЕСКОЕ СООБЩЕНИЕ
                 msg = bot.send_message(chat_id, f"⚙️ {process_name}...")
                 time.sleep(duration)
-                
+
                 try:
                     bot.edit_message_text(
                         chat_id=chat_id, message_id=msg.message_id,
@@ -757,21 +824,21 @@ class TimingEngine:
                     )
                 except Exception:
                     pass
-            
+
             # ЭКСПОЗИЦИЯ + УДАЛЕНИЕ + ANTI-FLICKER
             if exposure_time > 0:
                 time.sleep(exposure_time)
-            
+
             if action == 'delete':
                 try:
                     bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
                     print(f"[TIMING-ENGINE] Deleted after {exposure_time}s exposure: {process_name}")
                 except Exception:
                     pass
-            
+
             if anti_flicker_delay > 0:
                 time.sleep(anti_flicker_delay)
-                
+
         except Exception as e:
             print(f"[TIMING-ENGINE] Process with presets failed: {e}")
 
@@ -786,22 +853,22 @@ class TimingEngine:
         print(f"[TIMING-ENGINE]   - node_id: {node_id}")
         print(f"[TIMING-ENGINE]   - timing_config: '{timing_config}'")
         print(f"[TIMING-ENGINE]   - context keys: {list(context.keys())}")
-        
+
         if not self.enabled:
             print(f"[TIMING-ENGINE] TimingEngine disabled, calling callback immediately")
             callback()
             return
-            
+
         try:
             # Добавляем session_id в контекст
             enriched_context = dict(context)
             enriched_context['session_id'] = session_id
-            
+
             print(f"[TIMING-ENGINE] Enriched context keys: {list(enriched_context.keys())}")
-            
+
             # Выполняем timing
             self.execute_timing(timing_config, callback, **enriched_context)
-            
+
         except Exception as e:
             logger.error(f"process_timing error: {e}")
             print(f"[TIMING-ENGINE] ERROR in process_timing: {e}")
@@ -813,10 +880,10 @@ class TimingEngine:
     def cancel_timeout_task(self, session_id: int) -> bool:
         """Отменить активный timeout для сессии"""
         print(f"[TIMING-ENGINE] cancel_timeout_task called for session: {session_id}")
-        
+
         # Отменить через cancelled_tasks
         self.cancelled_tasks.add(session_id)
-        
+
         # Попытаться отменить таймер
         timer_key = f"timeout_{session_id}"
         if timer_key in self.active_timers:
@@ -824,15 +891,15 @@ class TimingEngine:
             timer.cancel()
             del self.active_timers[timer_key]
             print(f"[TIMING-ENGINE] Cancelled and removed timer: {timer_key}")
-        
+
         # Очистить отладочную информацию
         if session_id in self.debug_timers:
             print(f"[TIMING-ENGINE] Removed debug timer info for session: {session_id}")
             del self.debug_timers[session_id]
-        
+
         if session_id in self.active_timeouts:
             del self.active_timeouts[session_id]
-            
+
         print(f"[TIMING-ENGINE] Timeout cancellation completed for session: {session_id}")
         return True
 
@@ -915,3 +982,45 @@ def disable_timing() -> None:
 
 def get_timing_status() -> Dict[str, Any]:
     return timing_engine.get_status()
+
+if __name__ == "__main__":
+    # Тестирование универсальной timeout команды
+    test_engine = TimingEngine()
+
+    print("🧪 TESTING UNIVERSAL TIMEOUT COMMAND:")
+
+    test_cases = [
+        # Простые timeout (используют next_node_id)
+        "timeout:30s",
+        "timeout:60s",
+
+        # timeout с переопределением
+        "timeout:30s:no_answer",
+        "timeout:15s:time_expired", 
+
+        # timeout с preset'ами
+        "timeout:5s:slow",
+        "timeout:10s:fast",
+
+        # Комбинированные
+        "typing:5s:Подготовка:fast; timeout:30s",
+        "process:3s:Загрузка:clean; timeout:60s:survey_timeout"
+    ]
+
+    for test_case in test_cases:
+        print(f"\nТест: '{test_case}'")
+        try:
+            commands = test_engine._parse_timing_dsl(test_case)
+            for cmd in commands:
+                if cmd['type'] == 'timeout':
+                    if cmd.get('use_next_node_id'):
+                        preset_info = f" (preset: {cmd.get('preset', 'clean')})" if cmd.get('preset') != 'clean' else ""
+                        print(f"  → timeout: {cmd['duration']}s (переход из next_node_id){preset_info}")
+                    else:
+                        print(f"  → timeout: {cmd['duration']}s → {cmd['target_node']}")
+                else:
+                    print(f"  → {cmd['type']}: {cmd}")
+        except Exception as e:
+            print(f"  ❌ Ошибка: {e}")
+
+    print("\n✅ Универсальная timeout команда готова!")
