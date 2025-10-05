@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# Версия 8.3: Интеграция с обновленным TimingEngine (preset'ы + timeout_task)
+# Версия 8.4: Интеграция с универсальной timeout командой
 
 import random
 import re
@@ -19,13 +19,13 @@ from app.modules import state_calculator
 # Берем актуальный граф на каждом обращении
 from app.modules.hot_reload import get_current_graph
 
-# ИЗМЕНЕНО: Обновленная интеграция timing системы с timeout_task
+# ОБНОВЛЕНО: Интеграция с универсальной timeout командой
 from app.modules.timing_engine import process_node_timing, cancel_timeout_for_session, enable_timing, get_timing_status
 
 user_sessions = {}
 
-# НОВОЕ: Для отслеживания активных timeout_task
-active_timeout_sessions = {}  # session_id -> {'fallback_node': str, 'node_id': str}
+# ОБНОВЛЕНО: Для отслеживания активных timeout (универсальных)
+active_timeout_sessions = {}  # session_id -> {'target_node': str, 'node_id': str}
 
 # --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
@@ -66,7 +66,7 @@ def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_i
         return False
 
 # --- Парсер мини-DSL для проактивного ИИ ---
-AI_PROACTIVE_REGEX = re.compile(r'^ai_proactive:\s*([a-zA-Z_][\w-]*)\s*\("([^"]+)"\)\s*$')
+AI_PROACTIVE_REGEX = re.compile(r'^ai_proactive:\s*([a-zA-Z_][\w-]*)\s*\("([^"]+)")\s*$')
 
 def parse_ai_proactive_command(type_field: str):
     """
@@ -88,10 +88,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     initial_graph_data теперь игнорируется — используем get_current_graph() для hot-reload.
     """
 
-    # ОБНОВЛЕНО: Активируем обновленную timing систему с timeout_task
+    # ОБНОВЛЕНО: Активируем универсальную timeout систему
     enable_timing()
     timing_status = get_timing_status()
-    print(f"🕐 Timing system activated: {timing_status}")
+    print(f"🕐 Universal timeout system activated: {timing_status}")
     print(f"🚀 Available timing commands: {timing_status.get('available_parsers', [])}")
 
     def _resume_after_pause(chat_id, next_node_id, temp_message_id=None):
@@ -103,10 +103,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
         send_node_message(chat_id, next_node_id)
 
-    # НОВОЕ: Обработчик timeout_task fallback
-    def handle_timeout_fallback(session_id: int, fallback_node: str):
-        """Обрабатывает истечение времени timeout_task"""
-        print(f"[TIMEOUT_TASK] Timeout expired for session {session_id} → fallback: {fallback_node}")
+    # ОБНОВЛЕНО: Обработчик универсального timeout fallback
+    def handle_timeout_fallback(session_id: int, target_node: str):
+        """Обрабатывает истечение времени универсального timeout"""
+        print(f"[TIMEOUT] Timeout expired for session {session_id} → target: {target_node}")
 
         # Найти chat_id по session_id
         chat_id = None
@@ -120,8 +120,8 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if session_id in active_timeout_sessions:
                 del active_timeout_sessions[session_id]
 
-            # Перейти к fallback узлу
-            send_node_message(chat_id, fallback_node)
+            # Перейти к target узлу
+            send_node_message(chat_id, target_node)
         else:
             print(f"[WARNING] Chat not found for session {session_id}")
 
@@ -297,27 +297,19 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             else:
                 bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
 
-            # ИЗМЕНЕНО: ОБНОВЛЕННАЯ ОБРАБОТКА TIMING С ПОДДЕРЖКОЙ timeout_task
+            # ОБНОВЛЕНО: УНИВЕРСАЛЬНАЯ ОБРАБОТКА TIMEOUT КОМАНДЫ
             timing_config = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
             if timing_config:
                 print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
 
-                # НОВОЕ: Проверяем, содержит ли timing конфигурацию timeout_task
-                if 'timeout_task:' in str(timing_config):
-                    # Парсим fallback узел для timeout_task
-                    try:
-                        # Формат: timeout_task:30s:fallback_node
-                        parts = str(timing_config).split(':')
-                        if len(parts) >= 3:
-                            fallback_node = parts[2]
-                            # Регистрируем активный timeout
-                            active_timeout_sessions[session_info['session_id']] = {
-                                'fallback_node': fallback_node,
-                                'node_id': node_id
-                            }
-                            print(f"[TIMEOUT_TASK] Registered timeout for session {session_info['session_id']} → {fallback_node}")
-                    except Exception as e:
-                        print(f"[WARNING] Failed to parse timeout_task config: {e}")
+                # ОБНОВЛЕНО: Проверяем, содержит ли timing универсальную timeout команду
+                if 'timeout:' in str(timing_config):
+                    # Регистрируем активный timeout для отмены по клику кнопки
+                    active_timeout_sessions[session_info['session_id']] = {
+                        'node_id': node_id,
+                        'timing_config': timing_config
+                    }
+                    print(f"[TIMEOUT] Registered timeout for session {session_info['session_id']}")
 
                 # Определяем следующий узел для обычного callback
                 next_node_id_cb = (node.get("next_node_id") or 
@@ -327,17 +319,26 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 # Поддержка текста паузы
                 pause_text = node.get("pause_text") or node.get("Текст паузы") or ""
 
-                # ОБНОВЛЕНО: Расширенный контекст для нового timing_engine с timeout_task
+                # ОБНОВЛЕНО: Расширенный контекст для универсального timeout
                 def timing_callback():
                     """Callback после завершения timing процесса"""
-                    # Проверить, не сработал ли timeout_task
-                    if hasattr(timing_callback, 'timeout_fallback_node'):
-                        fallback_node = timing_callback.timeout_fallback_node
-                        print(f"[TIMEOUT_TASK] Executing fallback: {fallback_node}")
-                        handle_timeout_fallback(session_info['session_id'], fallback_node)
+                    # Проверить, установлен ли timeout_target_node в контексте
+                    if hasattr(timing_callback, 'context') and 'timeout_target_node' in timing_callback.context:
+                        target_node = timing_callback.context['timeout_target_node']
+                        print(f"[TIMEOUT] Executing timeout transition: {target_node}")
+                        handle_timeout_fallback(session_info['session_id'], target_node)
                     elif next_node_id_cb:
                         # Обычный переход
                         send_node_message(chat_id, next_node_id_cb)
+
+                # ОБНОВЛЕНО: Передаем контекст для универсального timeout
+                context = {
+                    'bot': bot,
+                    'chat_id': chat_id,
+                    'pause_text': pause_text,
+                    'next_node_id': next_node_id_cb,  # Для timeout:30s без override
+                    'session_id': session_info['session_id']
+                }
 
                 process_node_timing(
                     user_id=user.id,
@@ -345,12 +346,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     node_id=node_id,
                     timing_config=str(timing_config),
                     callback=timing_callback,
-                    bot=bot,
-                    chat_id=chat_id,
-                    pause_text=pause_text,
-                    # НОВОЕ: Передаем функцию обработки timeout fallback
-                    timeout_fallback_handler=handle_timeout_fallback
+                    **context
                 )
+                
+                # Сохранить контекст в callback для доступа к timeout_target_node
+                timing_callback.context = context
+                
                 return  # timing_engine сам вызовет callback когда нужно
 
             # Финальный узел — завершаем сессию
@@ -358,7 +359,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
                 crud.end_session(db, session_info['session_id'])
 
-                # НОВОЕ: Очистка активных timeout при завершении сессии
+                # ОБНОВЛЕНО: Очистка активных timeout при завершении сессии
                 if session_info['session_id'] in active_timeout_sessions:
                     del active_timeout_sessions[session_info['session_id']]
 
@@ -420,7 +421,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     @bot.callback_query_handler(func=lambda call: True)
     def handle_callback_query(call):
         """
-        ИЗМЕНЕНО: Обработчик кнопок с поддержкой отмены timeout_task
+        ОБНОВЛЕНО: Обработчик кнопок с поддержкой отмены универсального timeout
         """
         chat_id = call.message.chat.id
         session_data = user_sessions.get(chat_id)
@@ -428,13 +429,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             bot.answer_callback_query(call.id, "Сессия истекла. Начните заново: /start.", show_alert=True)
             return
 
-        # НОВОЕ: Отмена активного timeout_task при нажатии кнопки
+        # ОБНОВЛЕНО: Отмена активного универсального timeout при нажатии кнопки
         session_id = session_data.get('session_id')
         if session_id and session_id in active_timeout_sessions:
             # Отменить timeout в timing_engine
             success = cancel_timeout_for_session(session_id)
             if success:
-                print(f"[TIMEOUT_TASK] Cancelled timeout for session {session_id} due to button press")
+                print(f"[TIMEOUT] Cancelled timeout for session {session_id} due to button press")
 
             # Удалить из локального трекинга
             del active_timeout_sessions[session_id]
