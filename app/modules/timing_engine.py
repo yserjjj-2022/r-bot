@@ -23,7 +23,8 @@ import threading
 import time
 import re
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, date  # ЭТАП 2: Расширенный datetime импорт
+import pytz  # ЭТАП 2: Timezone поддержка для Daily системы
 from typing import Dict, Any, Callable, Optional, List, Set
 
 from app.modules.database.models import ActiveTimer, utc_now
@@ -65,19 +66,22 @@ class TimingEngine:
 
         self.initialized = True
 
-        logger.info(f"TimingEngine initialized with Silent Mode. Enabled: {self.enabled}")
+        logger.info(f"TimingEngine initialized with Silent Mode + Daily System (Stage 2). Enabled: {self.enabled}")
         print(f"[TIMING-ENGINE] TimingEngine initialized with enabled={self.enabled}")
         print(f"[TIMING-ENGINE] Available presets: {list(self.presets.keys())}")
         print(f"[TIMING-ENGINE] Available commands: {list(self.parsers.keys())}")
         print(f"[TIMING-ENGINE] Adaptive message types: {list(self.countdown_templates.keys())}")
         print(f"[TIMING-ENGINE] Silent Mode activated for scenic timeouts")
+        print(f"[TIMING-ENGINE] ЭТАП 2: Daily система активирована (БЕЗ БД persistence)")
 
         if self.enabled:
-            try:
-                self.restore_timers_from_db()
-                self.cleanup_expired_timers()
-            except Exception as e:
-                logger.error(f"Failed to restore/cleanup timers on init: {e}")
+            # ЭТАП 2: БД операции ОТКЛЮЧЕНЫ для стабильности
+            print("[TIMING-ENGINE] ЭТАП 2: Skipping DB restore/cleanup - using memory-only mode")
+            # try:
+            #     self.restore_timers_from_db()
+            #     self.cleanup_expired_timers()
+            # except Exception as e:
+            #     logger.error(f"Failed to restore/cleanup timers on init: {e}")
 
     def _init_countdown_templates(self) -> Dict[str, Dict[str, str]]:
         """Инициализация адаптивных шаблонов countdown сообщений"""
@@ -763,18 +767,15 @@ class TimingEngine:
                     return
 
                 # Убрать кнопки из исходного сообщения ПЕРЕД переходом
-                try:
-                    from telebot.types import InlineKeyboardMarkup
-                    empty_keyboard = InlineKeyboardMarkup()
-                    bot.edit_message_reply_markup(
-                        chat_id=chat_id, 
-                        message_id=question_message_id, 
-                        reply_markup=empty_keyboard
-                    )
-                    print(f"[TIMING-ENGINE] Buttons removed safely")
-                except Exception as e:
-                    print(f"[TIMING-ENGINE] Could not remove buttons: {e}")
-                    pass
+                if question_message_id:
+                    try:
+                        bot.edit_message_reply_markup(
+                            chat_id=chat_id, 
+                            message_id=question_message_id, 
+                            reply_markup=None
+                        )
+                    except Exception:
+                        pass
 
                 # Показать адаптивное финальное сообщение
                 try:
@@ -859,9 +860,62 @@ class TimingEngine:
 
     # ЗАГОТОВКИ исполнителей для будущих функций  
     def _execute_daily(self, command: Dict[str, Any], callback: Callable, **context) -> None:
-        """ЗАГОТОВКА: Исполнитель ежедневных уведомлений"""
-        print(f"[TIMING-ENGINE] Daily scheduling stub: {command.get('original', 'N/A')}")
-        callback()
+        """ЭТАП 2: ПОЛНЫЙ исполнитель ежедневных уведомлений БЕЗ БД persistence"""
+        hour = command.get('hour', 9)
+        minute = command.get('minute', 0)
+        timezone_str = command.get('timezone', 'UTC')
+
+        session_id = context.get('session_id')
+        bot = context.get('bot')
+        chat_id = context.get('chat_id')
+
+        print(f"[DAILY] Setting up daily notification: {hour:02d}:{minute:02d} {timezone_str}")
+
+        try:
+            next_daily_time = self.calculate_next_daily_time(hour, minute, timezone_str)
+            now_utc = datetime.utcnow()
+            delay_seconds = int((next_daily_time - now_utc).total_seconds())
+
+            if delay_seconds <= 0:
+                print(f"[DAILY] Error: calculated time is in the past! Falling back to 24h")
+                delay_seconds = 24 * 3600
+
+            print(f"[DAILY] Next execution in {delay_seconds} seconds ({delay_seconds/3600:.1f} hours)")
+
+            def daily_callback():
+                print(f"[DAILY] Daily trigger activated: {hour:02d}:{minute:02d} {timezone_str}")
+                try:
+                    callback()
+                    print(f"[DAILY] Scenario callback executed successfully")
+                except Exception as e:
+                    print(f"[DAILY] Daily callback failed: {e}")
+
+                # ЭТАП 2: Простое перепланирование (БЕЗ БД)
+                print(f"[DAILY] Rescheduling next daily for tomorrow...")
+                self.schedule_next_daily_simple(hour, minute, timezone_str, session_id, context)
+
+            daily_timer = threading.Timer(delay_seconds, daily_callback)
+            daily_timer.start()
+
+            timer_key = f"daily_{session_id}_{hour}_{minute}_{timezone_str}"
+            self.active_timers[timer_key] = daily_timer
+            print(f"[DAILY] Daily timer activated: {timer_key}")
+
+            if bot and chat_id:
+                next_time_local = next_daily_time.strftime('%Y-%m-%d %H:%M UTC')
+                setup_message = f"📅 Ежедневное уведомление настроено на {hour:02d}:{minute:02d} {timezone_str}\n⏰ Следующее срабатывание: {next_time_local}"
+
+                pause_text = context.get('pause_text', '').strip()
+                if not pause_text:
+                    bot.send_message(chat_id, setup_message)
+                    print(f"[DAILY] Setup notification sent to user")
+
+            print(f"[DAILY] Daily setup completed, continuing main scenario")
+
+        except Exception as e:
+            print(f"[DAILY] Setup failed: {e}")
+            print(f"[DAILY] Continuing main scenario anyway")
+            callback()
 
     def _execute_remind(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """ЗАГОТОВКА: Исполнитель системы напоминаний"""
@@ -1013,6 +1067,95 @@ class TimingEngine:
         self.cancelled_tasks.clear()
         self.active_timeouts.clear()
         self.debug_timers.clear()
+
+
+    # === ЭТАП 2: DAILY СИСТЕМА (БЕЗ БД PERSISTENCE) ===
+
+    def calculate_next_daily_time(self, hour: int, minute: int, timezone_str: str = "UTC") -> datetime:
+        """ЭТАП 2: Вычисляет timestamp следующего срабатывания daily команды"""
+        timezone_mapping = {
+            'MSK': 'Europe/Moscow',
+            'UTC': 'UTC', 
+            'EST': 'US/Eastern',
+            'PST': 'US/Pacific',
+            'CET': 'Europe/Berlin',
+            'GMT': 'Europe/London'
+        }
+
+        try:
+            tz_name = timezone_mapping.get(timezone_str, 'UTC')
+            target_tz = pytz.timezone(tz_name)
+            utc_tz = pytz.UTC
+
+            now_utc = datetime.utcnow().replace(tzinfo=utc_tz)
+            now_target = now_utc.astimezone(target_tz)
+
+            print(f"[DAILY] Current time in {timezone_str}: {now_target.strftime('%H:%M:%S')}")
+
+            from datetime import time
+            today_target = target_tz.localize(
+                datetime.combine(now_target.date(), time(hour, minute))
+            )
+
+            if today_target > now_target:
+                next_daily = today_target
+                print(f"[DAILY] Scheduling for today: {next_daily.strftime('%Y-%m-%d %H:%M %Z')}")
+            else:
+                tomorrow_date = now_target.date() + timedelta(days=1)
+                next_daily = target_tz.localize(
+                    datetime.combine(tomorrow_date, time(hour, minute))
+                )
+                print(f"[DAILY] Scheduling for tomorrow: {next_daily.strftime('%Y-%m-%d %H:%M %Z')}")
+
+            next_daily_utc = next_daily.astimezone(utc_tz).replace(tzinfo=None)
+            print(f"[DAILY] Next execution UTC: {next_daily_utc}")
+            return next_daily_utc
+
+        except Exception as e:
+            logger.error(f"Failed to calculate daily time: {e}")
+            fallback_time = datetime.utcnow() + timedelta(hours=24)
+            print(f"[DAILY] Fallback to 24h from now: {fallback_time}")
+            return fallback_time
+
+    def schedule_next_daily_simple(self, hour: int, minute: int, timezone_str: str, 
+                                  session_id: int, context: dict):
+        """ЭТАП 2: Простое перепланирование daily (БЕЗ БД)"""
+        try:
+            next_time = self.calculate_next_daily_time(hour, minute, timezone_str)
+            delay_seconds = int((next_time - datetime.utcnow()).total_seconds())
+
+            if delay_seconds <= 0:
+                delay_seconds = 24 * 3600
+
+            print(f"[DAILY] Simple rescheduling next daily in {delay_seconds} seconds")
+
+            def next_daily_callback():
+                print(f"[DAILY] Auto-rescheduled daily triggered: {hour:02d}:{minute:02d} {timezone_str}")
+
+                bot = context.get('bot')
+                chat_id = context.get('chat_id')
+                next_node_id = context.get('next_node_id')
+
+                if bot and chat_id and next_node_id:
+                    try:
+                        from app.modules.telegram_handler import send_node_message
+                        send_node_message(chat_id, next_node_id)
+                    except Exception as e:
+                        logger.error(f"Failed to continue scenario from daily: {e}")
+                        bot.send_message(chat_id, f"⏰ Ежедневное напоминание {hour:02d}:{minute:02d}")
+
+                # Перепланирование на следующий день
+                self.schedule_next_daily_simple(hour, minute, timezone_str, session_id, context)
+
+            next_timer = threading.Timer(delay_seconds, next_daily_callback)
+            next_timer.start()
+
+            timer_key = f"daily_simple_{session_id}_{hour}_{minute}_{timezone_str}"
+            self.active_timers[timer_key] = next_timer
+
+        except Exception as e:
+            logger.error(f"Failed to reschedule daily: {e}")
+
 
 # Глобальный экземпляр
 timing_engine = TimingEngine()
