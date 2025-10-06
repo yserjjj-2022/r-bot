@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-R-Bot Timing Engine - система временных механик с адаптивными countdown сообщениями
+R-Bot Timing Engine - система временных механик с адаптивными countdown сообщениями и Silent Mode
 
 ОБНОВЛЕНИЯ:
 06.10.2025 - ДОБАВЛЕНЫ адаптивные countdown сообщения (без технических узлов)
 06.10.2025 - Умное форматирование времени (только ненулевые разряды) 
 06.10.2025 - Контекстный выбор шаблонов сообщений
 06.10.2025 - Удаление кнопок при timeout
+06.10.2025 - ДОБАВЛЕН Silent Mode для сценарных timeout'ов
 06.10.2025 - ВОССТАНОВЛЕНЫ заглушки для daily/remind/deadline (для будущих спринтов)
 
 DSL команды:
-- timeout:15s:no_answer - переход на узел no_answer через 15s с адаптивными сообщениями
-- timeout:5s:slow - переход на next_node_id через 5s с preset slow
+- timeout:15s:no_answer - интерактивный timeout с countdown (если есть кнопки)
+- timeout:5s:slow - тихий timeout для драматургии (если есть pause_text)  
 - typing:5s:Анализ поведения:clean - прогресс-бар 5s с preset clean
 - daily@09:00MSK - ежедневные уведомления (заготовка)
 - remind:5m,1h,1d - система напоминаний (заготовка)  
@@ -33,8 +34,8 @@ logger = logging.getLogger(__name__)
 
 class TimingEngine:
     """
-    Timing Engine с адаптивными countdown сообщениями и готовой инфраструктурой
-    для расширения функций в будущих спринтах
+    Timing Engine с адаптивными countdown сообщениями, Silent Mode 
+    и готовой инфраструктурой для расширения функций
     """
 
     _instance = None
@@ -59,16 +60,17 @@ class TimingEngine:
         self.active_timeouts: Dict[int, threading.Thread] = {}  
         self.debug_timers: Dict[int, Dict] = {}  
 
-        # НОВОЕ: Адаптивные шаблоны countdown сообщений
+        # Адаптивные шаблоны countdown сообщений
         self.countdown_templates = self._init_countdown_templates()
 
         self.initialized = True
 
-        logger.info(f"TimingEngine initialized with adaptive countdown messages. Enabled: {self.enabled}")
+        logger.info(f"TimingEngine initialized with Silent Mode. Enabled: {self.enabled}")
         print(f"[TIMING-ENGINE] TimingEngine initialized with enabled={self.enabled}")
         print(f"[TIMING-ENGINE] Available presets: {list(self.presets.keys())}")
         print(f"[TIMING-ENGINE] Available commands: {list(self.parsers.keys())}")
         print(f"[TIMING-ENGINE] Adaptive message types: {list(self.countdown_templates.keys())}")
+        print(f"[TIMING-ENGINE] Silent Mode activated for scenic timeouts")
 
         if self.enabled:
             try:
@@ -160,6 +162,31 @@ class TimingEngine:
                 return "answer"
 
         return base_type
+
+    def should_show_countdown(self, context: dict) -> bool:
+        """
+        НОВОЕ: Определяет, нужно ли показывать countdown сообщения
+
+        ЛОГИКА:
+        - Есть pause_text → ТИХИЙ timeout (сценарная пауза) 
+        - Есть кнопки И нет pause_text → ИНТЕРАКТИВНЫЙ timeout (countdown)
+        - НЕТ кнопок И НЕТ pause_text → ТИХИЙ timeout
+        """
+        pause_text = context.get('pause_text', '').strip()
+        has_pause_text = bool(pause_text)
+
+        has_buttons = len(context.get('buttons', [])) > 0
+
+        print(f"[TIMING-ENGINE] Silent mode check:")
+        print(f"  - pause_text: '{pause_text[:30]}{'...' if len(pause_text) > 30 else ''}'")
+        print(f"  - has_buttons: {has_buttons}")
+
+        # Показывать countdown только для интерактивных timeout'ов
+        show_countdown = has_buttons and not has_pause_text
+        mode = "INTERACTIVE" if show_countdown else "SILENT"
+        print(f"[TIMING-ENGINE] Timeout mode: {mode}")
+
+        return show_countdown
 
     def _init_presets(self) -> Dict[str, Dict[str, Any]]:
         """Инициализация preset'ов для контроля экспозиции и anti-flicker"""
@@ -499,7 +526,6 @@ class TimingEngine:
     # ЗАГОТОВКИ парсеров для будущих функций
     def _parse_daily(self, cmd_str: str) -> Dict[str, Any]:
         """ЗАГОТОВКА: Парсинг daily команд - daily@09:00MSK"""
-        # Формат: daily@HH:MMTZ (например: daily@09:00MSK, daily@15:30UTC)
         match = re.match(r'^daily@(\d{2}):(\d{2})([A-Z]{3})?$', cmd_str)
         if match:
             return {
@@ -513,7 +539,6 @@ class TimingEngine:
 
     def _parse_remind(self, cmd_str: str) -> Dict[str, Any]:
         """ЗАГОТОВКА: Парсинг remind команд - remind:5m,1h,1d"""
-        # Формат: remind:интервал1,интервал2,... (например: remind:5m,1h,1d)
         match = re.match(r'^remind:(.+)$', cmd_str)
         if match:
             intervals = []
@@ -530,7 +555,6 @@ class TimingEngine:
 
     def _parse_deadline(self, cmd_str: str) -> Dict[str, Any]:
         """ЗАГОТОВКА: Парсинг deadline команд - deadline:2h"""
-        # Формат: deadline:время (например: deadline:2h, deadline:30m, deadline:1d)
         match = re.match(r'^deadline:(\d+)(h|d|m)$', cmd_str)
         if match:
             value = int(match.group(1))
@@ -621,7 +645,7 @@ class TimingEngine:
             threading.Timer(duration, callback).start()
 
     def _execute_timeout(self, command: Dict[str, Any], callback: Callable, **context) -> None:
-        """ИСПРАВЛЕНО: Timeout с адаптивными countdown сообщениями и удалением кнопок"""
+        """ОБНОВЛЕНО: Timeout с Silent Mode для сценарных пауз"""
 
         duration = int(command['duration'])
         use_next_node_id = command.get('use_next_node_id', False)
@@ -644,21 +668,28 @@ class TimingEngine:
         chat_id = context.get('chat_id')
         question_message_id = context.get('question_message_id')
 
-        # НОВОЕ: Получаем контекст для адаптивных сообщений
+        # Получаем контекст для адаптивных сообщений
         node_id = context.get('node_id', '')
         node_text = context.get('node_text', '')
+
+        # НОВОЕ: Проверяем режим timeout
+        show_countdown = self.should_show_countdown(context)
 
         context['timeout_target_node'] = target_node
         if hasattr(callback, 'context'):
             callback.context.update(context)
 
-        # Сохранить в БД
+        # Сохранить в БД с отметкой режима
         if session_id:
             self.save_timer_to_db(
                 session_id=session_id, timer_type='timeout',
-                delay_seconds=duration, message_text=f"Timeout {duration}s",
+                delay_seconds=duration, 
+                message_text=f"Timeout {duration}s ({'interactive' if show_countdown else 'silent'})",
                 callback_node_id=target_node,
-                callback_data={'command': command, 'target_node': target_node, 'preset': preset}
+                callback_data={
+                    'command': command, 'target_node': target_node, 'preset': preset,
+                    'silent_mode': not show_countdown
+                }
             )
 
         # Сохранить для отладки
@@ -669,7 +700,8 @@ class TimingEngine:
             'preset': preset,
             'started_at': time.time(),
             'chat_id': chat_id,
-            'question_message_id': question_message_id
+            'question_message_id': question_message_id,
+            'silent_mode': not show_countdown
         }
 
         if not bot or not chat_id:
@@ -678,92 +710,121 @@ class TimingEngine:
             )).start()
             return
 
-        # НОВОЕ: Адаптивный выбор типа сообщения
-        message_type = self.get_countdown_message_type(duration, node_id, node_text)
-        template = self.countdown_templates[message_type]
+        # === РЕЖИМ 1: ИНТЕРАКТИВНЫЙ TIMEOUT (с countdown) ===
+        if show_countdown:
+            print(f"[TIMING-ENGINE] INTERACTIVE timeout: {duration}s with countdown")
 
-        # ИСПРАВЛЕНО: Адаптивное начальное сообщение
-        initial_time_text = self.format_countdown_time(duration)
-        countdown_msg = bot.send_message(
-            chat_id, 
-            template['countdown'].format(time=initial_time_text)
-        )
+            message_type = self.get_countdown_message_type(duration, node_id, node_text)
+            template = self.countdown_templates[message_type]
 
-        def countdown_timer():
-            """Живой обратный отсчет с адаптивными сообщениями"""
+            # Адаптивное начальное сообщение
+            initial_time_text = self.format_countdown_time(duration)
+            countdown_msg = bot.send_message(
+                chat_id, 
+                template['countdown'].format(time=initial_time_text)
+            )
 
-            for remaining in range(duration-1, 0, -1):
-                time.sleep(1)
+            def countdown_timer():
+                """Живой обратный отсчет с адаптивными сообщениями"""
 
-                # Проверить отмену
-                if session_id in self.cancelled_tasks:
+                for remaining in range(duration-1, 0, -1):
+                    time.sleep(1)
+
+                    # Проверить отмену
+                    if session_id in self.cancelled_tasks:
+                        try:
+                            bot.edit_message_text(
+                                chat_id=chat_id, 
+                                message_id=countdown_msg.message_id,
+                                text="✅ Выбор сделан, автопереход отменен"
+                            )
+                            time.sleep(1.5)
+                            bot.delete_message(chat_id, countdown_msg.message_id)
+                        except Exception:
+                            pass
+
+                        self.cancelled_tasks.discard(session_id)
+                        return
+
+                    # Обновить с адаптивным форматированием времени
                     try:
+                        time_text = self.format_countdown_time(remaining)
                         bot.edit_message_text(
                             chat_id=chat_id, 
                             message_id=countdown_msg.message_id,
-                            text="✅ Выбор сделан, автопереход отменен"
+                            text=template['countdown'].format(time=time_text)
                         )
-                        time.sleep(1.5)
-                        bot.delete_message(chat_id, countdown_msg.message_id)
                     except Exception:
                         pass
 
+                # Финальная проверка на отмену
+                if session_id in self.cancelled_tasks:
                     self.cancelled_tasks.discard(session_id)
                     return
 
-                # ИСПРАВЛЕНО: Обновить с адаптивным форматированием времени
+                # Убрать кнопки из исходного сообщения ПЕРЕД переходом
+                if question_message_id:
+                    try:
+                        bot.edit_message_reply_markup(
+                            chat_id=chat_id, 
+                            message_id=question_message_id, 
+                            reply_markup=None
+                        )
+                    except Exception:
+                        pass
+
+                # Показать адаптивное финальное сообщение
                 try:
-                    time_text = self.format_countdown_time(remaining)
                     bot.edit_message_text(
                         chat_id=chat_id, 
-                        message_id=countdown_msg.message_id,
-                        text=template['countdown'].format(time=time_text)
+                        message_id=countdown_msg.message_id, 
+                        text=template['final']
                     )
                 except Exception:
                     pass
 
-            # Финальная проверка на отмену
-            if session_id in self.cancelled_tasks:
-                self.cancelled_tasks.discard(session_id)
-                return
+                # Выполнить callback с preset задержками
+                self._execute_timeout_callback(session_id, target_node, preset_config, callback, bot, chat_id, question_message_id)
 
-            # НОВОЕ: Убрать кнопки из исходного сообщения ПЕРЕД переходом
-            if question_message_id:
+                # Удалить служебные сообщения
                 try:
-                    bot.edit_message_reply_markup(
-                        chat_id=chat_id, 
-                        message_id=question_message_id, 
-                        reply_markup=None
-                    )
+                    time.sleep(1)
+                    bot.delete_message(chat_id, countdown_msg.message_id)
                 except Exception:
                     pass
 
-            # ИСПРАВЛЕНО: Показать адаптивное финальное сообщение
-            try:
-                bot.edit_message_text(
-                    chat_id=chat_id, 
-                    message_id=countdown_msg.message_id, 
-                    text=template['final']
-                )
-            except Exception:
-                pass
+            # Запустить поток обратного отсчета
+            countdown_thread = threading.Thread(target=countdown_timer, daemon=True)
+            countdown_thread.start()
 
-            # Выполнить callback с preset задержками
-            self._execute_timeout_callback(session_id, target_node, preset_config, callback, bot, chat_id, question_message_id)
+            if session_id:
+                self.active_timeouts[session_id] = countdown_thread
 
-            # Удалить служебные сообщения
-            try:
-                time.sleep(1)
-                bot.delete_message(chat_id, countdown_msg.message_id)
-            except Exception:
-                pass
+        # === РЕЖИМ 2: ТИХИЙ TIMEOUT (без countdown) ===
+        else:
+            print(f"[TIMING-ENGINE] SILENT timeout: {duration}s (scenic pause)")
 
-        # Запустить поток обратного отсчета
-        countdown_thread = threading.Thread(target=countdown_timer, daemon=True)
-        countdown_thread.start()
+            # Показать pause_text если есть
+            pause_text = context.get('pause_text', '').strip()
+            if pause_text:
+                bot.send_message(chat_id, pause_text)
+                print(f"[TIMING-ENGINE] Sent pause_text: '{pause_text[:50]}...'")
 
-        if session_id:
-            self.active_timeouts[session_id] = countdown_thread
+            def silent_timeout():
+                """Тихий timeout без countdown сообщений"""
+                time.sleep(duration)
+
+                if session_id in self.cancelled_tasks:
+                    self.cancelled_tasks.discard(session_id)
+                    return
+
+                print(f"[TIMING-ENGINE] Silent timeout completed: {duration}s")
+                self._execute_timeout_callback(session_id, target_node, preset_config, callback, bot, chat_id, question_message_id)
+
+            timeout_thread = threading.Thread(target=silent_timeout, daemon=True)
+            timeout_thread.start()
+            if session_id:
+                self.active_timeouts[session_id] = timeout_thread
 
     def _execute_timeout_callback(self, session_id: int, target_node: str, preset_config: dict, 
                                  callback: Callable, bot=None, chat_id=None, question_message_id=None):
@@ -796,28 +857,16 @@ class TimingEngine:
     # ЗАГОТОВКИ исполнителей для будущих функций  
     def _execute_daily(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """ЗАГОТОВКА: Исполнитель ежедневных уведомлений"""
-        # TODO: Реализовать в следующих спринтах
-        # - Проверка текущего времени vs целевого
-        # - Установка cron-подобных задач
-        # - Сохранение в БД для восстановления после рестарта
         print(f"[TIMING-ENGINE] Daily scheduling stub: {command.get('original', 'N/A')}")
-        callback()  # Пока просто продолжаем
+        callback()
 
     def _execute_remind(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """ЗАГОТОВКА: Исполнитель системы напоминаний"""
-        # TODO: Реализовать в следующих спринтах
-        # - Множественные таймеры для каждого интервала
-        # - Персонализированные сообщения напоминаний
-        # - Отмена/изменение активных напоминаний
         print(f"[TIMING-ENGINE] Reminder system stub: {command.get('original', 'N/A')}")
         callback()
 
     def _execute_deadline(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """ЗАГОТОВКА: Исполнитель дедлайнов"""
-        # TODO: Реализовать в следующих спринтах  
-        # - Предупреждения за N времени до дедлайна
-        # - Эскалация при приближении срока
-        # - Действия при пропуске дедлайна
         print(f"[TIMING-ENGINE] Deadline system stub: {command.get('original', 'N/A')}")
         callback()
 
@@ -893,7 +942,7 @@ class TimingEngine:
         try:
             enriched_context = dict(context)
             enriched_context['session_id'] = session_id
-            enriched_context['node_id'] = node_id  # НОВОЕ: для адаптивных сообщений
+            enriched_context['node_id'] = node_id
 
             self.execute_timing(timing_config, callback, **enriched_context)
 
