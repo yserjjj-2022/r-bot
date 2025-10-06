@@ -356,9 +356,11 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     'chat_id': chat_id,
                     'pause_text': pause_text,
                     'next_node_id': next_node_id_cb,
-                    # НОВОЕ: Добавляем message_id для удаления кнопок при timeout
-                    'question_message_id': sent_message.message_id if sent_message else None
+                    'question_message_id': sent_message.message_id if sent_message else None,
+                    # НОВОЕ: Добавляем кнопки для Silent Mode detection
+                    'buttons': options
                 }
+
 
                 # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Установить контекст ДО вызова process_node_timing
                 timing_callback.context = context
