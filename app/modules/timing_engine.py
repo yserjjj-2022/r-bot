@@ -763,15 +763,18 @@ class TimingEngine:
                     return
 
                 # Убрать кнопки из исходного сообщения ПЕРЕД переходом
-                if question_message_id:
-                    try:
-                        bot.edit_message_reply_markup(
-                            chat_id=chat_id, 
-                            message_id=question_message_id, 
-                            reply_markup=None
-                        )
-                    except Exception:
-                        pass
+                try:
+                    from telebot.types import InlineKeyboardMarkup
+                    empty_keyboard = InlineKeyboardMarkup()
+                    bot.edit_message_reply_markup(
+                        chat_id=chat_id, 
+                        message_id=question_message_id, 
+                        reply_markup=empty_keyboard
+                    )
+                    print(f"[TIMING-ENGINE] Buttons removed safely")
+                except Exception as e:
+                    print(f"[TIMING-ENGINE] Could not remove buttons: {e}")
+                    pass
 
                 # Показать адаптивное финальное сообщение
                 try:
