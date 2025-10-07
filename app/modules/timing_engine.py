@@ -357,37 +357,32 @@ class TimingEngine:
 
         def daily_timer_callback():
             """
-            SURGICAL FIX 1: Исправлена логика cutoff проверки
-            Теперь cutoff проверяется ПОСЛЕ выполнения callback, а не до
+            SURGICAL FIX 1.3: Полное исправление с exception handling
             """
             try:
-                print(f"[DAILY-S2] Daily timer fired: {daily_key}")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.3: Daily timer fired: {daily_key}")
 
-                # ИСПРАВЛЕНИЕ: Сначала обновляем статистику участия
+                # Обновляем статистику участия
                 self._update_daily_stats(daily_key, participated=True)
 
-                # ИСПРАВЛЕНИЕ: Выполняем callback (переход к следующему узлу) БЕЗ проверки cutoff
-                print(f"[DAILY-S2] SURGICAL-FIX-1: Executing callback before cutoff check")
+                # Выполняем callback (переход к следующему узлу)
+                print(f"[DAILY-S2] SURGICAL-FIX-1.3: Executing callback")
                 callback()
 
-                # ИСПРАВЛЕНИЕ: Проверяем cutoff ПОСЛЕ выполнения callback
-                # Это позволяет завершить текущий цикл вопросов до срабатывания on_complete
+                # Проверяем cutoff ПОСЛЕ выполнения callback
                 current_date = datetime.now().date()
-                print(f"[DAILY-S2] SURGICAL-FIX-1: Post-callback cutoff check: {current_date} vs {until_date}")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.3: Cutoff check: {current_date} vs {until_date}")
 
-                # Планируем следующий daily ТОЛЬКО если период не закончился
                 if current_date < until_date and daily_key in self.active_daily_configs:
-                    print(f"[DAILY-S2] SURGICAL-FIX-1: Period continues, scheduling next daily")
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.3: Period continues, scheduling next")
                     self.schedule_next_daily_calendar(daily_key, daily_config, **context)
                 else:
-                    print(f"[DAILY-S2] SURGICAL-FIX-1: Period ended, triggering on_complete after cycle")
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.3: Period ended, triggering on_complete")
                     if on_complete_node:
-                        # ВАЖНО: Даем время на завершение текущего цикла (3 секунды)
                         threading.Timer(3.0, lambda: self._trigger_on_complete(on_complete_node, **context)).start()
-                        print(f"[DAILY-S2] SURGICAL-FIX-1: on_complete delayed by 3s for cycle completion")
 
-            except Exception as e:
-                print(f"[DAILY-S2] Daily callback error: {e}")
+            except Exception as callback_error:
+                print(f"[DAILY-S2] SURGICAL-FIX-1.3: ERROR in callback: {callback_error}")
 
     def _trigger_on_complete(self, on_complete_node: str, **context):
         """
