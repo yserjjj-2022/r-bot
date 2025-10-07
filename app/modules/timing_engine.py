@@ -392,81 +392,68 @@ class TimingEngine:
 
     def _trigger_on_complete(self, on_complete_node: str, **context):
         """
-        ИСПРАВЛЕННАЯ ВЕРСИЯ: Безопасный запуск on_complete узлов с множественными fallback
+        ИСПРАВЛЕННАЯ ВЕРСИЯ: Безопасный запуск on_complete узлов через возврат результата
+        ИСПРАВЛЕНИЕ 07.10.2025: Убраны проваливающиеся импорты, используется флаг для handler
         """
         print(f"[DAILY-S2] Triggering on_complete node: {on_complete_node}")
 
         bot = context.get('bot')
         chat_id = context.get('chat_id')
+        session_id = context.get('session_id')
 
         if not bot or not chat_id:
             print(f"[DAILY-S2] Cannot trigger on_complete: missing bot/chat_id")
             return
 
         # Получаем статистику для персонализации
-        session_id = context.get('session_id')
         stats = self._get_daily_stats_summary(session_id)
 
-        # Красивое уведомление о переходе
-        transition_msg = f"🎉 Исследовательский период завершен!\n\n📊 Ваше участие: {stats['participated_days']} из {stats['total_days']} дней\n\nПереходим к итоговым вопросам..."
-
         try:
+            # Отправляем только уведомление о завершении исследовательского периода
+            transition_msg = f"🎉 Исследовательский период завершен!\n\n📊 Ваше участие: {stats['participated_days']} из {stats['total_days']} дней\n\nПереходим к итоговым вопросам..."
             bot.send_message(chat_id, transition_msg)
+            print(f"[DAILY-S2] FIXED: Sent completion message")
 
             # Небольшая пауза для восприятия
             time.sleep(2)
 
-            # ИСПРАВЛЕНИЕ: БЕЗОПАСНЫЙ ИМПОРТ С МНОЖЕСТВЕННЫМИ FALLBACK
-            success = False
+            # ИСПРАВЛЕНИЕ: Устанавливаем флаг pending transition для telegram_handler
+            if not hasattr(self, '_pending_on_complete_transitions'):
+                self._pending_on_complete_transitions = {}
 
-            # Попытка 1: Стандартный путь
-            if not success:
-                try:
-                    from app.modules.telegram_handler import send_node_message
-                    send_node_message(chat_id, on_complete_node, context)
-                    print(f"[DAILY-S2] Successfully triggered node via standard path: {on_complete_node}")
-                    success = True
-                except ImportError:
-                    print("[DAILY-S2] Standard telegram_handler import failed")
-                except Exception as e:
-                    print(f"[DAILY-S2] Standard send_node_message error: {e}")
+            self._pending_on_complete_transitions[session_id] = on_complete_node
+            print(f"[DAILY-S2] FIXED: Set pending on_complete transition: {session_id} -> {on_complete_node}")
 
-            # Попытка 2: Альтернативный путь
-            if not success:
-                try:
-                    from telegram_handler import send_node_message
-                    send_node_message(chat_id, on_complete_node, context)
-                    print(f"[DAILY-S2] Successfully triggered node via alternative path: {on_complete_node}")
-                    success = True
-                except ImportError:
-                    print("[DAILY-S2] Alternative telegram_handler import failed")
-                except Exception as e:
-                    print(f"[DAILY-S2] Alternative send_node_message error: {e}")
+            # НОВОЕ: Вызываем send_node_message напрямую через глобальную функцию
+            # Это безопаснее чем импорты
+            try:
+                # Получаем send_node_message из глобального пространства telegram_handler
+                import sys
+                if 'app.modules.telegram_handler' in sys.modules:
+                    handler_module = sys.modules['app.modules.telegram_handler'] 
+                    if hasattr(handler_module, 'send_node_message'):
+                        print(f"[DAILY-S2] FIXED: Found send_node_message in handler module")
+                        handler_module.send_node_message(chat_id, on_complete_node)
+                        print(f"[DAILY-S2] FIXED: Successfully triggered node: {on_complete_node}")
+                        return
 
-            # Попытка 3: Через bot context (если есть такой метод)
-            if not success:
-                try:
-                    if hasattr(bot, 'send_node_message'):
-                        bot.send_node_message(chat_id, on_complete_node, context)
-                        print(f"[DAILY-S2] Successfully triggered node via bot method: {on_complete_node}")
-                        success = True
-                    else:
-                        print("[DAILY-S2] Bot does not have send_node_message method")
-                except Exception as e:
-                    print(f"[DAILY-S2] Bot method send_node_message error: {e}")
+                print(f"[DAILY-S2] FIXED: send_node_message not found in module, using fallback")
 
-            # FALLBACK: Простое сообщение с инструкцией
-            if not success:
-                print("[DAILY-S2] All import attempts failed, using fallback")
-                fallback_msg = f"🔄 Для продолжения исследования:\n\n1. Отправьте /start\n2. Или найдите узел '{on_complete_node}' в сценарии\n3. Или обратитесь к администратору"
+                # FALLBACK: Сообщение с инструкцией, но БЕЗ "обратитесь к администратору"
+                fallback_msg = f"🔄 Для продолжения к итоговым вопросам отправьте /start"
+                bot.send_message(chat_id, fallback_msg)
+
+            except Exception as import_error:
+                print(f"[DAILY-S2] FIXED: Module access failed: {import_error}")
+                # Финальный fallback
+                fallback_msg = f"🔄 Для продолжения к итоговым вопросам отправьте /start"
                 bot.send_message(chat_id, fallback_msg)
 
         except Exception as e:
             print(f"[DAILY-S2] Critical error in _trigger_on_complete: {e}")
-            # Последний fallback
             try:
-                error_msg = "⚠️ Произошла ошибка при переходе к итоговым вопросам.\nОбратитесь к администратору или попробуйте /start"
-                bot.send_message(chat_id, error_msg) 
+                error_msg = "⚠️ Произошла ошибка при переходе к итоговым вопросам.\nПопробуйте /start"
+                bot.send_message(chat_id, error_msg)
             except Exception as final_error:
                 print(f"[DAILY-S2] Even final fallback failed: {final_error}")
 

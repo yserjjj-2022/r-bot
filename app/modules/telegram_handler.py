@@ -29,7 +29,10 @@ active_timeout_sessions = {}  # session_id -> {'target_node': str, 'node_id': st
 
 # --- Глобальная функция для проверки, является ли узел финальным ---
 def is_final_node(node_data):
-    """Проверяет, является ли узел конечным в сценарии."""
+    """
+    ИСПРАВЛЕНО 07.10.2025: Проверяет, является ли узел конечным в сценарии.
+    Теперь учитывает timing-переходы с >узел синтаксисом
+    """
     if not node_data:
         return True
 
@@ -45,6 +48,14 @@ def is_final_node(node_data):
     if "branches" in node_data and node_data["branches"]:
         return False
 
+    # НОВОЕ: Проверяем timing команды на наличие >узел синтаксиса
+    timing_config = node_data.get("timing") or node_data.get("Timing") or node_data.get("Задержка (сек)")
+    if timing_config and isinstance(timing_config, str):
+        if '>' in timing_config:
+            print(f"[TIMING-FINAL-FIX] Node has timing transition in '{timing_config}' - NOT final")
+            return False  # У узла есть timing-переход, значит он НЕ финальный
+
+    print(f"[TIMING-FINAL-FIX] Node is final - no next_node and no timing transition")
     return True
 
 # --- Вспомогательная функция для безопасного сравнения ---
@@ -155,6 +166,30 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             node = graph_data["nodes"].get(str(node_id))
             session_info = user_sessions.get(chat_id)
+
+            # ИСПРАВЛЕНИЕ 07.10.2025: Проверяем pending on_complete transitions из timing_engine
+            from app.modules.timing_engine import get_timing_engine_instance
+            timing_engine = get_timing_engine_instance()
+
+            if (hasattr(timing_engine, '_pending_on_complete_transitions') and 
+                session_info and session_info.get('session_id') in timing_engine._pending_on_complete_transitions):
+
+                pending_node = timing_engine._pending_on_complete_transitions[session_info['session_id']]
+                print(f"[ON-COMPLETE-FIX] Found pending transition to: {pending_node}")
+
+                # Удаляем pending transition
+                del timing_engine._pending_on_complete_transitions[session_info['session_id']]
+
+                # ИСПРАВЛЕНИЕ: Переопределяем целевой узел на pending
+                node_id = pending_node
+                node = graph_data["nodes"].get(str(node_id))
+
+                if not node:
+                    print(f"[ON-COMPLETE-FIX] ERROR: pending node {pending_node} not found!")
+                    bot.send_message(chat_id, f"Ошибка: узел {pending_node} не найден. Попробуйте /start.")
+                    return
+
+                print(f"[ON-COMPLETE-FIX] Successfully redirected to pending node: {pending_node}")
 
             if not node:
                 bot.send_message(chat_id, "Произошла ошибка: узел не найден. Попробуйте начать заново с /start.")
