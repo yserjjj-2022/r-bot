@@ -324,6 +324,7 @@ class TimingEngine:
     def schedule_next_daily_calendar(self, daily_key: str, daily_config: Dict, **context):
         """
         НОВОЕ ЭТАПА 2: Календарное планирование daily (до cutoff даты)
+        ИСПРАВЛЕНО 08.10.2025: Полное исправление threading.Timer проблем
         """
         hour = daily_config['hour']
         minute = daily_config['minute']
@@ -357,7 +358,8 @@ class TimingEngine:
 
         def daily_timer_callback():
             """
-            SURGICAL FIX 1.3: Полное исправление с exception handling
+            SURGICAL FIX 1.3-1.4: Полное исправление с exception handling
+            ИСПРАВЛЕНО 08.10.2025: Полная версия без обрывов
             """
             try:
                 print(f"[DAILY-S2] SURGICAL-FIX-1.3: Daily timer fired: {daily_key}")
@@ -383,6 +385,53 @@ class TimingEngine:
 
             except Exception as callback_error:
                 print(f"[DAILY-S2] SURGICAL-FIX-1.3: ERROR in callback: {callback_error}")
+                import traceback
+                traceback.print_exc()
+
+                # Emergency fallback
+                if on_complete_node:
+                    try:
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.3: Emergency fallback")
+                        self._trigger_on_complete(on_complete_node, **context)
+                    except Exception as fallback_error:
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.3: Fallback failed: {fallback_error}")
+
+        # SURGICAL FIX 1.4: Очищаем старый timer перед созданием нового
+        if daily_key in self.active_timers:
+            try:
+                old_timer = self.active_timers[daily_key]
+                old_timer.cancel()
+                del self.active_timers[daily_key]
+                print(f"[DAILY-S2] SURGICAL-FIX-1.4: Old timer cancelled for {daily_key}")
+            except Exception as cancel_error:
+                print(f"[DAILY-S2] SURGICAL-FIX-1.4: Cancel error: {cancel_error}")
+
+        # SURGICAL FIX 1.4: Создаем новый timer с полными исправлениями  
+        try:
+            new_timer = threading.Timer(delay_seconds, daily_timer_callback)
+            new_timer.daemon = True  # КРИТИЧНО для корректной работы
+            new_timer.name = f"DailyTimer-{daily_key}-{int(time.time())}"  # Уникальное имя
+            new_timer.start()
+            self.active_timers[daily_key] = new_timer
+
+            print(f"[DAILY-S2] SURGICAL-FIX-1.4: Timer created successfully")
+            print(f"[DAILY-S2] SURGICAL-FIX-1.4: Timer name: {new_timer.name}")
+            print(f"[DAILY-S2] SURGICAL-FIX-1.4: Will fire at: {next_time}")
+            print(f"[DAILY-S2] SURGICAL-FIX-1.4: Active timers: {len(self.active_timers)}")
+
+        except Exception as timer_error:
+            print(f"[DAILY-S2] SURGICAL-FIX-1.4: CRITICAL - Timer creation failed: {timer_error}")
+            import traceback  
+            traceback.print_exc()
+
+            # Ultimate fallback - если timer не создается, сразу on_complete
+            if on_complete_node:
+                print(f"[DAILY-S2] SURGICAL-FIX-1.4: Ultimate fallback - immediate trigger")
+                try:
+                    self._trigger_on_complete(on_complete_node, **context)
+                except Exception as ultimate_error:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.4: Ultimate fallback failed: {ultimate_error}")
+
 
     def _trigger_on_complete(self, on_complete_node: str, **context):
         """
@@ -714,6 +763,7 @@ class TimingEngine:
             'remind': self._execute_remind,  # Заготовка
             'deadline': self._execute_deadline # Заготовка
         }
+
 
     # ============================================================================
     # DSL ПАРСЕРЫ - ВСЕ ИЗ ЭТАПА 1 БЕЗ ИЗМЕНЕНИЙ
