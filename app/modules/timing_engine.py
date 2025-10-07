@@ -4,7 +4,9 @@
 
 R-Bot Timing Engine - ЭТАП 2: Календарная Daily система + исправления импорта
 
-ЭТАП 2 ОБНОВЛЕНИЯ:
+ОБНОВЛЕНИЯ:
+08.10.2025 - SURGICAL FIX 1.4: Полное исправление threading.Timer
+08.10.2025 - SURGICAL FIX 1.5: Исправление _trigger_on_complete переходов
 07.10.2025 - КАЛЕНДАРНАЯ DAILY система (до даты, не по счетчику) 
 07.10.2025 - WORKDAYS календарь (пропуск выходных)  
 07.10.2025 - ON_COMPLETE механизм (ИСПРАВЛЕН - безопасные импорты)
@@ -64,6 +66,8 @@ class TimingEngine:
     """
     ЭТАП 2: Timing Engine с календарной Daily системой, Guard защитой
     и всеми исправлениями из Этапа 1 (ПОЛНАЯ ВЕРСИЯ БЕЗ ПОТЕРЬ)
+    SURGICAL FIX 1.4: Полное исправление threading.Timer
+    SURGICAL FIX 1.5: Исправление _trigger_on_complete переходов
     """
     _instance = None
 
@@ -108,6 +112,8 @@ class TimingEngine:
         print(f"[TIMING-ENGINE-S2] Guard Protection: ✅")
         print(f"[TIMING-ENGINE-S2] Auto Statistics: ✅")
         print(f"[TIMING-ENGINE-S2] Safe Imports: ✅")
+        print(f"[TIMING-ENGINE-S2] SURGICAL FIX 1.4: Timer improvements ✅")
+        print(f"[TIMING-ENGINE-S2] SURGICAL FIX 1.5: On_complete improvements ✅")
 
         if self.enabled:
             try:
@@ -324,7 +330,7 @@ class TimingEngine:
     def schedule_next_daily_calendar(self, daily_key: str, daily_config: Dict, **context):
         """
         НОВОЕ ЭТАПА 2: Календарное планирование daily (до cutoff даты)
-        ИСПРАВЛЕНО 08.10.2025: Полное исправление threading.Timer проблем
+        SURGICAL FIX 1.4: Полное исправление threading.Timer проблем
         """
         hour = daily_config['hour']
         minute = daily_config['minute']
@@ -359,7 +365,6 @@ class TimingEngine:
         def daily_timer_callback():
             """
             SURGICAL FIX 1.3-1.4: Полное исправление с exception handling
-            ИСПРАВЛЕНО 08.10.2025: Полная версия без обрывов
             """
             try:
                 print(f"[DAILY-S2] SURGICAL-FIX-1.3: Daily timer fired: {daily_key}")
@@ -432,20 +437,19 @@ class TimingEngine:
                 except Exception as ultimate_error:
                     print(f"[DAILY-S2] SURGICAL-FIX-1.4: Ultimate fallback failed: {ultimate_error}")
 
-
     def _trigger_on_complete(self, on_complete_node: str, **context):
         """
-        ИСПРАВЛЕННАЯ ВЕРСИЯ: Безопасный запуск on_complete узлов через возврат результата
-        ИСПРАВЛЕНИЕ 07.10.2025: Убраны проваливающиеся импорты, используется флаг для handler
+        SURGICAL FIX 1.5: Улучшенный безопасный запуск on_complete узлов
+        ИСПРАВЛЕНИЕ 08.10.2025: Полная диагностика и множественные методы поиска
         """
-        print(f"[DAILY-S2] Triggering on_complete node: {on_complete_node}")
+        print(f"[DAILY-S2] SURGICAL-FIX-1.5: Triggering on_complete node: {on_complete_node}")
 
         bot = context.get('bot')
         chat_id = context.get('chat_id')
         session_id = context.get('session_id')
 
         if not bot or not chat_id:
-            print(f"[DAILY-S2] Cannot trigger on_complete: missing bot/chat_id")
+            print(f"[DAILY-S2] SURGICAL-FIX-1.5: Cannot trigger on_complete: missing bot/chat_id")
             return
 
         # Получаем статистику для персонализации
@@ -455,50 +459,115 @@ class TimingEngine:
             # Отправляем только уведомление о завершении исследовательского периода
             transition_msg = f"🎉 Исследовательский период завершен!\n\n📊 Ваше участие: {stats['participated_days']} из {stats['total_days']} дней\n\nПереходим к итоговым вопросам..."
             bot.send_message(chat_id, transition_msg)
-            print(f"[DAILY-S2] FIXED: Sent completion message")
+            print(f"[DAILY-S2] SURGICAL-FIX-1.5: Sent completion message")
 
             # Небольшая пауза для восприятия
             time.sleep(2)
 
-            # ИСПРАВЛЕНИЕ: Устанавливаем флаг pending transition для telegram_handler
-            if not hasattr(self, '_pending_on_complete_transitions'):
-                self._pending_on_complete_transitions = {}
-
-            self._pending_on_complete_transitions[session_id] = on_complete_node
-            print(f"[DAILY-S2] FIXED: Set pending on_complete transition: {session_id} -> {on_complete_node}")
-
-            # НОВОЕ: Вызываем send_node_message напрямую через глобальную функцию
-            # Это безопаснее чем импорты
+            # SURGICAL FIX 1.5: Улучшенный поиск send_node_message с полной диагностикой
             try:
-                # Получаем send_node_message из глобального пространства telegram_handler
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Attempting to trigger node: {on_complete_node}")
+
+                # МЕТОД 1: Поиск в sys.modules
                 import sys
-                if 'app.modules.telegram_handler' in sys.modules:
-                    handler_module = sys.modules['app.modules.telegram_handler'] 
-                    if hasattr(handler_module, 'send_node_message'):
-                        print(f"[DAILY-S2] FIXED: Found send_node_message in handler module")
-                        handler_module.send_node_message(chat_id, on_complete_node)
-                        print(f"[DAILY-S2] FIXED: Successfully triggered node: {on_complete_node}")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Available modules: {len(list(sys.modules.keys()))} total")
+
+                telegram_handler_found = False
+                for module_name in sys.modules.keys():
+                    if 'telegram_handler' in module_name:
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.5: Found telegram handler module: {module_name}")
+                        handler_module = sys.modules[module_name]
+                        telegram_handler_found = True
+
+                        if hasattr(handler_module, 'send_node_message'):
+                            print(f"[DAILY-S2] SURGICAL-FIX-1.5: Found send_node_message in {module_name}")
+                            try:
+                                handler_module.send_node_message(chat_id, on_complete_node)
+                                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Successfully called send_node_message")
+                                return
+                            except Exception as call_error:
+                                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Call failed: {call_error}")
+                        else:
+                            print(f"[DAILY-S2] SURGICAL-FIX-1.5: No send_node_message in {module_name}")
+                            available_attrs = [attr for attr in dir(handler_module) if not attr.startswith('_')][:10]
+                            print(f"[DAILY-S2] SURGICAL-FIX-1.5: Available attrs: {available_attrs}")
+
+                if not telegram_handler_found:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: No telegram_handler modules found")
+
+                # МЕТОД 2: Попытка прямого импорта
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Attempting direct import")
+                try:
+                    from app.modules.telegram_handler import send_node_message
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Direct import successful")
+                    send_node_message(chat_id, on_complete_node)
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Direct call successful")
+                    return
+                except ImportError as import_err:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Direct import failed: {import_err}")
+                except Exception as call_err:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Direct call failed: {call_err}")
+
+                # МЕТОД 3: Поиск через globals()
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Searching in globals")
+                if 'send_node_message' in globals():
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Found send_node_message in globals")
+                    try:
+                        globals()['send_node_message'](chat_id, on_complete_node)
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.5: Globals call successful")
                         return
+                    except Exception as globals_err:
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.5: Globals call failed: {globals_err}")
+                else:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: send_node_message not in globals")
 
-                print(f"[DAILY-S2] FIXED: send_node_message not found in module, using fallback")
+                # МЕТОД 4: Поиск через locals() контекста
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Searching in context")
+                if 'send_node_message' in context:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Found send_node_message in context")
+                    try:
+                        context['send_node_message'](chat_id, on_complete_node)
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.5: Context call successful")
+                        return
+                    except Exception as context_err:
+                        print(f"[DAILY-S2] SURGICAL-FIX-1.5: Context call failed: {context_err}")
+                else:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: send_node_message not in context")
 
-                # FALLBACK: Сообщение с инструкцией, но БЕЗ "обратитесь к администратору"
-                fallback_msg = f"🔄 Для продолжения к итоговым вопросам отправьте /start"
+                # SURGICAL FIX 1.5: Расширенный fallback с детальной информацией
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: All methods failed, using enhanced fallback")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Target node was: {on_complete_node}")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Chat ID: {chat_id}")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Session ID: {session_id}")
+
+                # Персонализированное fallback сообщение с инструкциями
+                fallback_msg = f"🎉 Исследование завершено!\n\n📊 Статистика: {stats['participated_days']} из {stats['total_days']} дней\n\n🔄 Для перехода к итоговым вопросам:\n1️⃣ Используйте команду /start\n2️⃣ Выберите '{on_complete_node}'\n\nИли отправьте просто: {on_complete_node}"
                 bot.send_message(chat_id, fallback_msg)
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Sent enhanced fallback message")
 
-            except Exception as import_error:
-                print(f"[DAILY-S2] FIXED: Module access failed: {import_error}")
-                # Финальный fallback
-                fallback_msg = f"🔄 Для продолжения к итоговым вопросам отправьте /start"
-                bot.send_message(chat_id, fallback_msg)
+            except Exception as search_error:
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: CRITICAL - Search process failed: {search_error}")
+                import traceback
+                traceback.print_exc()
+
+                # Минимальный fallback
+                try:
+                    minimal_msg = f"🎉 Период исследования завершен!\n\nИспользуйте /start для продолжения к итоговым вопросам."
+                    bot.send_message(chat_id, minimal_msg)
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Sent minimal fallback")
+                except Exception as minimal_error:
+                    print(f"[DAILY-S2] SURGICAL-FIX-1.5: Even minimal fallback failed: {minimal_error}")
 
         except Exception as e:
-            print(f"[DAILY-S2] Critical error in _trigger_on_complete: {e}")
+            print(f"[DAILY-S2] SURGICAL-FIX-1.5: Critical error in _trigger_on_complete: {e}")
+            import traceback
+            traceback.print_exc()
             try:
                 error_msg = "⚠️ Произошла ошибка при переходе к итоговым вопросам.\nПопробуйте /start"
                 bot.send_message(chat_id, error_msg)
             except Exception as final_error:
-                print(f"[DAILY-S2] Even final fallback failed: {final_error}")
+                print(f"[DAILY-S2] SURGICAL-FIX-1.5: Even final fallback failed: {final_error}")
+
 
     def _execute_guard(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """
@@ -764,7 +833,6 @@ class TimingEngine:
             'deadline': self._execute_deadline # Заготовка
         }
 
-
     # ============================================================================
     # DSL ПАРСЕРЫ - ВСЕ ИЗ ЭТАПА 1 БЕЗ ИЗМЕНЕНИЙ
     # ============================================================================
@@ -904,6 +972,7 @@ class TimingEngine:
             seconds = value*3600 if unit == 'h' else value*86400 if unit == 'd' else value*60
             return {'type': 'deadline', 'duration': seconds, 'original': cmd_str}
         return None
+
 
     # ============================================================================
     # ИСПОЛНИТЕЛИ - ВСЕ ИЗ ЭТАПА 1 БЕЗ ИЗМЕНЕНИЙ
@@ -1427,45 +1496,21 @@ class TimingEngine:
         print(f"[TIMING-ENGINE-S2] DB STUB: save_timer - {timer_type} for session {session_id}")
         return 999  # mock ID для совместимости
 
-        # ЭТАП 3: Здесь будет реальная БД логика
-        # db = self._get_db_session()
-        # if not db:
-        #     return None
-        # ...
-
     def restore_timers_from_db(self):
         """Восстановить таймеры из БД"""
         # ЭТАП 2: Заглушка БД для стабильности
         print("[TIMING-ENGINE-S2] DB STUB: restore_timers (skipped in Stage 2)")
         return
 
-        # ЭТАП 3: Здесь будет реальная БД логика
-        # db = self._get_db_session()
-        # if not db:
-        #     return
-        # ...
-
     def _execute_db_timer(self, timer_id: int):
         """Выполнить таймер из БД"""
         # ЭТАП 2: Заглушка БД для стабильности
         print(f"[TIMING-ENGINE-S2] DB STUB: execute_db_timer - {timer_id}")
 
-        # ЭТАП 3: Здесь будет реальная БД логика
-        # db = self._get_db_session()
-        # if not db:
-        #     return
-        # ...
-
     def cleanup_expired_timers(self):
         """Очистить просроченные таймеры в БД"""
         # ЭТАП 2: Заглушка БД для стабильности  
         print("[TIMING-ENGINE-S2] DB STUB: cleanup_expired_timers (skipped in Stage 2)")
-
-        # ЭТАП 3: Здесь будет реальная БД логика
-        # db = self._get_db_session()
-        # if not db:
-        #     return
-        # ...
 
     # ============================================================================
     # СТАТУС И УПРАВЛЕНИЕ
@@ -1474,7 +1519,7 @@ class TimingEngine:
     def get_status(self) -> Dict[str, Any]:
         """Статус timing системы (ОБНОВЛЕНО для Этапа 2)"""
         return {
-            'stage': 'STAGE 2 - Calendar Daily System with Safe Imports',
+            'stage': 'STAGE 2 - Calendar Daily System with Safe Imports + SURGICAL FIXES',
             'enabled': self.enabled,
             'active_timers': len(self.active_timers),
             'active_timeouts': len(self.active_timeouts),
@@ -1489,7 +1534,10 @@ class TimingEngine:
             'available_parsers': list(self.parsers.keys()),
             'available_executors': list(self.executors.keys()),
             'available_presets': list(self.presets.keys()),
-            'countdown_message_types': list(self.countdown_templates.keys())
+            'countdown_message_types': list(self.countdown_templates.keys()),
+
+            # SURGICAL FIXES
+            'surgical_fixes': ['1.4: Threading Timer', '1.5: On Complete']
         }
 
     def enable(self) -> None:
