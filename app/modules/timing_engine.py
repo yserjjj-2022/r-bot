@@ -339,19 +339,13 @@ class TimingEngine:
             return
 
         # Проверяем календарную отсечку
-        next_date = next_time.date()
-        if next_date > until_date:
-            print(f"[DAILY-S2] Cutoff reached: {next_date} > {until_date}")
-            print(f"[DAILY-S2] Daily cycle completed for {daily_key}")
-
-            # Запускаем on_complete если есть
+        current_date = datetime.now().date()
+        print(f"[DAILY-S2] SURGICAL-FIX-1.2: Cutoff check - current: {current_date}, until: {until_date}")
+        if current_date > until_date:
+            print(f"[DAILY-S2] SURGICAL-FIX-1.2: Period already ended, triggering on_complete")
             if on_complete_node:
-                print(f"[DAILY-S2] Scheduling on_complete: {on_complete_node}")
-                # Небольшая задержка для "по горячему" эффекта
-                threading.Timer(2.0, lambda: self._trigger_on_complete(on_complete_node, **context)).start()
-
-            # Удаляем из активных (цикл завершен)
-            self.active_daily_configs.pop(daily_key, None)
+                self._trigger_on_complete(on_complete_node, **context)
+            self.active_daily_configs.pop(daily_key, None)  # Очистка
             return
 
         # Вычисляем задержку до следующего срабатывания  
