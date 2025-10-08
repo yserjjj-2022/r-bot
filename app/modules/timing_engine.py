@@ -1172,3 +1172,7 @@ def disable_timing() -> None:
 
 def get_timing_status() -> Dict[str, Any]:
     return timing_engine.get_status()
+
+def get_timing_engine_instance() -> TimingEngine:
+    """Получить экземпляр timing engine для расширенного использования"""
+    return timing_engine
