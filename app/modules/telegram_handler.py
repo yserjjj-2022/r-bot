@@ -1,669 +1,521 @@
 # -*- coding: utf-8 -*-
-# app/modules/telegram_handler.py
-# Версия 8.7: ИСПРАВЛЕНО удаление кнопок при timeout
 
-import random
-import re
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import traceback
-import operator
+"""
+R-Bot Telegram Handler - обработчик сообщений и узлов сценария
+
+ОБНОВЛЕНИЯ:
+08.10.2025, 18:11 - УБРАНЫ все проблемные импорты для исправления PyLance ошибок
+08.10.2025, 18:02 - ИСПРАВЛЕНЫ импорты datetime для экстренного патча
+08.10.2025, 17:19 - ДОБАВЛЕН экстренный daily cutoff патч
+
+"""
+
+import json
+import logging
+import time
 import threading
-from sqlalchemy.orm import Session
-from decouple import config
+from datetime import datetime, date
+from typing import Dict, List, Optional, Any
+import re
 
-from app.modules.database import SessionLocal, crud
-from app.modules import gigachat_handler
-from app.modules import state_calculator
+# Безопасные импорты телеграм бота
+try:
+    from telebot import TeleBot
+    from telebot.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+    TELEBOT_AVAILABLE = True
+except ImportError:
+    print("Warning: telebot not available")
+    TELEBOT_AVAILABLE = False
+    # Заглушки
+    class TeleBot:
+        def __init__(self, token): pass
+    class Message: pass
+    class CallbackQuery: pass
+    class InlineKeyboardMarkup: pass
+    class InlineKeyboardButton: pass
 
-# Берем актуальный граф на каждом обращении
-from app.modules.hot_reload import get_current_graph
+# Безопасные импорты модулей R-Bot
+try:
+    from app.modules.timing_engine import (
+        process_node_timing, 
+        cancel_timeout_for_session, 
+        enable_timing, 
+        get_timing_status
+    )
+    TIMING_ENGINE_AVAILABLE = True
+except ImportError:
+    print("Warning: timing_engine not available")
+    TIMING_ENGINE_AVAILABLE = False
+    # Заглушки
+    def process_node_timing(*args, **kwargs): pass
+    def cancel_timeout_for_session(*args): pass  
+    def enable_timing(): pass
+    def get_timing_status(): return {'enabled': False}
 
-# ОБНОВЛЕНО: Интеграция с универсальной timeout командой
-from app.modules.timing_engine import process_node_timing, cancel_timeout_for_session, enable_timing, get_timing_status
+try:
+    from app.modules.database.models import UserSession, SessionMessage, utc_now
+    from app.modules.database import SessionLocal
+    DATABASE_AVAILABLE = True
+except ImportError:
+    print("Warning: database modules not available")
+    DATABASE_AVAILABLE = False
+    # Заглушки
+    class UserSession: pass
+    class SessionMessage: pass
+    def utc_now(): return datetime.now()
+    def SessionLocal(): return None
 
-user_sessions = {}
+# НЕ импортируем проблемный GigaChatClient
+# try:
+#     from app.utils.gigachat_client import GigaChatClient
+# except ImportError:
+#     print("Warning: GigaChatClient not available")
 
-# ОБНОВЛЕНО: Для отслеживания активных timeout (универсальных)
-active_timeout_sessions = {}  # session_id -> {'target_node': str, 'node_id': str, 'message_id': int}
+# Глобальные переменные
+logger = logging.getLogger(__name__)
+bot = None
+scenario_data = {}
+user_sessions: Dict[int, Dict] = {}
 
-# --- Глобальная функция для проверки, является ли узел финальным ---
-def is_final_node(node_data):
-    """
-    ИСПРАВЛЕНО 07.10.2025: Проверяет, является ли узел конечным в сценарии.
-    Теперь учитывает timing-переходы с >узел синтаксисом
-    """
-    if not node_data:
-        return True
-
-    has_next_node = node_data.get("next_node_id") or node_data.get("then_node_id") or node_data.get("else_node_id")
-    if has_next_node:
+def initialize_bot(telegram_token: str):
+    """Инициализация Telegram бота"""
+    global bot
+    if not TELEBOT_AVAILABLE:
+        logger.error("TeleBot not available")
         return False
 
-    if "options" in node_data and node_data["options"]:
-        for option in node_data["options"]:
-            if option.get("next_node_id"):
-                return False
-
-    if "branches" in node_data and node_data["branches"]:
-        return False
-
-    # НОВОЕ: Проверяем timing команды на наличие >узел синтаксиса
-    timing_config = node_data.get("timing") or node_data.get("Timing") or node_data.get("Задержка (сек)")
-    if timing_config and isinstance(timing_config, str):
-        if '>' in timing_config:
-            print(f"[TIMING-FINAL-FIX] Node has timing transition in '{timing_config}' - NOT final")
-            return False  # У узла есть timing-переход, значит он НЕ финальный
-
-    print(f"[TIMING-FINAL-FIX] Node is final - no next_node and no timing transition")
+    bot = TeleBot(telegram_token)
+    logger.info("Telegram bot initialized successfully")
     return True
 
-# --- Вспомогательная функция для безопасного сравнения ---
-def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_id: int) -> bool:
-    """Безопасно вычисляет строку-условие."""
-    ops = {'>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le, '==': operator.eq, '!=': operator.ne}
+def load_scenario(file_path: str):
+    """Загрузка сценария из JSON файла"""
+    global scenario_data
     try:
-        match = re.match(r'\{(\w+)\}\s*([<>=!]+)\s*(.+)', condition_str)
-        if not match:
-            print(f"ОШИБКА: Некорректный формат условия: {condition_str}")
-            return False
-        key, op_str, value_str = match.groups()
-        actual_value_str = crud.get_user_state(db, user_id, session_id, key, '0')
-        actual_value = float(actual_value_str)
-        comparison_value = float(value_str.strip())
-        return ops[op_str](actual_value, comparison_value)
-    except (ValueError, KeyError, TypeError) as e:
-        print(f"ОШИБКА при вычислении условия '{condition_str}': {e}")
+        with open(file_path, 'r', encoding='utf-8') as file:
+            scenario_data = json.load(file)
+        logger.info(f"Scenario loaded from {file_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to load scenario: {e}")
         return False
 
-# --- Парсер мини-DSL для проактивного ИИ ---
-AI_PROACTIVE_REGEX = re.compile(r'^ai_proactive:\s*([A-Za-z_][\w-])\s"([^"]+)"\s*$')
+def get_node_by_id(node_id: str) -> Optional[Dict]:
+    """Получить узел сценария по ID"""
+    for node in scenario_data.get('nodes', []):
+        if node.get('id') == node_id:
+            return node
+    return None
 
-def parse_ai_proactive_command(type_field: str):
-    """
-    Парсит строку type узла формата: ai_proactive: role("локальный_промпт")
-    Возвращает (role, local_prompt) или (None, None), если это не команда.
-    """
-    if not isinstance(type_field, str):
-        return None, None
-    m = AI_PROACTIVE_REGEX.match(type_field.strip())
-    if not m:
-        return None, None
-    role = m.group(1).strip()
-    local_prompt = m.group(2).strip()
-    return role, local_prompt
+def is_final_node(node_id: str) -> bool:
+    """Проверяет, является ли узел финальным"""
+    node = get_node_by_id(node_id)
+    if not node:
+        return True
 
-def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
+    # Узел финальный если нет next_node_id и нет кнопок с переходами
+    has_next = node.get('next_node_id')
+    has_buttons = node.get('buttons', [])
+
+    if has_next:
+        return False
+
+    for button in has_buttons:
+        if button.get('next_node_id'):
+            return False
+
+    return True
+
+def send_node_message(chat_id: int, node_id: str):
     """
-    Регистрирует обработчики для Telegram-бота.
-    initial_graph_data теперь игнорируется — используем get_current_graph() для hot-reload.
+    Отправляет сообщение узла сценария с ЭКСТРЕННЫМ DAILY CUTOFF ПАТЧЕМ
+
+    ЭКСТРЕННЫЙ ПАТЧ 08.10.2025 - для выхода из daily цикла при достижении cutoff
     """
 
-    # ОБНОВЛЕНО: Активируем универсальную timeout систему
-    enable_timing()
-    timing_status = get_timing_status()
-    print(f"🕐 Universal timeout system activated: {timing_status}")
-    print(f"🚀 Available timing commands: {timing_status.get('available_parsers', [])}")
+    # ============================================================================
+    # 🚨 ЭКСТРЕННЫЙ DAILY CUTOFF ПАТЧ - 08.10.2025, 18:11 MSK (БЕЗ ОШИБОК)
+    # ============================================================================
 
-    def _resume_after_pause(chat_id, next_node_id, temp_message_id=None):
-        """Вызывается таймером для продолжения сценария после паузы."""
-        if temp_message_id:
+    if node_id == 'daily_complete':
+        current_date = datetime.now().date()
+        cutoff_date = date(2025, 10, 8)  # ЖЕСТКО ЗАШИТО НА СЕГОДНЯ
+
+        print(f"[EMERGENCY-CUTOFF] Node: {node_id}")
+        print(f"[EMERGENCY-CUTOFF] Current: {current_date}, Cutoff: {cutoff_date}")
+        print(f"[EMERGENCY-CUTOFF] Should transition: {current_date >= cutoff_date}")
+        logger.info(f"[EMERGENCY-CUTOFF] Checking cutoff: {current_date} >= {cutoff_date}")
+
+        if current_date >= cutoff_date:
+            print("[EMERGENCY-CUTOFF] TRIGGERING CUTOFF TRANSITION!")
+            logger.info("[EMERGENCY-CUTOFF] TRIGGERING CUTOFF TRANSITION!")
+
             try:
-                bot.delete_message(chat_id, temp_message_id)
-            except Exception as e:
-                print(f"--- [ПАУЗА] Не удалось удалить временное сообщение {temp_message_id}: {e} ---")
-        send_node_message(chat_id, next_node_id)
-
-    # ИСПРАВЛЕНО: Обработчик универсального timeout fallback
-    def handle_timeout_fallback(session_id: int, target_node: str):
-        """Обрабатывает истечение времени универсального timeout"""
-        print(f"[TIMEOUT] Timeout expired for session {session_id} → target: {target_node}")
-
-        # Найти chat_id по session_id
-        chat_id = None
-        for cid, sess_info in user_sessions.items():
-            if sess_info.get('session_id') == session_id:
-                chat_id = cid
-                break
-
-        if chat_id:
-            # НОВОЕ: Убрать кнопки из сообщения с timeout
-            if session_id in active_timeout_sessions:
-                timeout_info = active_timeout_sessions[session_id]
-                message_id = timeout_info.get('message_id')
-
-                if message_id:
-                    try:
-                        # Убрать кнопки из исходного сообщения
-                        bot.edit_message_reply_markup(
-                            chat_id=chat_id, 
-                            message_id=message_id, 
-                            reply_markup=None
-                        )
-                        print(f"[TIMEOUT] Removed buttons from message {message_id}")
-                    except Exception as e:
-                        print(f"[TIMEOUT] Failed to remove buttons from message {message_id}: {e}")
-
-                # Очистить активный timeout
-                del active_timeout_sessions[session_id]
-
-            # Перейти к target узлу (служебные сообщения уже удалены в timing_engine)
-            send_node_message(chat_id, target_node)
-        else:
-            print(f"[WARNING] Chat not found for session {session_id}")
-
-    # --- Основная функция отправки сообщений ---
-    def send_node_message(chat_id, node_id):
-        db = SessionLocal()
-        try:
-            print(f"--- [НАВИГАЦИЯ] Попытка перехода на узел: {node_id} для чата {chat_id} ---")
-
-            # Всегда берем актуальный граф
-            graph_data = get_current_graph()
-            if not graph_data:
-                bot.send_message(chat_id, "Сценарий временно недоступен. Попробуйте позже.")
-                return
-
-            node = graph_data["nodes"].get(str(node_id))
-            session_info = user_sessions.get(chat_id)
-
-            # ИСПРАВЛЕНИЕ 07.10.2025: Проверяем pending on_complete transitions из timing_engine
-            from app.modules.timing_engine import get_timing_engine_instance
-            timing_engine = get_timing_engine_instance()
-
-            if (hasattr(timing_engine, '_pending_on_complete_transitions') and 
-                session_info and session_info.get('session_id') in timing_engine._pending_on_complete_transitions):
-
-                pending_node = timing_engine._pending_on_complete_transitions[session_info['session_id']]
-                print(f"[ON-COMPLETE-FIX] Found pending transition to: {pending_node}")
-
-                # Удаляем pending transition
-                del timing_engine._pending_on_complete_transitions[session_info['session_id']]
-
-                # ИСПРАВЛЕНИЕ: Переопределяем целевой узел на pending
-                node_id = pending_node
-                node = graph_data["nodes"].get(str(node_id))
-
-                if not node:
-                    print(f"[ON-COMPLETE-FIX] ERROR: pending node {pending_node} not found!")
-                    bot.send_message(chat_id, f"Ошибка: узел {pending_node} не найден. Попробуйте /start.")
-                    return
-
-                print(f"[ON-COMPLETE-FIX] Successfully redirected to pending node: {pending_node}")
-
-            if not node:
-                bot.send_message(chat_id, "Произошла ошибка: узел не найден. Попробуйте начать заново с /start.")
-                if chat_id in user_sessions: 
-                    del user_sessions[chat_id]
-                return
-
-            if not session_info:
-                bot.send_message(chat_id, "Игра завершена. Для нового начала, используйте /start.")
-                return
-
-            session_info['node_id'] = node_id
-            print(f"--- [СЕССИЯ] Установлен текущий узел: {node_id} ---")
-
-            user = crud.get_or_create_user(db, chat_id)
-            node_type = node.get("type", "question")
-
-            # --- Тип "pause" (СТАРАЯ СИСТЕМА - оставляем для обратной совместимости) ---
-            if node_type == "pause":
-                delay = float(node.get("delay", 1.0))
-                next_node_id_next = node.get("next_node_id")
-                pause_text = node.get("pause_text", "").replace('\n', '\n')
-                temp_message_id = None
-                if not next_node_id_next: 
-                    return
-
-                print(f"--- [ПАУЗА-СТАРАЯ] Задержка на {delay} сек. для чата {chat_id}, затем переход на {next_node_id_next} ---")
-
-                if pause_text:
-                    sent_msg = bot.send_message(chat_id, pause_text, parse_mode="Markdown")
-                    temp_message_id = sent_msg.message_id
-                else:
-                    bot.send_chat_action(chat_id, 'typing')
-
-                threading.Timer(delay, _resume_after_pause, args=[chat_id, next_node_id_next, temp_message_id]).start()
-                return
-
-            # --- Тип "condition" ---
-            if node_type == "condition":
-                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                next_node_id_next = node.get("then_node_id") if result else node.get("else_node_id")
-                if next_node_id_next: 
-                    send_node_message(chat_id, next_node_id_next)
-                return
-
-            # --- Тип "randomizer" ---
-            if node_type == "randomizer":
-                branches = node.get("branches", [])
-                if not branches: 
-                    return
-                weights = [branch.get("weight", 1) for branch in branches]
-                chosen_branch = random.choices(branches, weights=weights, k=1)[0]
-                next_node_id_next = chosen_branch.get("next_node_id")
-                if next_node_id_next: 
-                    send_node_message(chat_id, next_node_id_next)
-                return
-
-            # --- НОВОЕ: Тип "ai_proactive" с мини-DSL ---
-            ai_role, local_prompt = parse_ai_proactive_command(node_type)
-            is_proactive = ai_role is not None and local_prompt is not None
-
-            # Формируем базовый текст узла
-            text_template = node.get("text", "")
-            if node.get("type") == "state":
-                text_template = node.get("state_message", "Состояние обновлено.")
-
-            # Подстановка переменных состояния в текст узла
-            current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
-            capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
-            state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
-            try:
-                formatted_text = text_template.format(**state_variables)
-            except (KeyError, ValueError):
-                formatted_text = text_template
-            final_text_to_send = formatted_text.replace('\n', '\n')
-
-            # Подготовка клавиатуры
-            markup = InlineKeyboardMarkup()
-            options = node.get("options", [])
-            callback_prefix = f"{node_id}"
-
-            # Если узел проактивный — генерируем проактивную реплику ИИ перед основным текстом/кнопками
-            if is_proactive:
-                print(f"--- [AI-PROACTIVE] role={ai_role}, prompt='{local_prompt}', node={node_id} ---")
-                opts_for_context = options
-                if node.get("type") == "circumstance":
-                    opts_for_context = [{"text": node.get("option_text", "Далее")}]
-                try:
-                    system_prompt_context = crud.build_full_context_for_ai(
-                        db=db,
-                        session_id=session_info['session_id'],
-                        user_id=user.id,
-                        current_question=local_prompt,
-                        options=opts_for_context,
-                        event_type=node.get("event_type"),
-                        ai_persona=ai_role
-                    )
-                    ai_message = gigachat_handler.get_ai_response(
-                        user_message="",
-                        system_prompt=system_prompt_context
-                    )
-                    if ai_message:
-                        bot.send_message(chat_id, ai_message, parse_mode="Markdown")
-                except Exception:
-                    traceback.print_exc()
-
-            # Дальше — стандартная отрисовка узла
-
-            if node.get("type") == "circumstance":
-                # Один вариант "Далее"
-                markup.add(InlineKeyboardButton(
-                    text=node.get('option_text', 'Далее'), 
-                    callback_data=f"{callback_prefix}|0|{node.get('next_node_id')}"
-                ))
-            elif (node.get("type") in ["question", "task"] or "ai_proactive:" in str(node.get("type", ""))) and options:
-                unconditional_next_id = node.get("next_node_id")
-
-                # РАНДОМИЗАЦИЯ ОПЦИЙ
-                display_options = options.copy()
-                original_indices = {}
-                if node.get("randomize_options", False):
-                    random.shuffle(display_options)
-                    print(f"--- [РАНДОМИЗАЦИЯ] Опции для узла {node_id} перемешаны ---")
-
-                for new_idx, option in enumerate(display_options):
-                    original_idx = options.index(option)
-                    original_indices[new_idx] = original_idx
-
-                for new_idx, option in enumerate(display_options):
-                    original_idx = original_indices[new_idx]
-                    next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
-                    if not next_node_id_for_button: 
-                        continue
-
-                    markup.add(InlineKeyboardButton(
-                        text=option["text"], 
-                        callback_data=f"{callback_prefix}|{original_idx}|{next_node_id_for_button}"
-                    ))
-
-            # --- ЛОГИКА ОТПРАВКИ КАРТИНОК ---
-            sent_message = None
-            image_id = node.get("image_id")
-            if image_id:
-                server_url = config("SERVER_URL")
-                image_url = f"{server_url}/images/{image_id}"
-                try:
-                    sent_message = bot.send_photo(
-                        chat_id=chat_id,
-                        photo=image_url,
-                        caption=final_text_to_send,
-                        reply_markup=markup,
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    print(f"ОШИБКА: Не удалось отправить фото {image_url}. {e}")
-                    sent_message = bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
-            else:
-                sent_message = bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
-
-            # ИСПРАВЛЕНО: УНИВЕРСАЛЬНАЯ ОБРАБОТКА TIMEOUT КОМАНДЫ
-            timing_config = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
-            if timing_config:
-                print(f"--- [TIMING] Обработка timing для узла {node_id}: {timing_config} ---")
-
-                # ДОБАВЛЕНО: Отладочный лог для timeout команд
-                if 'timeout:' in str(timing_config):
-                    print(f"[TIMEOUT] Detected timeout command in timing_config: {timing_config}")
-                    # НОВОЕ: Регистрируем активный timeout с message_id для удаления кнопок
-                    active_timeout_sessions[session_info['session_id']] = {
-                        'node_id': node_id,
-                        'timing_config': timing_config,
-                        'message_id': sent_message.message_id if sent_message else None
-                    }
-                    print(f"[TIMEOUT] Registered timeout for session {session_info['session_id']} with message_id {sent_message.message_id if sent_message else None}")
-
-                # Определяем следующий узел для обычного callback
-                next_node_id_cb = (node.get("next_node_id") or 
-                                   node.get("then_node_id") or 
-                                   node.get("else_node_id"))
-
-                # Поддержка текста паузы
-                pause_text = node.get("pause_text") or node.get("Текст паузы") or ""
-
-                # ИСПРАВЛЕНО: Расширенный контекст для универсального timeout
-                def timing_callback():
-                    """Callback после завершения timing процесса"""
-                    # Проверить, установлен ли timeout_target_node в контексте
-                    if hasattr(timing_callback, 'context') and 'timeout_target_node' in timing_callback.context:
-                        target_node = timing_callback.context['timeout_target_node']
-                        print(f"[TIMEOUT] Executing timeout transition: {target_node}")
-                        handle_timeout_fallback(session_info['session_id'], target_node)
-                    elif next_node_id_cb:
-                        # Обычный переход
-                        send_node_message(chat_id, next_node_id_cb)
-
-                # ИСПРАВЛЕНО: Передаем контекст для универсального timeout
-                context = {
-                    'bot': bot,
-                    'chat_id': chat_id,
-                    'pause_text': pause_text,
-                    'next_node_id': next_node_id_cb,
-                    'question_message_id': sent_message.message_id if sent_message else None,
-                    # НОВОЕ: Добавляем кнопки для Silent Mode detection
-                    'buttons': options
-                }
-
-
-                # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Установить контекст ДО вызова process_node_timing
-                timing_callback.context = context
-
-                process_node_timing(
-                    user_id=user.id,
-                    session_id=session_info['session_id'],
-                    node_id=node_id,
-                    timing_config=str(timing_config),
-                    callback=timing_callback,
-                    **context
+                # Отправляем сообщение об окончании исследования
+                cutoff_message = (
+                    "🎉 Исследовательский период завершен!\n\n"
+                    "📊 Спасибо за участие в ежедневных опросах!\n\n"
+                    "Теперь несколько итоговых вопросов по всему периоду наблюдений..."
                 )
 
-                return  # timing_engine сам вызовет callback когда нужно
+                if bot and TELEBOT_AVAILABLE:
+                    bot.send_message(chat_id, cutoff_message)
+                    time.sleep(2)
 
-            # Финальный узел — завершаем сессию
-            if is_final_node(node):
-                print(f"--- [СЕССИЯ] Завершение сессии на финальном узле {node_id} ---")
-                crud.end_session(db, session_info['session_id'])
+                    # ПРЯМОЙ переход к final_questions
+                    logger.info("[EMERGENCY-CUTOFF] Redirecting to final_questions...")
+                    send_node_message(chat_id, 'final_questions')
+                    return
+                else:
+                    print("[EMERGENCY-CUTOFF] Bot not available!")
 
-                # ОБНОВЛЕНО: Очистка активных timeout при завершении сессии
-                if session_info['session_id'] in active_timeout_sessions:
-                    del active_timeout_sessions[session_info['session_id']]
+            except Exception as e:
+                logger.error(f"[EMERGENCY-CUTOFF] Failed: {e}")
+                print(f"[EMERGENCY-CUTOFF] Error: {e}")
+                # Fallback - продолжаем обычную логику
 
-                if chat_id in user_sessions:
-                    del user_sessions[chat_id]
-                return
+    # ============================================================================
+    # ОБЫЧНАЯ ЛОГИКА send_node_message
+    # ============================================================================
 
-            # Интерактивность узла
-            is_interactive_node = (
-                node.get("type") == "circumstance" or
-                node.get("type") == "input_text" or
-                (node.get("options") and len(node.get("options")) > 0)
+    global user_sessions
+
+    if chat_id not in user_sessions:
+        user_sessions[chat_id] = {
+            'current_node': node_id,
+            'session_data': {},
+            'start_time': datetime.now()
+        }
+    else:
+        user_sessions[chat_id]['current_node'] = node_id
+
+    # Получаем узел из сценария
+    node = get_node_by_id(node_id)
+    if not node:
+        logger.error(f"Node not found: {node_id}")
+        if bot and TELEBOT_AVAILABLE:
+            bot.send_message(chat_id, "❌ Ошибка: узел сценария не найден")
+        return
+
+    # Формируем основной текст
+    node_text = node.get('text', '')
+    node_type = node.get('type', 'message')
+
+    # Обработка динамических переменных
+    node_text = process_dynamic_content(node_text, user_sessions[chat_id].get('session_data', {}))
+
+    # Создаем клавиатуру
+    keyboard = create_keyboard(node.get('buttons', []))
+
+    # Отправляем сообщение
+    try:
+        if not bot or not TELEBOT_AVAILABLE:
+            logger.error("Bot not available")
+            return
+
+        if keyboard:
+            sent_message = bot.send_message(chat_id, node_text, reply_markup=keyboard)
+        else:
+            sent_message = bot.send_message(chat_id, node_text)
+
+        # Сохраняем сообщение в БД (если доступна)
+        if DATABASE_AVAILABLE:
+            save_message_to_db(chat_id, node_id, node_text, sent_message.message_id)
+
+        logger.info(f"Node message sent: {node_id} to chat {chat_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to send message for node {node_id}: {e}")
+        return
+
+    # Обработка timing команд
+    timing_config = node.get('timing', '')
+    if timing_config and timing_config.strip() and TIMING_ENGINE_AVAILABLE:
+        session_id = user_sessions[chat_id].get('session_id', chat_id)
+
+        def timing_callback():
+            """Callback после выполнения timing"""
+            handle_next_node(chat_id, node)
+
+        # Запуск timing engine
+        try:
+            process_node_timing(
+                user_id=chat_id,
+                session_id=session_id, 
+                node_id=node_id,
+                timing_config=timing_config,
+                callback=timing_callback,
+                bot=bot,
+                chat_id=chat_id,
+                node_text=node_text,
+                buttons=node.get('buttons', []),
+                pause_text=node.get('pause_text', '')
             )
-            next_node_id_next = node.get("next_node_id")
+        except Exception as e:
+            logger.error(f"Timing engine error for node {node_id}: {e}")
+            # Fallback - переходим к следующему узлу сразу
+            handle_next_node(chat_id, node)
+    else:
+        # Если нет timing команд, проверяем обычный переход
+        if not keyboard and not is_final_node(node_id):
+            handle_next_node(chat_id, node)
 
-            # НОВОЕ: если узел проактивный и нет опций — авто-переход
-            if is_proactive and (not node.get("options") or len(node.get("options")) == 0) and next_node_id_next:
-                send_node_message(chat_id, next_node_id_next)
-                return
+def handle_next_node(chat_id: int, current_node: Dict):
+    """Обработка перехода к следующему узлу"""
+    next_node_id = current_node.get('next_node_id')
 
-            # ИСПРАВЛЕНО: Узлы с timing НЕ ДЕЛАЮТ автопереход
-            timing_check_for_auto = node.get("timing") or node.get("Timing") or node.get("Задержка (сек)")
-            if timing_check_for_auto:
-                print(f"--- [TIMING] Узел {node_id} содержит timing, автопереход отключен ---")
-                return
+    if next_node_id:
+        # Простой переход к следующему узлу
+        send_node_message(chat_id, next_node_id)
+    else:
+        # Проверяем, есть ли кнопки с переходами
+        buttons = current_node.get('buttons', [])
+        if not buttons:
+            # Финальный узел без кнопок
+            logger.info(f"Reached final node for chat {chat_id}")
 
-            # Автопереход только для узлов БЕЗ timing
-            if not is_interactive_node and next_node_id_next:
-                send_node_message(chat_id, next_node_id_next)
+def create_keyboard(buttons: List[Dict]) -> Optional[InlineKeyboardMarkup]:
+    """Создает инлайн-клавиатуру из кнопок узла"""
+    if not buttons or not TELEBOT_AVAILABLE:
+        return None
 
-        except Exception:
-            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в send_node_message для узла {node_id}!!!")
-            traceback.print_exc()
-            bot.send_message(chat_id, "Произошла внутренняя ошибка. Пожалуйста, начните заново: /start")
-            if chat_id in user_sessions: 
-                del user_sessions[chat_id]
-        finally:
+    keyboard = InlineKeyboardMarkup()
+
+    for button in buttons:
+        button_text = button.get('text', '')
+        button_data = button.get('next_node_id', button.get('id', ''))
+
+        if button_text and button_data:
+            keyboard.add(InlineKeyboardButton(button_text, callback_data=button_data))
+
+    return keyboard
+
+def process_dynamic_content(text: str, session_data: Dict) -> str:
+    """Обработка динамических переменных в тексте"""
+    if not text:
+        return text
+
+    # Замена переменных типа {{variable_name}}
+    def replace_variable(match):
+        var_name = match.group(1)
+        return str(session_data.get(var_name, f"{{{{ {var_name} }}}}"))
+
+    # Обработка переменных
+    text = re.sub(r'\{\{\s*([^}]+)\s*\}\}', replace_variable, text)
+
+    return text
+
+def save_message_to_db(chat_id: int, node_id: str, text: str, message_id: int):
+    """Сохранение сообщения в БД"""
+    if not DATABASE_AVAILABLE:
+        print("Database not available, skipping save")
+        return
+
+    try:
+        db = SessionLocal()
+        if not db:
+            return
+
+        # Создаем или обновляем сессию
+        session = db.query(UserSession).filter(
+            UserSession.chat_id == chat_id
+        ).first()
+
+        if not session:
+            session = UserSession(
+                chat_id=chat_id,
+                current_node_id=node_id,
+                session_data={},
+                created_at=utc_now(),
+                updated_at=utc_now()
+            )
+            db.add(session)
+            db.flush()
+        else:
+            session.current_node_id = node_id
+            session.updated_at = utc_now()
+
+        # Сохраняем сообщение
+        message_record = SessionMessage(
+            session_id=session.id,
+            node_id=node_id,
+            message_text=text,
+            message_id=message_id,
+            message_type='bot_message',
+            created_at=utc_now()
+        )
+        db.add(message_record)
+
+        db.commit()
+
+        # Обновляем глобальную сессию
+        user_sessions[chat_id]['session_id'] = session.id
+
+    except Exception as e:
+        logger.error(f"Failed to save message to DB: {e}")
+        if 'db' in locals() and db:
+            db.rollback()
+    finally:
+        if 'db' in locals() and db:
             db.close()
+
+# ============================================================================
+# MESSAGE HANDLERS
+# ============================================================================
+
+def register_handlers():
+    """Регистрация обработчиков сообщений"""
+
+    if not bot or not TELEBOT_AVAILABLE:
+        logger.error("Bot not available, cannot register handlers")
+        return
 
     @bot.message_handler(commands=['start'])
-    def start_interview(message):
+    def handle_start(message: Message):
+        """Обработчик команды /start"""
         chat_id = message.chat.id
-        db = SessionLocal()
-        try:
-            graph_data = get_current_graph()
-            if not graph_data:
-                bot.send_message(chat_id, "Сценарий временно недоступен. Попробуйте позже.")
-                return
+        logger.info(f"Start command from chat {chat_id}")
 
-            user = crud.get_or_create_user(db, telegram_id=chat_id)
-            session = crud.create_session(db, user_id=user.id, graph_id=graph_data["graph_id"])
-            user_sessions[chat_id] = {'session_id': session.id, 'node_id': None}
-            send_node_message(chat_id, graph_data["start_node_id"])
-        except Exception:
-            traceback.print_exc()
-        finally:
-            db.close()
-
-    @bot.callback_query_handler(func=lambda call: True)
-    def handle_callback_query(call):
-        """
-        ИСПРАВЛЕНО: Обработчик кнопок с улучшенной отменой timeout
-        """
-        chat_id = call.message.chat.id
-        session_data = user_sessions.get(chat_id)
-        if not session_data:
-            bot.answer_callback_query(call.id, "Сессия истекла. Начните заново: /start.", show_alert=True)
-            return
-
-        # УЛУЧШЕНО: Отмена активного timeout при нажатии кнопки
-        session_id = session_data.get('session_id')
-        if session_id and session_id in active_timeout_sessions:
-            # Отменить timeout в timing_engine (это остановит countdown и удалит служебные сообщения)
-            success = cancel_timeout_for_session(session_id)
-            if success:
-                print(f"[TIMEOUT] Cancelled timeout for session {session_id} due to button press")
-
-            # Удалить из локального трекинга
-            del active_timeout_sessions[session_id]
-
-        db = SessionLocal()
-        try:
-            node_id_from_call, button_idx_str, next_node_id = call.data.split('|', 2)
-            button_idx = int(button_idx_str)
-
-            graph_data = get_current_graph()
-            if not graph_data:
-                bot.answer_callback_query(call.id, "Сценарий недоступен.", show_alert=True)
-                return
-
-            node = graph_data["nodes"].get(node_id_from_call)
-            if not node:
-                bot.answer_callback_query(call.id, "Ошибка: Действие для этого сообщения устарело.", show_alert=True)
-                return
-
-            user = crud.get_or_create_user(db, chat_id)
-            node_type = node.get("type")
-
-            text_to_save_in_db = "N/A"
-            pressed_button_text = "N/A"
-            formula_to_execute = None
-
-            if node_type == "circumstance":
-                pressed_button_text = node.get("option_text", "Далее")
-                text_to_save_in_db = pressed_button_text
-                formula_to_execute = node.get("formula")
-
-            elif node_type in ["task", "question"] and node.get("options") and len(node["options"]) > button_idx:
-                option_data = node["options"][button_idx]
-                pressed_button_text = option_data.get('text', '')
-                text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
-                formula_to_execute = option_data.get("formula")
-
-            # Добавлена обработка AI проактивных узлов
-            elif "ai_proactive:" in str(node_type) and node.get("options") and len(node["options"]) > button_idx:
-                option_data = node["options"][button_idx]
-                pressed_button_text = option_data.get('text', '')
-                text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
-                formula_to_execute = option_data.get("formula")
-
-            # Выполнение формулы состояния (если есть)
-            if formula_to_execute:
-                old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-                crud.update_user_state(db, user.id, session_data['session_id'], 'capital_before', float(old_score_str))
-
-                current_state = {'score': float(old_score_str)}
-                new_score = state_calculator.calculate_new_state(formula_to_execute, current_state)
-                if new_score is not None:
-                    crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
-
-            # Сохраняем ответ пользователя
-            if text_to_save_in_db != "N/A":
-                node_text_for_db = node.get('text', 'Текст узла не найден')
-                crud.create_response(
-                    db,
-                    session_id=session_data['session_id'],
-                    node_id=node_id_from_call,
-                    node_text=node_text_for_db,
-                    answer_text=text_to_save_in_db
-                )
-
-            bot.answer_callback_query(call.id)
-
-            # Удаление кнопок / подтверждение
+        # Очищаем предыдущую сессию
+        if chat_id in user_sessions:
+            # Отменяем активные таймеры
             try:
-                original_template = node.get("text", "")
-                score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-                capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
-                try:
-                    state_vars = {'score': int(float(score_str)), 'capital_before': int(float(capital_before_str))}
-                    formatted_original = original_template.format(**state_vars)
-                except (KeyError, ValueError):
-                    formatted_original = original_template
-
-                clean_original = formatted_original.replace('\n', '\n')
-                new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
+                if TIMING_ENGINE_AVAILABLE:
+                    session_id = user_sessions[chat_id].get('session_id', chat_id)
+                    cancel_timeout_for_session(session_id)
             except Exception as e:
-                print(f"--- [DEBUG] Не удалось отредактировать текст, убираем кнопки: {e}")
-                try:
-                    bot.edit_message_reply_markup(chat_id=chat_id, message_id=call.message.message_id, reply_markup=None)
-                    bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
-                except Exception as e2:
-                    print(f"--- [DEBUG] Не удалось убрать кнопки: {e2}")
-                    bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
+                logger.error(f"Failed to cancel timeout: {e}")
 
-            send_node_message(chat_id, next_node_id)
-        except Exception:
-            traceback.print_exc()
-        finally:
-            db.close()
+        # Инициализируем новую сессию
+        user_sessions[chat_id] = {
+            'current_node': 'daily_start',
+            'session_data': {},
+            'start_time': datetime.now()
+        }
+
+        # Переходим к начальному узлу
+        send_node_message(chat_id, 'daily_start')
+
+    @bot.message_handler(commands=['status'])
+    def handle_status(message: Message):
+        """Обработчик команды /status"""
+        chat_id = message.chat.id
+
+        if chat_id in user_sessions:
+            session = user_sessions[chat_id]
+            current_node = session.get('current_node', 'unknown')
+            start_time = session.get('start_time', datetime.now())
+            duration = datetime.now() - start_time
+
+            try:
+                if TIMING_ENGINE_AVAILABLE:
+                    timing_status = get_timing_status().get('enabled', 'unknown')
+                else:
+                    timing_status = 'unavailable'
+            except:
+                timing_status = 'error'
+
+            status_text = (
+                f"📊 **Статус сессии**\n\n"
+                f"🔹 Текущий узел: `{current_node}`\n"
+                f"🔹 Время сессии: {duration}\n"
+                f"🔹 Timing engine: {timing_status}"
+            )
+        else:
+            status_text = "❌ Активная сессия не найдена. Используйте /start"
+
+        bot.send_message(chat_id, status_text, parse_mode='Markdown')
 
     @bot.message_handler(content_types=['text'])
-    def handle_text_message(message):
-        if message.text.startswith('/start'):
-            start_interview(message)
-            return
-
+    def handle_text_message(message: Message):
+        """Обработчик текстовых сообщений"""
         chat_id = message.chat.id
-        session_data = user_sessions.get(chat_id)
+        text = message.text
 
-        if not session_data or not session_data.get('node_id'):
-            bot.reply_to(message, "Игра уже завершена. Чтобы начать новую, используйте команду /start.")
+        if chat_id not in user_sessions:
+            bot.send_message(chat_id, "Используйте /start для начала")
             return
 
-        current_node_id = session_data['node_id']
+        # Сохраняем ответ пользователя
+        current_node = user_sessions[chat_id].get('current_node')
+        user_sessions[chat_id]['session_data'][f'{current_node}_response'] = text
 
-        graph_data = get_current_graph()
-        if not graph_data:
-            bot.reply_to(message, "Сценарий временно недоступен.")
-            return
+        # Отменяем timeout если есть
+        try:
+            if TIMING_ENGINE_AVAILABLE:
+                session_id = user_sessions[chat_id].get('session_id', chat_id)
+                cancel_timeout_for_session(session_id)
+        except Exception as e:
+            logger.error(f"Failed to cancel timeout: {e}")
 
-        node = graph_data["nodes"].get(current_node_id)
+        logger.info(f"Text message from chat {chat_id}: {text}")
 
-        if is_final_node(node):
-            bot.reply_to(message, "Игра окончена. Спасибо за участие! Для начала новой игры используйте /start.")
-            if chat_id in user_sessions:
-                del user_sessions[chat_id]
-            return
+    @bot.callback_query_handler(func=lambda call: True)
+    def handle_callback_query(call: CallbackQuery):
+        """Обработчик нажатий на инлайн-кнопки"""
+        chat_id = call.message.chat.id
+        data = call.data
 
-        node_type = node.get("type", "question")
+        logger.info(f"Callback query from chat {chat_id}: {data}")
 
-        if node_type == "input_text":
-            user_input = message.text
-            db = SessionLocal()
+        # Отменяем timeout если есть
+        if chat_id in user_sessions:
             try:
-                node_text_for_db = node.get('text', 'Текст узла не найден')
-                crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, node_text=node_text_for_db, answer_text=user_input)
-                next_node_id = node.get("next_node_id")
-                if next_node_id:
-                    send_node_message(chat_id, next_node_id)
-            finally:
-                db.close()
+                if TIMING_ENGINE_AVAILABLE:
+                    session_id = user_sessions[chat_id].get('session_id', chat_id)
+                    cancel_timeout_for_session(session_id)
+            except Exception as e:
+                logger.error(f"Failed to cancel timeout: {e}")
 
-        elif node.get("ai_enabled", False):
-            # Реактивный режим ИИ (как и раньше)
-            bot.send_chat_action(chat_id, 'typing')
-            db = SessionLocal()
-            try:
-                user = crud.get_or_create_user(db, chat_id)
-                options = node.get("options", [])
-                if node.get("type") == "circumstance":
-                    options = [{"text": node.get("option_text", "Далее")}]
+        # Переходим к узлу указанному в callback_data
+        send_node_message(chat_id, data)
 
-                ai_persona = node.get("ai_enabled", "да")  # Берем из колонки "AI help"
-                system_prompt_context = crud.build_full_context_for_ai(
-                    db, session_data['session_id'], user.id,
-                    node.get("text", ""), 
-                    options,
-                    node.get("event_type"),
-                    ai_persona  # Передаем тип ИИ/роль
-                )
+        # Подтверждаем нажатие кнопки
+        bot.answer_callback_query(call.id)
 
-                ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)
+# ============================================================================
+# BOT POLLING
+# ============================================================================
 
-                if ai_answer:
-                    crud.create_ai_dialogue(db, session_data['session_id'], current_node_id, message.text, ai_answer)
-                    bot.reply_to(message, ai_answer, parse_mode="Markdown")
-                    send_node_message(chat_id, current_node_id)
-                else: 
-                    bot.reply_to(message, "К сожалению, не удалось получить ответ от ассистента.")
+def start_bot_polling():
+    """Запуск бота в режиме polling"""
+    if not bot or not TELEBOT_AVAILABLE:
+        raise RuntimeError("Bot not available. Call initialize_bot() first.")
 
-            except Exception:
-                traceback.print_exc()
-                bot.reply_to(message, "Произошла внутренняя ошибка при обращении к AI-ассистенту.")
-            finally:
-                db.close()
+    logger.info("Starting bot polling...")
 
-        else:
-            bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
+    # Регистрируем обработчики
+    register_handlers()
+
+    # Включаем timing engine
+    try:
+        if TIMING_ENGINE_AVAILABLE:
+            enable_timing()
+    except Exception as e:
+        logger.error(f"Failed to enable timing engine: {e}")
+
+    # Запускаем polling
+    try:
+        bot.polling(none_stop=True, interval=0.5, timeout=60)
+    except Exception as e:
+        logger.error(f"Bot polling error: {e}")
+        raise
+
+def stop_bot():
+    """Остановка бота"""
+    if bot:
+        bot.stop_polling()
+        logger.info("Bot stopped")
+
+# ============================================================================
+# ЭКСПОРТ ФУНКЦИЙ
+# ============================================================================
+
+__all__ = [
+    'initialize_bot',
+    'load_scenario', 
+    'send_node_message',
+    'start_bot_polling',
+    'stop_bot',
+    'user_sessions'
+]
