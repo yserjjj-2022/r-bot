@@ -155,6 +155,17 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     # --- Основная функция отправки сообщений ---
     def send_node_message(chat_id, node_id):
         db = SessionLocal()
+
+        # ========== ЭКСТРЕННЫЙ ПАТЧ 08.10.2025 ==========
+        if node_id == 'daily_complete':
+            from datetime import datetime, date
+            if datetime.now().date() >= date(2025, 10, 8):
+                print("[EMERGENCY] Daily cutoff reached - redirecting to final_questions")
+                bot.send_message(chat_id, "🎉 Исследование завершено! Переходим к итогам...")
+                # time.sleep(1)
+                node_id = 'final_questions'  # ПОДМЕНА УЗЛА!
+        # ================================================
+
         try:
             print(f"--- [НАВИГАЦИЯ] Попытка перехода на узел: {node_id} для чата {chat_id} ---")
 
