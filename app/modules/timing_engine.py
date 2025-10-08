@@ -24,7 +24,6 @@ import time
 import re
 import logging
 from datetime import timedelta, datetime, date
-import pytz
 from typing import Dict, Any, Callable, Optional, List, Set
 
 from app.modules.database.models import ActiveTimer, utc_now
@@ -526,37 +525,90 @@ class TimingEngine:
 
     # ЗАГОТОВКИ парсеров для будущих функций
     def _parse_daily(self, cmd_str: str) -> Dict[str, Any]:
-        """ИСПРАВЛЕННЫЙ REGEX: Парсинг календарных daily команд"""
-        import pytz
-        from datetime import datetime, date, timedelta
+        """УПРОЩЕННЫЙ парсер daily команд - 4 формата поддержки"""
+        from datetime import datetime, timedelta
 
-        print(f"[SIMPLE-DAILY] Parsing: {cmd_str}")
+        print(f"[DAILY-SIMPLIFIED] Parsing: {cmd_str}")
 
-        # ИСПРАВЛЕННЫЙ паттерн (убрал двойные экранирования \\d)
-        pattern = r'^daily@(\d{1,2}):(\d{2})(?::([A-Z]{3}))?(?::until:(\d{4}-\d{2}-\d{2}))?(?::(wd))?(?:>([^\s]+))?$'
-        match = re.match(pattern, cmd_str)
+        # ФОРМАТ 1: daily@HH:MM:YYYY-MM-DD>node (УПРОЩЕННЫЙ - БЕЗ :until:)
+        pattern1 = r'^daily@(\d{1,2}):(\d{2}):(\d{4}-\d{2}-\d{2})>([^\s]+)$'
+        match1 = re.match(pattern1, cmd_str)
 
-        if match:
-            hour = int(match.group(1))
-            minute = int(match.group(2))
-            timezone_str = match.group(3) or 'MSK'
-            until_date_str = match.group(4)
-            workdays_only = bool(match.group(5))
-            on_complete_node = match.group(6)
+        if match1:
+            hour = int(match1.group(1))
+            minute = int(match1.group(2))  
+            until_date_str = match1.group(3)
+            on_complete_node = match1.group(4)
 
-            until_date = datetime.strptime(until_date_str, '%Y-%m-%d').date() if until_date_str else (datetime.now().date() + timedelta(days=1))
+            until_date = datetime.strptime(until_date_str, '%Y-%m-%d').date()
 
             result = {
                 'type': 'daily',
-                'hour': hour, 'minute': minute, 'timezone': timezone_str,
-                'until_date': until_date, 'workdays_only': workdays_only,
-                'on_complete_node': on_complete_node, 'original': cmd_str
+                'hour': hour, 'minute': minute, 'timezone': 'MSK',
+                'until_date': until_date, 'on_complete_node': on_complete_node,
+                'workdays_only': False, 'original': cmd_str
             }
-            print(f"[SIMPLE-DAILY] SUCCESS: Parsed {result}")
+            print(f"[DAILY-SIMPLIFIED] SUCCESS Format1: {result}")
             return result
-        else:
-            print(f"[SIMPLE-DAILY] FAILED to parse: {cmd_str}")
 
+        # ФОРМАТ 2: daily@HH:MM>node (АВТОМАТИЧЕСКИ ЗАВТРА)
+        pattern2 = r'^daily@(\d{1,2}):(\d{2})>([^\s]+)$'
+        match2 = re.match(pattern2, cmd_str)
+
+        if match2:
+            hour = int(match2.group(1))
+            minute = int(match2.group(2))
+            on_complete_node = match2.group(3)
+
+            # Автоматически завтра как cutoff
+            until_date = (datetime.now() + timedelta(days=1)).date()
+
+            result = {
+                'type': 'daily',
+                'hour': hour, 'minute': minute, 'timezone': 'MSK',
+                'until_date': until_date, 'on_complete_node': on_complete_node,
+                'workdays_only': False, 'original': cmd_str
+            }
+            print(f"[DAILY-SIMPLIFIED] SUCCESS Format2 (auto-tomorrow): {result}")
+            return result
+
+        # ФОРМАТ 3: daily@HH:MM:MSK:until:YYYY-MM-DD>node (ПОЛНЫЙ - ОБРАТНАЯ СОВМЕСТИМОСТЬ)
+        pattern3 = r'^daily@(\d{1,2}):(\d{2}):MSK:until:(\d{4}-\d{2}-\d{2})>([^\s]+)$'
+        match3 = re.match(pattern3, cmd_str)
+
+        if match3:
+            hour = int(match3.group(1))
+            minute = int(match3.group(2))
+            until_date_str = match3.group(3)
+            on_complete_node = match3.group(4)
+
+            until_date = datetime.strptime(until_date_str, '%Y-%m-%d').date()
+
+            result = {
+                'type': 'daily',
+                'hour': hour, 'minute': minute, 'timezone': 'MSK',
+                'until_date': until_date, 'on_complete_node': on_complete_node,
+                'workdays_only': False, 'original': cmd_str
+            }
+            print(f"[DAILY-SIMPLIFIED] SUCCESS Format3 (full): {result}")
+            return result
+
+        # ФОРМАТ 4: Старый формат для обратной совместимости
+        pattern4 = r'^daily@(\d{2}):(\d{2})([A-Z]{3})?$'
+        match4 = re.match(pattern4, cmd_str)
+
+        if match4:
+            result = {
+                'type': 'daily',
+                'hour': int(match4.group(1)), 'minute': int(match4.group(2)),
+                'timezone': match4.group(3) or 'MSK',
+                'until_date': (datetime.now() + timedelta(days=1)).date(),
+                'workdays_only': False, 'on_complete_node': None, 'original': cmd_str
+            }
+            print(f"[DAILY-SIMPLIFIED] SUCCESS Format4 (legacy): {result}")
+            return result
+
+        print(f"[DAILY-SIMPLIFIED] FAILED: {cmd_str}")
         return None
 
     def _parse_remind(self, cmd_str: str) -> Dict[str, Any]:
@@ -878,145 +930,111 @@ class TimingEngine:
 
     # ЗАГОТОВКИ исполнителей для будущих функций  
     def _execute_daily(self, command: Dict[str, Any], callback: Callable, **context) -> None:
-        """SIMPLE DAILY: Исполнитель календарной daily системы"""
-        import pytz
-        from datetime import datetime, date, timedelta
+        """УПРОЩЕННЫЙ исполнитель daily с проверкой cutoff"""
+        from datetime import datetime, timedelta
 
         session_id = context.get('session_id')
         chat_id = context.get('chat_id')
         bot = context.get('bot')
 
         if not all([session_id, chat_id, bot]):
-            print(f"[SIMPLE-DAILY] Missing context, fallback to callback")
+            print(f"[DAILY-SIMPLIFIED] Missing context, fallback")
             callback()
             return
 
-        print(f"[SIMPLE-DAILY] Starting daily cycle for session {session_id}")
+        hour = command['hour']
+        minute = command['minute'] 
+        until_date = command['until_date']
+        on_complete_node = command.get('on_complete_node')
 
-        # Добавляем daily поля в класс если их нет
+        # КРИТИЧЕСКАЯ ПРОВЕРКА: Cutoff уже достигнут?
+        current_date = datetime.now().date()
+        current_time = datetime.now()
+        target_time_today = current_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        print(f"[DAILY-SIMPLIFIED] Time: {current_time.strftime('%H:%M')}, target: {target_time_today.strftime('%H:%M')}")
+        print(f"[DAILY-SIMPLIFIED] Date: {current_date}, cutoff: {until_date}")
+
+        # СЛУЧАЙ 1: Cutoff день + время прошло → СРАЗУ К ИТОГАМ
+        if current_date == until_date and current_time > target_time_today:
+            print(f"[DAILY-SIMPLIFIED] IMMEDIATE CUTOFF: time passed on cutoff day!")
+
+            if on_complete_node:
+                try:
+                    bot.send_message(chat_id, f"🎉 Исследовательский период завершен!\n\nПереходим к итоговым вопросам...")
+                    from app.modules.telegram_handler import send_node_message
+                    send_node_message(chat_id, on_complete_node)
+                    print(f"[DAILY-SIMPLIFIED] IMMEDIATE SUCCESS → {on_complete_node}")
+                    return
+                except Exception as e:
+                    print(f"[DAILY-SIMPLIFIED] Immediate transition failed: {e}")
+
+            callback()
+            return
+
+        # СЛУЧАЙ 2: Cutoff уже прошел → ТОЖЕ К ИТОГАМ
+        if current_date > until_date:
+            print(f"[DAILY-SIMPLIFIED] CUTOFF PASSED: {current_date} > {until_date}")
+
+            if on_complete_node:
+                try:
+                    bot.send_message(chat_id, "🎉 Исследование завершено! Переходим к итогам...")
+                    from app.modules.telegram_handler import send_node_message  
+                    send_node_message(chat_id, on_complete_node)
+                    return
+                except Exception as e:
+                    print(f"[DAILY-SIMPLIFIED] Cutoff transition failed: {e}")
+
+            callback()
+            return
+
+        # СЛУЧАЙ 3: Обычная логика - запускаем daily цикл
+        print(f"[DAILY-SIMPLIFIED] Starting regular daily cycle")
+
+        # Добавляем поля если их нет
         if not hasattr(self, 'active_daily_configs'):
             self.active_daily_configs = {}
         if not hasattr(self, 'daily_participation_stats'):
             self.daily_participation_stats = {}
 
-        # Сохраняем конфигурацию для планирования
-        daily_key = f"daily_{session_id}_{command['hour']}_{command['minute']}"
+        daily_key = f"daily_{session_id}_{hour}_{minute}"
         self.active_daily_configs[daily_key] = {
-            'command': command,
-            'callback': callback,  
-            'context': context
+            'command': command, 'callback': callback, 'context': context
         }
 
         # Инициализируем статистику
         self.daily_participation_stats[daily_key] = {
             'participated_days': 0,
             'total_days': 0,
-            'start_date': datetime.now().date()
+            'start_date': current_date
         }
 
-        # Выполняем первый callback
+        # Первый callback → обычно переход к question1
         callback()
 
-        # Планируем следующий daily timer
-        self._schedule_next_daily(daily_key)
+        # Планируем следующий timer (простая версия без _schedule_next_daily)
+        def schedule_next_timer():
+            """Упрощенное планирование следующего daily"""
+            now = datetime.now()
+            tomorrow = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=1)
 
-    def _schedule_next_daily(self, daily_key: str):
-        """SIMPLE DAILY: Планирование следующего daily timer"""
-        import pytz
-        from datetime import datetime, date, timedelta
-        import time
+            if tomorrow.date() <= until_date:
+                delay_seconds = (tomorrow - now).total_seconds()
+                print(f"[DAILY-SIMPLIFIED] Next timer: {tomorrow} (in {delay_seconds/60:.1f}m)")
 
-        if daily_key not in self.active_daily_configs:
-            return
+                def next_daily_callback():
+                    print(f"[DAILY-SIMPLIFIED] Next day timer fired!")
+                    # Тот же самый daily logic
+                    self._execute_daily(command, callback, **context)
 
-        config = self.active_daily_configs[daily_key]
-        command = config['command']
-        callback = config['callback']
-        context = config['context']
-
-        hour = command['hour']
-        minute = command['minute']
-        until_date = command['until_date']
-        on_complete_node = command.get('on_complete_node')
-
-        bot = context.get('bot')
-        chat_id = context.get('chat_id')
-        session_id = context.get('session_id')
-
-        # Рассчитываем следующее время
-        now = datetime.now()
-        today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        next_daily = today if now < today else today + timedelta(days=1)
-
-        if next_daily.date() > until_date:
-            print(f"[SIMPLE-DAILY] Next daily {next_daily.date()} > cutoff {until_date}")
-            return
-
-        delay_seconds = (next_daily - now).total_seconds()
-        print(f"[SIMPLE-DAILY] Next: {next_daily} (in {delay_seconds/60:.1f}m)")
-
-        def simple_daily_callback():
-            """ПРОСТАЯ daily логика без сложностей"""
-            current_date = datetime.now().date()
-            print(f"[SIMPLE-DAILY] Timer fired! {current_date} vs {until_date}")
-
-            # Обновляем статистику
-            if daily_key in self.daily_participation_stats:
-                stats = self.daily_participation_stats[daily_key]
-                stats['total_days'] += 1
-
-            if current_date > until_date:
-                # ПЕРИОД ЗАКОНЧЕН
-                print(f"[SIMPLE-DAILY] Period ended → final questions")
-
-                # Статистика
-                if daily_key in self.daily_participation_stats:
-                    stats = self.daily_participation_stats[daily_key]
-                    stats_msg = f"🎉 Исследовательский период завершен!\n\n📊 Ваше участие: {stats['participated_days']} из {stats['total_days']} дней\n\nПереходим к итоговым вопросам..."
-                    bot.send_message(chat_id, stats_msg)
-                    time.sleep(2)
-
-                # Переход к итогам
-                if on_complete_node:
-                    try:
-                        from app.modules.telegram_handler import send_node_message
-                        send_node_message(chat_id, on_complete_node)
-                        print(f"[SIMPLE-DAILY] SUCCESS → {on_complete_node}")
-                    except Exception as e:
-                        print(f"[SIMPLE-DAILY] Failed: {e}")
-                        bot.send_message(chat_id, f"🔄 Для итогов: /start → {on_complete_node}")
-
-                self.active_daily_configs.pop(daily_key, None)
-
+                timer = threading.Timer(delay_seconds, next_daily_callback)
+                timer.daemon = True
+                timer.start()
+                self.active_timers[daily_key] = timer
             else:
-                # ОБЫЧНЫЙ ДЕНЬ
-                print(f"[SIMPLE-DAILY] Regular day → question1")
+                print(f"[DAILY-SIMPLIFIED] No more timers - reached cutoff")
 
-                try:
-                    from app.modules.telegram_handler import send_node_message
-                    send_node_message(chat_id, 'question1')
-                    print(f"[SIMPLE-DAILY] SUCCESS → question1")
-
-                    # Отмечаем участие
-                    if daily_key in self.daily_participation_stats:
-                        self.daily_participation_stats[daily_key]['participated_days'] += 1
-
-                    # Следующий timer
-                    self._schedule_next_daily(daily_key)
-
-                except Exception as e:
-                    print(f"[SIMPLE-DAILY] Failed question1: {e}")
-
-        # Создаем timer
-        timer = threading.Timer(delay_seconds, simple_daily_callback)
-        timer.daemon = True
-        timer.start()
-
-        if daily_key in self.active_timers:
-            self.active_timers[daily_key].cancel()
-
-        self.active_timers[daily_key] = timer
-        print(f"[SIMPLE-DAILY] Timer scheduled ✅")
+        schedule_next_timer()
 
     def _execute_remind(self, command: Dict[str, Any], callback: Callable, **context) -> None:
         """ЗАГОТОВКА: Исполнитель системы напоминаний"""
