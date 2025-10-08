@@ -526,16 +526,37 @@ class TimingEngine:
 
     # ЗАГОТОВКИ парсеров для будущих функций
     def _parse_daily(self, cmd_str: str) -> Dict[str, Any]:
-        """ЗАГОТОВКА: Парсинг daily команд - daily@09:00MSK"""
-        match = re.match(r'^daily@(\d{2}):(\d{2})([A-Z]{3})?$', cmd_str)
+        """ИСПРАВЛЕННЫЙ REGEX: Парсинг календарных daily команд"""
+        import pytz
+        from datetime import datetime, date, timedelta
+
+        print(f"[SIMPLE-DAILY] Parsing: {cmd_str}")
+
+        # ИСПРАВЛЕННЫЙ паттерн (убрал двойные экранирования \\d)
+        pattern = r'^daily@(\d{1,2}):(\d{2})(?::([A-Z]{3}))?(?::until:(\d{4}-\d{2}-\d{2}))?(?::(wd))?(?:>([^\s]+))?$'
+        match = re.match(pattern, cmd_str)
+
         if match:
-            return {
-                'type': 'daily', 
-                'hour': int(match.group(1)), 
-                'minute': int(match.group(2)), 
-                'timezone': match.group(3) or 'UTC', 
-                'original': cmd_str
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            timezone_str = match.group(3) or 'MSK'
+            until_date_str = match.group(4)
+            workdays_only = bool(match.group(5))
+            on_complete_node = match.group(6)
+
+            until_date = datetime.strptime(until_date_str, '%Y-%m-%d').date() if until_date_str else (datetime.now().date() + timedelta(days=1))
+
+            result = {
+                'type': 'daily',
+                'hour': hour, 'minute': minute, 'timezone': timezone_str,
+                'until_date': until_date, 'workdays_only': workdays_only,
+                'on_complete_node': on_complete_node, 'original': cmd_str
             }
+            print(f"[SIMPLE-DAILY] SUCCESS: Parsed {result}")
+            return result
+        else:
+            print(f"[SIMPLE-DAILY] FAILED to parse: {cmd_str}")
+
         return None
 
     def _parse_remind(self, cmd_str: str) -> Dict[str, Any]:
