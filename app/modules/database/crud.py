@@ -406,22 +406,39 @@ def get_current_state_context(db: Session, user_id: int, session_id: int) -> str
 
 def get_all_user_states(db: Session, user_id: int, session_id: int) -> dict:
     """
-    Получает все переменные состояния для пользователя в текущей сессии
-    и возвращает их в виде словаря.
+    Получает все переменные состояния для пользователя в текущей сессии,
+    корректно преобразует типы и возвращает готовый для использования словарь.
     """
-    from . import models  # Импортируем модели внутри функции
+    # Безопасный импорт, если функция вызывается из разных мест
+    from . import models
 
     try:
-        # Запрос всех состояний для данной сессии
-        user_states = db.query(models.UserState).filter(
+        # 1. Запрос всех состояний для данной сессии из БД
+        user_states_query = db.query(models.UserState).filter(
             models.UserState.user_id == user_id,
             models.UserState.session_id == session_id
-        ).all()
+        )
+        user_states = user_states_query.all()
         
-        # Преобразуем список объектов в словарь {'key': value}
-        states_dict = {state.key: state.value for state in user_states}
+        # 2. Преобразование в словарь с правильными именами полей
+        # ИСПРАВЛЕНИЕ: Используем state.statekey и state.statevalue
+        states_dict = {state.statekey: state.statevalue for state in user_states}
         
-        # Устанавливаем значения по умолчанию, если их нет
+        # 3. ОПТИМИЗАЦИЯ: Преобразуем значения из строк в числа, где это возможно
+        for key, value in states_dict.items():
+            try:
+                # Пытаемся преобразовать в число (float, если есть точка, иначе int)
+                if isinstance(value, str): # Проверяем, что это строка, перед конвертацией
+                    if '.' in value:
+                        states_dict[key] = float(value)
+                    else:
+                        states_dict[key] = int(value)
+            except (ValueError, TypeError):
+                # Если не получается (например, значение "beginner"), оставляем как строку
+                pass
+        
+        # 4. Устанавливаем значения по умолчанию для ключевых переменных, если их нет
+        # Это гарантирует, что игра не упадет на первом шаге
         if 'score' not in states_dict:
             states_dict['score'] = 0
         if 'capital_before' not in states_dict:
@@ -430,7 +447,6 @@ def get_all_user_states(db: Session, user_id: int, session_id: int) -> dict:
         return states_dict
         
     except Exception as e:
-        print(f"ОШИБКА при получении всех состояний пользователя: {e}")
-        # Возвращаем базовый словарь в случае любой ошибки
+        print(f"❌ КРИТИЧЕСКАЯ ОШИБКА в get_all_user_states: {e}")
+        # В случае любой непредвиденной ошибки возвращаем безопасный дефолт
         return {'score': 0, 'capital_before': 0}
-
