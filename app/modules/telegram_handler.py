@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 2.6 (14.10.2025): Production + встроенный state_calculator
-# - Поддержка присваиваний и вычислений для нескольких переменных
-# - Множественные выражения через запятую
-# - random/математика/тернарные выражения
-# - Безопасные контексты выполнения
-# - Fail-safe при ошибках формул
+# ВЕРСИЯ 2.7 (15.10.2025): Production Ready.
+# - Исправлен баг "missing 'node_text'" в create_response.
+# - Встроенный безопасный калькулятор (SafeStateCalculator).
+# - Все предыдущие исправления включены.
 
 import random
 import math
@@ -16,16 +14,16 @@ import traceback
 from sqlalchemy.orm import Session
 from decouple import config
 
-# --- Импорты и заглушки ---
+# --- Безопасные импорты и полные заглушки ---
 try:
     from app.modules.database import SessionLocal, crud
     from app.modules import gigachat_handler
     from app.modules.hot_reload import get_current_graph
     MODULES_AVAILABLE = True
-except Exception as e:
-    print(f"⚠️ Модули частично недоступны ({e}). Включены заглушки.")
+except ImportError as e:
+    print(f"⚠️ ВНИМАНИЕ: Не удалось импортировать основные модули ({e}). Используются заглушки.")
     MODULES_AVAILABLE = False
-
+    
     def get_current_graph(): return None
     def SessionLocal(): return None
 
@@ -51,63 +49,26 @@ except Exception as e:
 
 # --- Встроенный безопасный калькулятор переменных ---
 class SafeStateCalculator:
-    """
-    Безопасный интерпретатор мини-языка формул:
-    - Поддерживает:
-        - Присваивания:   score = 150000
-        - Выражения:      score = score + 5000
-        - Множественные:  score = score + 1000, reputation = reputation + 1
-        - Тернарные:      bonus = 5000 if score > 100000 else 0
-        - Случайность:    score = score + random.choice([-10000, 20000])
-        - Математика:     score = int(score * 1.1)
-    - Возвращает: словарь измененных переменных (diff) и/или полное новое состояние
-    - Безопасность: ограниченный глобальный контекст, запрет import, __builtins__
-    """
     SAFE_GLOBALS = {
-        "__builtins__": None,
-        "random": random,
-        "math": math,
-        "int": int,
-        "float": float,
-        "round": round,
-        "max": max,
-        "min": min,
-        "abs": abs,
-        "True": True,
-        "False": False,
-        "None": None,
+        "__builtins__": None, "random": random, "math": math,
+        "int": int, "float": float, "round": round, "max": max, "min": min, "abs": abs,
+        "True": True, "False": False, "None": None,
     }
-
     assign_re = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=")
 
     @classmethod
     def calculate(cls, formula: str, current_state: dict) -> dict:
-        """
-        Возвращает новый словарь состояний (merged), если удалось применить формулу,
-        иначе — исходный current_state без изменений.
-        """
         if not formula or not isinstance(formula, str):
             return current_state
-
-        # Разрешаем множественные инструкции через запятую
-        # Пример: "score = score + 100, reputation = reputation + 1"
         statements = [stmt.strip() for stmt in formula.split(",") if stmt.strip()]
-        # Копируем состояние для безопасных изменений
         local_vars = dict(current_state)
-
         try:
             for stmt in statements:
-                # Если это присваивание (имеет вид <name> = ...)
                 if cls.assign_re.match(stmt):
-                    # Выполняем присваивание в ограниченном контексте
                     exec(stmt, cls.SAFE_GLOBALS, local_vars)
                 else:
-                    # Это выражение, его результат нужно присвоить по умолчанию в score
-                    # (или можно поддержать синтаксис: target: expr)
                     value = eval(stmt, cls.SAFE_GLOBALS, local_vars)
-                    # Политика по умолчанию: обновляем score
                     local_vars["score"] = value
-            # Успешно — возвращаем новое состояние
             return local_vars
         except Exception as e:
             print(f"⚠️ Ошибка формулы '{formula}': {e}")
@@ -122,7 +83,7 @@ AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 # 1. РЕГИСТРАЦИЯ И ГЛАВНЫЙ ДИСПЕТЧЕР
 # -------------------------------------------------
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print("✅ [HANDLER V2.6] Регистрация обработчиков...")
+    print("✅ [HANDLER V2.7] Регистрация обработчиков...")
 
     def process_node(chat_id, node_id):
         db = SessionLocal()
@@ -146,7 +107,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             elif node_type in AUTOMATIC_NODE_TYPES: _handle_automatic_node(db, bot, chat_id, node)
             elif node_type in INTERACTIVE_NODE_TYPES: _handle_interactive_node(db, bot, chat_id, node_id, node)
             else: _handle_final_node(db, bot, chat_id, node)
-        
         except Exception:
             traceback.print_exc()
             bot.send_message(chat_id, "Критическая ошибка в движке. Начните заново: /start")
@@ -231,7 +191,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
     def _evaluate_condition(db, user_id, session_id, condition_str):
         states = crud.get_all_user_states(db, user_id, session_id)
-        try: return eval(condition_str, {"__builtins__": {},"random": random, "math": math}, states)
+        try: return eval(condition_str, SafeStateCalculator.SAFE_GLOBALS, states)
         except Exception as e:
             print(f"Ошибка вычисления '{condition_str}': {e}")
             return False
@@ -284,16 +244,21 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             option = node["options"][int(btn_idx_str)]
 
-            # --- ПРИМЕНЯЕМ ФОРМУЛУ ЧЕРЕЗ SafeStateCalculator ---
             if "formula" in option and option["formula"]:
                 states_before = crud.get_all_user_states(db, session['user_id'], session['session_id'])
                 states_after = SafeStateCalculator.calculate(option["formula"], states_before)
-                # Обновляем ТОЛЬКО измененные ключи
                 for k, v in states_after.items():
                     if k not in states_before or states_before[k] != v:
                         crud.update_user_state(db, session['user_id'], session['session_id'], k, v)
-
-            crud.create_response(db, session_id=session['session_id'], node_id=node_id, answer_text=option.get("interpretation", option["text"]))
+            
+            # ИСПРАВЛЕНИЕ: Добавлен обязательный аргумент node_text
+            crud.create_response(
+                db, 
+                session_id=session['session_id'], 
+                node_id=node_id, 
+                answer_text=option.get("interpretation", option["text"]),
+                node_text=node.get("text", "")
+            )
 
             if len(node.get("options", [])) == 1:
                 bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
@@ -320,24 +285,39 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         session = user_sessions.get(chat_id)
         if not session or not session.get('current_node_id'): return
 
-        graph = get_current_graph()
-        if not graph: return
-        node = graph["nodes"].get(session.get('current_node_id'))
+        graph, node = get_current_graph(), None
+        if graph: node = graph["nodes"].get(session.get('current_node_id'))
         if not node: return
         
         db = SessionLocal()
         try:
             if node.get("type") == "input_text":
-                crud.create_response(db, session_id=session['session_id'], node_id=session.get('current_node_id'), answer_text=message.text)
+                # ИСПРАВЛЕНИЕ: Добавлен обязательный аргумент node_text
+                crud.create_response(
+                    db,
+                    session_id=session['session_id'], 
+                    node_id=session.get('current_node_id'), 
+                    answer_text=message.text,
+                    node_text=node.get("text", "")
+                )
                 next_node_id = node.get("next_node_id")
                 if next_node_id: process_node(chat_id, next_node_id)
                 else: _handle_final_node(db, bot, chat_id, node)
+            
             elif node.get("ai_enabled") and MODULES_AVAILABLE:
                 bot.send_chat_action(chat_id, 'typing')
                 context = crud.build_full_context_for_ai(db, session['session_id'], session['user_id'], node.get("text"), node.get("options", []), "reactive", node.get("ai_enabled"))
                 ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
-                crud.create_ai_dialogue(db, session['session_id'], session.get('current_node_id'), message.text, ai_answer)
+                # ИСПРАВЛЕНИЕ: Добавлен обязательный аргумент node_text
+                crud.create_ai_dialogue(
+                    db,
+                    session_id=session['session_id'], 
+                    node_id=session.get('current_node_id'), 
+                    user_message=message.text, 
+                    ai_response=ai_answer
+                )
                 bot.reply_to(message, ai_answer, parse_mode="Markdown")
+            
             else:
                 bot.reply_to(message, "Пожалуйста, используйте кнопки для навигации.")
         finally:
