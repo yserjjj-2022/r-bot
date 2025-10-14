@@ -1,388 +1,273 @@
 # -*- coding: utf-8 -*-
-# app/modules/telegram_handler_CLEAN_FULL.py
-# ВЕРСИЯ 9.1 (ZERO-TIME): Полностью удалена интеграция с timing_engine.
-# Сохранен весь остальной функционал: AI, DB, State, Buttons, etc.
+# app/modules/telegram_handler_v2.py
+# ВЕРСИЯ 2.2 (14.10.2025): Финальная полная версия.
+# Включает все согласованные доработки: динамические переменные, заглушки,
+# обработку input_text, ai_enabled и защиту от повторных нажатий.
 
 import random
 import re
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import traceback
-import operator
 from sqlalchemy.orm import Session
 from decouple import config
 
-# Безопасные импорты, чтобы код работал даже если модули отсутствуют
+# --- Безопасные импорты и полные заглушки ---
 try:
     from app.modules.database import SessionLocal, crud
-    from app.modules import gigachat_handler
-    from app.modules import state_calculator
+    from app.modules import gigachat_handler, state_calculator
     from app.modules.hot_reload import get_current_graph
     MODULES_AVAILABLE = True
 except ImportError as e:
-    print(f"ПРЕДУПРЕЖДЕНИЕ: Один или несколько основных модулей не найдены: {e}")
+    print(f"⚠️ ВНИМАНИЕ: Не удалось импортировать основные модули ({e}). Используются заглушки.")
     MODULES_AVAILABLE = False
-    # Создаем заглушки, чтобы приложение не падало
+    
     def get_current_graph(): return None
+    def SessionLocal(): return None
+
     class crud:
         @staticmethod
-        def get_or_create_user(db, telegram_id): pass
+        def get_or_create_user(db, telegram_id): return type('obj', (), {'id': 1, 'telegram_id': telegram_id})()
         @staticmethod
-        def create_session(db, user_id, graph_id): return type('obj', (object,), {'id': 0})()
-        @staticmethod
-        def get_user_state(db, user_id, session_id, key, default): return default
-        @staticmethod
-        def update_user_state(db, user_id, session_id, key, value): pass
-        @staticmethod
-        def create_response(db, session_id, node_id, node_text, answer_text): pass
+        def create_session(db, user_id, graph_id): return type('obj', (), {'id': 1, 'user_id': user_id})()
         @staticmethod
         def end_session(db, session_id): pass
         @staticmethod
-        def build_full_context_for_ai(db, session_id, user_id, current_question, options, event_type, ai_persona): return ""
+        def create_response(db, session_id, node_id, answer_text, node_text=""): pass
+        @staticmethod
+        def get_user_state(db, user_id, session_id, key, default=None): return default if default is not None else 0
+        @staticmethod
+        def update_user_state(db, user_id, session_id, key, value): pass
+        @staticmethod
+        def get_all_user_states(db, user_id, session_id): return {'score': 0}
         @staticmethod
         def create_ai_dialogue(db, session_id, node_id, user_message, ai_response): pass
-    def SessionLocal(): return None
+        @staticmethod
+        def build_full_context_for_ai(db, session_id, user_id, q, opts, et, ap): return "Контекст для AI"
 
+    class state_calculator:
+        @staticmethod
+        def calculate_new_state(formula, current_state):
+            for var, value in current_state.items():
+                if var in formula: formula = formula.replace(var, str(value))
+            try: return {'score': eval(formula)}
+            except: return current_state
+
+# --- Глобальные переменные и константы ---
 user_sessions = {}
+INTERACTIVE_NODE_TYPES = ["task", "input_text", "ai_proactive"]
+AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 
-# --- Вспомогательные функции ---
-
-def is_final_node(node_data):
-    """
-    УПРОЩЕНО: Проверяет, является ли узел конечным.
-    Больше не учитывает timing-команды.
-    """
-    if not node_data:
-        return True
-
-    has_next_node = (node_data.get("next_node_id") or 
-                     node_data.get("then_node_id") or 
-                     node_data.get("else_node_id"))
-    if has_next_node:
-        return False
-
-    if "options" in node_data and node_data["options"]:
-        for option in node_data["options"]:
-            if option.get("next_node_id"):
-                return False
-
-    if "branches" in node_data and node_data["branches"]:
-        return False
-
-    return True
-
-def _evaluate_condition(condition_str: str, db: Session, user_id: int, session_id: int) -> bool:
-    """Безопасно вычисляет строку-условие."""
-    ops = {'>': operator.gt, '<': operator.lt, '>=': operator.ge, '<=': operator.le, '==': operator.eq, '!=': operator.ne}
-    try:
-        match = re.match(r'\\{(\\w+)\\}\\s*([<>=!]+)\\s*(.+)', condition_str)
-        if not match:
-            print(f"ОШИБКА: Некорректный формат условия: {condition_str}")
-            return False
-        key, op_str, value_str = match.groups()
-        actual_value_str = crud.get_user_state(db, user_id, session_id, key, '0')
-        actual_value = float(actual_value_str)
-        comparison_value = float(value_str.strip())
-        return ops[op_str](actual_value, comparison_value)
-    except (ValueError, KeyError, TypeError) as e:
-        print(f"ОШИБКА при вычислении условия '{condition_str}': {e}")
-        return False
-
-def parse_ai_proactive_command(type_field: str):
-    """Парсит строку type узла формата: ai_proactive: role("локальный_промпт")"""
-    AI_PROACTIVE_REGEX = re.compile(r'^ai_proactive:\\s*([A-Za-z_][\\w-])\\s*\\"([^\\"]+)\\"\\s*$')
-    if not isinstance(type_field, str):
-        return None, None
-    m = AI_PROACTIVE_REGEX.match(type_field.strip())
-    if not m:
-        return None, None
-    return m.group(1).strip(), m.group(2).strip()
-
-# --- Основная логика ---
-
+# -------------------------------------------------
+# 1. РЕГИСТРАЦИЯ И ГЛАВНЫЙ ДИСПЕТЧЕР
+# -------------------------------------------------
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    """
-    УПРОЩЕНО: Регистрирует обработчики.
-    Больше не активирует timing_engine.
-    """
-    print("✅ [CLEAN HANDLER] Регистрация обработчиков...")
+    print("✅ [HANDLER V2.2] Регистрация обработчиков...")
 
-    def send_node_message(chat_id, node_id):
-        """
-        КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Полностью удалена вся логика, связанная с timing.
-        Только отправка сообщений и мгновенные переходы.
-        """
+    def process_node(chat_id, node_id):
         db = SessionLocal()
         try:
-            print(f"--- [НАВИГАЦИЯ] Переход на узел: {node_id} для чата {chat_id} ---")
+            graph, session = get_current_graph(), user_sessions.get(chat_id)
+            node = graph["nodes"].get(str(node_id)) if graph else None
 
-            if not MODULES_AVAILABLE:
-                bot.send_message(chat_id, "Ошибка конфигурации: основные модули недоступны.")
-                return
-                
-            graph_data = get_current_graph()
-            if not graph_data:
-                bot.send_message(chat_id, "Сценарий временно недоступен.")
-                return
-
-            node = graph_data["nodes"].get(str(node_id))
-            session_info = user_sessions.get(chat_id)
-
-            if not node:
-                bot.send_message(chat_id, "Ошибка: узел не найден. Начните заново: /start.")
+            if not all([graph, session, node]):
+                bot.send_message(chat_id, "Ошибка сессии/сценария. Начните заново: /start")
                 if chat_id in user_sessions: del user_sessions[chat_id]
                 return
 
-            if not session_info:
-                bot.send_message(chat_id, "Игра завершена. Для нового начала: /start.")
-                return
+            session['current_node_id'] = node_id
+            node_type = node.get("type", "").split(':')[0]
+            print(f"🚀 [PROCESS] ChatID: {chat_id}, NodeID: {node_id}, Type: {node_type}")
 
-            session_info['node_id'] = node_id
-            user = crud.get_or_create_user(db, chat_id)
-            node_type = node.get("type", "question")
-
-            # --- УДАЛЕНО: обработка типа "pause" и вся логика timing_engine ---
-
-            if node_type == "condition":
-                result = _evaluate_condition(node.get("condition_string", ""), db, user.id, session_info['session_id'])
-                next_node_id_next = node.get("then_node_id") if result else node.get("else_node_id")
-                if next_node_id_next: send_node_message(chat_id, next_node_id_next)
-                return
-
-            if node_type == "randomizer":
-                branches = node.get("branches", [])
-                if not branches: return
-                weights = [branch.get("weight", 1) for branch in branches]
-                chosen_branch = random.choices(branches, weights=weights, k=1)[0]
-                next_node_id_next = chosen_branch.get("next_node_id")
-                if next_node_id_next: send_node_message(chat_id, next_node_id_next)
-                return
-            
-            ai_role, local_prompt = parse_ai_proactive_command(node_type)
-            is_proactive = ai_role is not None
-
-            text_template = node.get("text", "")
-            if node.get("type") == "state":
-                text_template = node.get("state_message", "Состояние обновлено.")
-
-            current_score_str = crud.get_user_state(db, user.id, session_info['session_id'], 'score', '0')
-            capital_before_str = crud.get_user_state(db, user.id, session_info['session_id'], 'capital_before', '0')
-            state_variables = {'score': int(float(current_score_str)), 'capital_before': int(float(capital_before_str))}
-            try:
-                formatted_text = text_template.format(**state_variables)
-            except (KeyError, ValueError):
-                formatted_text = text_template
-            final_text_to_send = formatted_text.replace('\\n', '\n')
-
-            markup = InlineKeyboardMarkup()
-            options = node.get("options", [])
-            callback_prefix = f"{node_id}"
-
-            if is_proactive:
-                opts_for_context = options if node.get("type") != "circumstance" else [{"text": node.get("option_text", "Далее")}]
-                try:
-                    system_prompt_context = crud.build_full_context_for_ai(db, session_info['session_id'], user.id, local_prompt, opts_for_context, node.get("event_type"), ai_role)
-                    ai_message = gigachat_handler.get_ai_response(user_message="", system_prompt=system_prompt_context)
-                    if ai_message:
-                        bot.send_message(chat_id, ai_message, parse_mode="Markdown")
-                except Exception:
-                    traceback.print_exc()
-
-            if node.get("type") == "circumstance":
-                markup.add(InlineKeyboardButton(text=node.get('option_text', 'Далее'), callback_data=f"{callback_prefix}|0|{node.get('next_node_id')}"))
-            elif (node.get("type") in ["question", "task"] or is_proactive) and options:
-                unconditional_next_id = node.get("next_node_id")
-                display_options = options.copy()
-                if node.get("randomize_options", False):
-                    random.shuffle(display_options)
-                for new_idx, option in enumerate(display_options):
-                    original_idx = options.index(option)
-                    next_node_id_for_button = option.get("next_node_id") or unconditional_next_id
-                    if not next_node_id_for_button: continue
-                    markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{callback_prefix}|{original_idx}|{next_node_id_for_button}"))
-
-            image_id = node.get("image_id")
-            if image_id:
-                server_url = config("SERVER_URL", default="")
-                image_url = f"{server_url}/images/{image_id}"
-                try:
-                    bot.send_photo(chat_id=chat_id, photo=image_url, caption=final_text_to_send, reply_markup=markup, parse_mode="Markdown")
-                except Exception:
-                    bot.send_message(chat_id, f"{final_text_to_send}\n\n*(Не удалось загрузить изображение)*", reply_markup=markup, parse_mode="Markdown")
-            else:
-                bot.send_message(chat_id, final_text_to_send, reply_markup=markup, parse_mode="Markdown")
-
-            if is_final_node(node):
-                print(f"--- [СЕССИЯ] Завершение на финальном узле {node_id} ---")
-                if db: crud.end_session(db, session_info['session_id'])
-                if chat_id in user_sessions: del user_sessions[chat_id]
-                return
-
-            is_interactive_node = (
-                node.get("type") in ["question", "task", "circumstance", "input_text"] and
-                (node.get("options") and len(node.get("options")) > 0 or node.get("type") == "input_text")
-            )
-
-            if not is_interactive_node and next_node_id_next:
-                send_node_message(chat_id, next_node_id_next)
-
+            if node.get("timing"): _handle_timing_node(db, bot, chat_id, node)
+            elif node_type in AUTOMATIC_NODE_TYPES: _handle_automatic_node(db, bot, chat_id, node)
+            elif node_type in INTERACTIVE_NODE_TYPES: _handle_interactive_node(db, bot, chat_id, node)
+            else: _handle_final_node(db, bot, chat_id, node)
+        
         except Exception:
-            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в send_node_message для узла {node_id}!!!")
             traceback.print_exc()
-            bot.send_message(chat_id, "Произошла внутренняя ошибка. Начните заново: /start")
-            if chat_id in user_sessions: del user_sessions[chat_id]
+            bot.send_message(chat_id, "Критическая ошибка в движке. Начните заново: /start")
         finally:
             if db: db.close()
 
+    # -------------------------------------------------
+    # 2. ОБРАБОТЧИКИ ТИПОВ УЗЛОВ
+    # -------------------------------------------------
+    def _handle_automatic_node(db, bot, chat_id, node):
+        node_type, next_node_id = node.get("type"), None
+        if node_type == "state":
+            if node.get("text"): _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
+            next_node_id = node.get("next_node_id")
+        elif node_type == "condition":
+            s = user_sessions[chat_id]
+            res = _evaluate_condition(db, s['user_id'], s['session_id'], node.get("text", "False"))
+            tr = node.get("transitions", [])
+            next_node_id = (tr[0].get("next_node_id") if res and len(tr) > 0 else (tr[1].get("next_node_id") if not res and len(tr) > 1 else None))
+            print(f"⚖️ [CONDITION] '{node.get('text')}' -> {res}. Next: {next_node_id}")
+        elif node_type == "randomizer":
+            br = node.get("branches", [])
+            if br: next_node_id = random.choices(br, weights=[b.get("weight", 1) for b in br], k=1)[0].get("next_node_id")
+            print(f"🎲 [RANDOMIZER] Выбрана ветка -> {next_node_id}")
+        if next_node_id: process_node(chat_id, next_node_id)
+        else: _handle_final_node(db, bot, chat_id, node)
+
+    def _handle_interactive_node(db, bot, chat_id, node):
+        if node.get("type").startswith("ai_proactive"):
+            try:
+                role, prompt = _parse_ai_proactive_prompt(node.get("type"))
+                if role and prompt and MODULES_AVAILABLE:
+                    s = user_sessions[chat_id]
+                    context = crud.build_full_context_for_ai(db, s['session_id'], s['user_id'], prompt, node.get("options",[]), None, role)
+                    ai_text = gigachat_handler.get_ai_response("", system_prompt=context)
+                    bot.send_message(chat_id, ai_text, parse_mode="Markdown")
+            except Exception as e: print(f"Ошибка в AI_PROACTIVE: {e}")
+        _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get("text", "(нет текста)")), _build_keyboard(node))
+
+    def _handle_final_node(db, bot, chat_id, node):
+        print(f"🏁 [SESSION END] ChatID: {chat_id}, Final Node: {node.get('id')}")
+        if node.get("text"): _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get("text")))
+        bot.send_message(chat_id, "Игра завершена. Для начала новой игры используйте /start")
+        s_id = user_sessions.get(chat_id, {}).get('session_id')
+        if s_id: crud.end_session(db, s_id)
+        if chat_id in user_sessions: del user_sessions[chat_id]
+
+    def _handle_timing_node(db, bot, chat_id, node):
+        print(f"⏰ [TIMING STUB] Обнаружена команда '{node.get('timing')}'. Игнорируется.")
+        next_node_id = node.get("next_node_id")
+        if next_node_id: process_node(chat_id, next_node_id)
+        else: _handle_final_node(db, bot, chat_id, node)
+
+    # -------------------------------------------------
+    # 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+    # -------------------------------------------------
+    def _format_text(db, chat_id, t):
+        s = user_sessions[chat_id]
+        states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
+        try: return t.format(**states)
+        except Exception: return t
+
+    def _build_keyboard(node):
+        markup = InlineKeyboardMarkup()
+        options = node.get("options", [])
+        if not options: return None
+        for i, option in enumerate(options):
+            markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{node.get('id')}|{i}"))
+        return markup
+        
+    def _send_message(bot, chat_id, node, text, markup=None):
+        try:
+            img = node.get("image_id")
+            if img and config("SERVER_URL", default=None):
+                bot.send_photo(chat_id, f"{config('SERVER_URL')}/images/{img}", caption=text, reply_markup=markup, parse_mode="Markdown")
+            else:
+                bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+        except Exception as e:
+            print(f"Ошибка отправки сообщения: {e}")
+            bot.send_message(chat_id, text)
+
+    def _evaluate_condition(db, user_id, session_id, condition_str):
+        states = crud.get_all_user_states(db, user_id, session_id)
+        try: return eval(condition_str, {"__builtins__": {}, "random": random}, states)
+        except Exception as e:
+            print(f"Ошибка вычисления '{condition_str}': {e}")
+            return False
+
+    def _parse_ai_proactive_prompt(type_str):
+        match = re.match(r'ai_proactive:(\w+)\("(.+)"\)', type_str)
+        return match.groups() if match else (None, None)
+
+    # -------------------------------------------------
+    # 4. ОБРАБОТЧИКИ TELEGRAM API
+    # -------------------------------------------------
     @bot.message_handler(commands=['start'])
-    def start_interview(message):
+    def start_game(message):
         chat_id = message.chat.id
+        print(f"🎮 [GAME START] Новая игра для ChatID: {chat_id}")
         db = SessionLocal()
         try:
-            if not MODULES_AVAILABLE:
-                bot.send_message(chat_id, "Ошибка конфигурации: основные модули недоступны.")
+            if chat_id in user_sessions: crud.end_session(db, user_sessions[chat_id]['session_id'])
+            graph = get_current_graph()
+            if not graph or not MODULES_AVAILABLE:
+                bot.send_message(chat_id, "Сценарий недоступен или модули не загружены.")
                 return
-
-            graph_data = get_current_graph()
-            if not graph_data:
-                bot.send_message(chat_id, "Сценарий временно недоступен.")
-                return
-
             user = crud.get_or_create_user(db, telegram_id=chat_id)
-            session = crud.create_session(db, user_id=user.id, graph_id=graph_data["graph_id"])
-            user_sessions[chat_id] = {'session_id': session.id, 'node_id': None}
-            send_node_message(chat_id, graph_data["start_node_id"])
+            session_db = crud.create_session(db, user_id=user.id, graph_id=graph.get("graph_id", "default"))
+            user_sessions[chat_id] = {'session_id': session_db.id, 'user_id': user.id, 'last_message_id': None}
+            process_node(chat_id, graph["start_node_id"])
         finally:
             if db: db.close()
 
     @bot.callback_query_handler(func=lambda call: True)
-    def handle_callback_query(call):
-        chat_id = call.message.chat.id
-        session_data = user_sessions.get(chat_id)
-        if not session_data:
-            bot.answer_callback_query(call.id, "Сессия истекла. Начните заново: /start.", show_alert=True)
+    def button_callback(call):
+        chat_id, session = call.message.chat.id, user_sessions.get(call.message.chat.id)
+        if not session:
+            bot.answer_callback_query(call.id, "Сессия истекла.", show_alert=True)
             return
+
+        if call.message.message_id == session.get('last_message_id'):
+            bot.answer_callback_query(call.id)
+            return
+        session['last_message_id'] = call.message.message_id
+        bot.answer_callback_query(call.id)
 
         db = SessionLocal()
         try:
-            if not MODULES_AVAILABLE: return
+            node_id, btn_idx_str = call.data.split('|')
+            node = get_current_graph()["nodes"].get(node_id)
+            option = node["options"][int(btn_idx_str)]
             
-            node_id_from_call, button_idx_str, next_node_id = call.data.split('|', 2)
-            button_idx = int(button_idx_str)
-
-            graph_data = get_current_graph()
-            node = graph_data["nodes"].get(node_id_from_call) if graph_data else None
-            if not node:
-                bot.answer_callback_query(call.id, "Ошибка: Действие для этого сообщения устарело.", show_alert=True)
-                return
-
-            user = crud.get_or_create_user(db, chat_id)
-            node_type = node.get("type")
+            if "formula" in option and option["formula"]:
+                states = crud.get_all_user_states(db, session['user_id'], session['session_id'])
+                new_states = state_calculator.calculate_new_state(option["formula"], states)
+                for k, v in new_states.items(): crud.update_user_state(db, session['user_id'], session['session_id'], k, v)
             
-            text_to_save_in_db, pressed_button_text, formula_to_execute = "N/A", "N/A", None
+            crud.create_response(db, session_id=session['session_id'], node_id=node_id, answer_text=option.get("interpretation", option["text"]))
 
-            if node_type == "circumstance":
-                pressed_button_text = node.get("option_text", "Далее")
-                text_to_save_in_db = pressed_button_text
-                formula_to_execute = node.get("formula")
-            elif (node_type in ["task", "question"] or "ai_proactive:" in str(node_type)) and node.get("options") and len(node["options"]) > button_idx:
-                option_data = node["options"][button_idx]
-                pressed_button_text = option_data.get('text', '')
-                text_to_save_in_db = option_data.get('interpretation', pressed_button_text)
-                formula_to_execute = option_data.get("formula")
+            if len(node.get("options", [])) == 1:
+                print("📝 [EDIT] Убираем единственную кнопку подтверждения.")
+                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            else:
+                original_text = _format_text(db, chat_id, node.get("text", ""))
+                new_text = f"{original_text}\n\n*Ваш ответ: {option['text']}*"
+                bot.edit_message_text(new_text, chat_id, call.message.message_id, reply_markup=None, parse_mode="Markdown")
 
-            if formula_to_execute:
-                old_score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-                crud.update_user_state(db, user.id, session_data['session_id'], 'capital_before', float(old_score_str))
-                current_state = {'score': float(old_score_str)}
-                new_score = state_calculator.calculate_new_state(formula_to_execute, current_state)
-                if new_score is not None:
-                    crud.update_user_state(db, user.id, session_data['session_id'], 'score', new_score)
-
-            if text_to_save_in_db != "N/A":
-                node_text_for_db = node.get('text', 'Текст узла не найден')
-                crud.create_response(db, session_id=session_data['session_id'], node_id=node_id_from_call, node_text=node_text_for_db, answer_text=text_to_save_in_db)
-
-            bot.answer_callback_query(call.id)
-            
-            try:
-                original_template = node.get("text", "")
-                score_str = crud.get_user_state(db, user.id, session_data['session_id'], 'score', '0')
-                capital_before_str = crud.get_user_state(db, user.id, session_data['session_id'], 'capital_before', '0')
-                state_vars = {'score': int(float(score_str)), 'capital_before': int(float(capital_before_str))}
-                formatted_original = original_template.format(**state_vars)
-                clean_original = formatted_original.replace('\\n', '\n')
-                new_text = f"{clean_original}\n\n*Ваш ответ: {pressed_button_text}*"
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=new_text, reply_markup=None, parse_mode="Markdown")
-            except Exception:
-                bot.edit_message_reply_markup(chat_id=chat_id, message_id=call.message.message_id, reply_markup=None)
-                bot.send_message(chat_id, f"✅ *{pressed_button_text}*", parse_mode="Markdown")
-
-            send_node_message(chat_id, next_node_id)
+            next_node_id = option.get("next_node_id") or node.get("next_node_id")
+            if next_node_id: process_node(chat_id, next_node_id)
+            else: _handle_final_node(db, bot, chat_id, node)
         except Exception:
             traceback.print_exc()
         finally:
             if db: db.close()
 
     @bot.message_handler(content_types=['text'])
-    def handle_text_message(message):
-        if message.text.startswith('/start'):
-            start_interview(message)
-            return
-
+    def text_message_handler(message):
         chat_id = message.chat.id
-        session_data = user_sessions.get(chat_id)
-        if not session_data or not session_data.get('node_id'):
-            bot.reply_to(message, "Игра уже завершена. /start для новой.")
-            return
+        if message.text == '/start': return
+        session = user_sessions.get(chat_id)
+        if not session: return
 
-        current_node_id = session_data['node_id']
-        graph_data = get_current_graph()
-        if not graph_data:
-            bot.reply_to(message, "Сценарий временно недоступен.")
-            return
-
-        node = graph_data["nodes"].get(current_node_id)
-        if is_final_node(node):
-            bot.reply_to(message, "Игра окончена. Спасибо! /start для новой игры.")
-            if chat_id in user_sessions: del user_sessions[chat_id]
-            return
-
-        node_type = node.get("type", "question")
-        if node_type == "input_text":
-            user_input = message.text
-            db = SessionLocal()
-            try:
-                node_text_for_db = node.get('text', 'Текст узла не найден')
-                crud.create_response(db, session_id=session_data['session_id'], node_id=current_node_id, node_text=node_text_for_db, answer_text=user_input)
+        node = get_current_graph()["nodes"].get(session.get('current_node_id'))
+        if not node: return
+        
+        db = SessionLocal()
+        try:
+            if node.get("type") == "input_text":
+                print(f"💬 [INPUT_TEXT] ChatID: {chat_id} получил текст.")
+                crud.create_response(db, session_id=session['session_id'], node_id=node.get('id'), answer_text=message.text)
                 next_node_id = node.get("next_node_id")
-                if next_node_id:
-                    send_node_message(chat_id, next_node_id)
-            finally:
-                if db: db.close()
-
-        elif node.get("ai_enabled", False):
-            bot.send_chat_action(chat_id, 'typing')
-            db = SessionLocal()
-            try:
-                user = crud.get_or_create_user(db, chat_id)
-                options = node.get("options", [])
-                if node.get("type") == "circumstance":
-                    options = [{"text": node.get("option_text", "Далее")}]
-                ai_persona = node.get("ai_enabled", "да")
-                system_prompt_context = crud.build_full_context_for_ai(db, session_data['session_id'], user.id, node.get("text", ""), options, node.get("event_type"), ai_persona)
-                ai_answer = gigachat_handler.get_ai_response(user_message=message.text, system_prompt=system_prompt_context)
-                if ai_answer:
-                    crud.create_ai_dialogue(db, session_data['session_id'], current_node_id, message.text, ai_answer)
-                    bot.reply_to(message, ai_answer, parse_mode="Markdown")
-                    send_node_message(chat_id, current_node_id)
-                else: 
-                    bot.reply_to(message, "К сожалению, не удалось получить ответ от ассистента.")
-            except Exception:
-                traceback.print_exc()
-                bot.reply_to(message, "Произошла внутренняя ошибка при обращении к AI-ассистенту.")
-            finally:
-                if db: db.close()
-        else:
-            bot.reply_to(message, "Пожалуйста, используйте кнопки для ответа на этот вопрос.")
+                if next_node_id: process_node(chat_id, next_node_id)
+                else: _handle_final_node(db, bot, chat_id, node)
+            
+            elif node.get("ai_enabled") and MODULES_AVAILABLE:
+                print(f"🤖 [AI HELP] ChatID: {chat_id} запросил помощь ИИ.")
+                bot.send_chat_action(chat_id, 'typing')
+                context = crud.build_full_context_for_ai(db, session['session_id'], session['user_id'], node.get("text"), node.get("options", []), None, node.get("ai_enabled"))
+                ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
+                crud.create_ai_dialogue(db, session['session_id'], node.get('id'), message.text, ai_answer)
+                bot.reply_to(message, ai_answer, parse_mode="Markdown")
+            
+            else:
+                bot.reply_to(message, "Пожалуйста, используйте кнопки для навигации.")
+        finally:
+            if db: db.close()
 
