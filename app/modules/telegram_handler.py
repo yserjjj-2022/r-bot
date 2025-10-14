@@ -212,6 +212,15 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
         db = SessionLocal()
         try:
+
+            # --- Начало блока отладки ---
+            graph_debug = get_current_graph()
+            print(f"🕵️‍♀️ [DEBUG | callback] Сценарий загружен: {graph_debug is not None}")
+            if not graph_debug:
+                bot.send_message(chat_id, "ОШИБКА: Сценарий не найден (get_current_graph() вернул None).")
+                return 
+            # --- Конец блока отладки ---
+
             node_id, btn_idx_str = call.data.split('|')
             node = get_current_graph()["nodes"].get(node_id)
             option = node["options"][int(btn_idx_str)]
