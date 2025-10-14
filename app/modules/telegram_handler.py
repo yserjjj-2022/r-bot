@@ -218,8 +218,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 if chat_id in user_sessions: del user_sessions[chat_id]
                 return
 
-            is_interactive_node = (node.get("type") == "circumstance" or node.get("type") == "input_text" or (node.get("options") and len(node.get("options")) > 0))
-            next_node_id_next = node.get("next_node_id")
+            is_interactive_node = (
+                node.get("type") in ["question", "task", "circumstance", "input_text"] and
+                (node.get("options") and len(node.get("options")) > 0 or node.get("type") == "input_text")
+            )
 
             if not is_interactive_node and next_node_id_next:
                 send_node_message(chat_id, next_node_id_next)
