@@ -403,3 +403,34 @@ def get_current_state_context(db: Session, user_id: int, session_id: int) -> str
     """Текущее состояние пользователя (сохранена для совместимости)."""
     score = get_user_state(db, user_id, session_id, 'score', '0')
     return f"Счет: {score}"
+
+def get_all_user_states(db: Session, user_id: int, session_id: int) -> dict:
+    """
+    Получает все переменные состояния для пользователя в текущей сессии
+    и возвращает их в виде словаря.
+    """
+    from . import models  # Импортируем модели внутри функции
+
+    try:
+        # Запрос всех состояний для данной сессии
+        user_states = db.query(models.UserState).filter(
+            models.UserState.user_id == user_id,
+            models.UserState.session_id == session_id
+        ).all()
+        
+        # Преобразуем список объектов в словарь {'key': value}
+        states_dict = {state.key: state.value for state in user_states}
+        
+        # Устанавливаем значения по умолчанию, если их нет
+        if 'score' not in states_dict:
+            states_dict['score'] = 0
+        if 'capital_before' not in states_dict:
+            states_dict['capital_before'] = 0
+
+        return states_dict
+        
+    except Exception as e:
+        print(f"ОШИБКА при получении всех состояний пользователя: {e}")
+        # Возвращаем базовый словарь в случае любой ошибки
+        return {'score': 0, 'capital_before': 0}
+
