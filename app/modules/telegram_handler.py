@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 2.7 (15.10.2025): Production Ready.
-# - Исправлен баг "missing 'node_text'" в create_response.
-# - Встроенный безопасный калькулятор (SafeStateCalculator).
-# - Все предыдущие исправления включены.
+# ВЕРСИЯ 2.8 (15.10.2025): CRUD DEBUG Edition
+# Добавлено логирование в цикл обновления для отладки сохранения состояний.
 
 import random
 import math
@@ -83,7 +81,7 @@ AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 # 1. РЕГИСТРАЦИЯ И ГЛАВНЫЙ ДИСПЕТЧЕР
 # -------------------------------------------------
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print("✅ [HANDLER V2.7] Регистрация обработчиков...")
+    print("✅ [HANDLER V2.8 CRUD_DEBUG] Регистрация обработчиков...")
 
     def process_node(chat_id, node_id):
         db = SessionLocal()
@@ -247,11 +245,20 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if "formula" in option and option["formula"]:
                 states_before = crud.get_all_user_states(db, session['user_id'], session['session_id'])
                 states_after = SafeStateCalculator.calculate(option["formula"], states_before)
+
+                # --- НАЧАЛО БЛОКА ОТЛАДКИ CRUD ---
+                print("\n🕵️‍♀️--- CRUD DEBUG ---🕵️‍♀️")
+                print(f"Формула: '{option['formula']}'")
+                print(f"Состояние ДО: {states_before}")
+                print(f"Состояние ПОСЛЕ: {states_after}")
+                print(f"Статус модулей (MODULES_AVAILABLE): {MODULES_AVAILABLE}")
+                # --- КОНЕЦ БЛОКА ОТЛАДКИ CRUD ---
+
                 for k, v in states_after.items():
                     if k not in states_before or states_before[k] != v:
+                        print(f"🔄 Попытка обновить: {k} = {v} (старое: {states_before.get(k, 'N/A')})")
                         crud.update_user_state(db, session['user_id'], session['session_id'], k, v)
             
-            # ИСПРАВЛЕНИЕ: Добавлен обязательный аргумент node_text
             crud.create_response(
                 db, 
                 session_id=session['session_id'], 
@@ -292,7 +299,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         db = SessionLocal()
         try:
             if node.get("type") == "input_text":
-                # ИСПРАВЛЕНИЕ: Добавлен обязательный аргумент node_text
                 crud.create_response(
                     db,
                     session_id=session['session_id'], 
@@ -308,7 +314,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 bot.send_chat_action(chat_id, 'typing')
                 context = crud.build_full_context_for_ai(db, session['session_id'], session['user_id'], node.get("text"), node.get("options", []), "reactive", node.get("ai_enabled"))
                 ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
-                # ИСПРАВЛЕНИЕ: Добавлен обязательный аргумент node_text
                 crud.create_ai_dialogue(
                     db,
                     session_id=session['session_id'], 
