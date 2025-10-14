@@ -29,7 +29,7 @@ def reload_graph_data(filepath: str):
         new_graph = load_graph_from_file(filepath)
         graph_data = new_graph
         print(f"[HOT-RELOAD] ✅ Сценарий успешно обновлен из {filepath}")
-        print(f"[HOT-RELOAD] Загружено узлов: {len(graph_data) if graph_data else 0}")
+        print(f"[HOT-RELOAD] Загружено узлов: {len(graph_data.get('nodes', {})) if graph_data else 0}")
     except Exception as e:
         print(f"[HOT-RELOAD] ❌ Ошибка обновления сценария: {e}")
         print(f"[HOT-RELOAD] Сохраняется предыдущая версия сценария.")
