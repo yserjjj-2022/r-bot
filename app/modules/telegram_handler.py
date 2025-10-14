@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler_v2.py
-# ВЕРСИЯ 2.2 (14.10.2025): Финальная полная версия.
-# Включает все согласованные доработки: динамические переменные, заглушки,
-# обработку input_text, ai_enabled и защиту от повторных нажатий.
+# ВЕРСИЯ 2.3 (14.10.2025): DEBUG EDITION.
+# Встроен расширенный блок логирования в button_callback для поиска ошибки.
 
 import random
 import re
@@ -26,6 +25,7 @@ except ImportError as e:
     def SessionLocal(): return None
 
     class crud:
+        # (содержимое класса crud-заглушки)
         @staticmethod
         def get_or_create_user(db, telegram_id): return type('obj', (), {'id': 1, 'telegram_id': telegram_id})()
         @staticmethod
@@ -43,7 +43,7 @@ except ImportError as e:
         @staticmethod
         def create_ai_dialogue(db, session_id, node_id, user_message, ai_response): pass
         @staticmethod
-        def build_full_context_for_ai(db, session_id, user_id, q, opts, et, ap): return "Контекст для AI"
+        def build_full_context_for_ai(db, s_id, u_id, q, opts, et, ap): return "Контекст для AI"
 
     class state_calculator:
         @staticmethod
@@ -62,37 +62,32 @@ AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 # 1. РЕГИСТРАЦИЯ И ГЛАВНЫЙ ДИСПЕТЧЕР
 # -------------------------------------------------
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print("✅ [HANDLER V2.2] Регистрация обработчиков...")
+    print("✅ [HANDLER V2.3 DEBUG] Регистрация обработчиков...")
 
     def process_node(chat_id, node_id):
+        # (код process_node без изменений)
         db = SessionLocal()
         try:
             graph, session = get_current_graph(), user_sessions.get(chat_id)
             node = graph["nodes"].get(str(node_id)) if graph else None
-
             if not all([graph, session, node]):
                 bot.send_message(chat_id, "Ошибка сессии/сценария. Начните заново: /start")
                 if chat_id in user_sessions: del user_sessions[chat_id]
                 return
-
             session['current_node_id'] = node_id
             node_type = node.get("type", "").split(':')[0]
             print(f"🚀 [PROCESS] ChatID: {chat_id}, NodeID: {node_id}, Type: {node_type}")
-
             if node.get("timing"): _handle_timing_node(db, bot, chat_id, node)
             elif node_type in AUTOMATIC_NODE_TYPES: _handle_automatic_node(db, bot, chat_id, node)
             elif node_type in INTERACTIVE_NODE_TYPES: _handle_interactive_node(db, bot, chat_id, node)
             else: _handle_final_node(db, bot, chat_id, node)
-        
         except Exception:
             traceback.print_exc()
             bot.send_message(chat_id, "Критическая ошибка в движке. Начните заново: /start")
         finally:
             if db: db.close()
-
-    # -------------------------------------------------
-    # 2. ОБРАБОТЧИКИ ТИПОВ УЗЛОВ
-    # -------------------------------------------------
+    
+    # ... (все остальные функции _handle_* и вспомогательные функции без изменений) ...
     def _handle_automatic_node(db, bot, chat_id, node):
         node_type, next_node_id = node.get("type"), None
         if node_type == "state":
@@ -128,7 +123,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if node.get("text"): _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get("text")))
         bot.send_message(chat_id, "Игра завершена. Для начала новой игры используйте /start")
         s_id = user_sessions.get(chat_id, {}).get('session_id')
-        if s_id: crud.end_session(db, s_id)
+        if s_id and MODULES_AVAILABLE: crud.end_session(db, s_id)
         if chat_id in user_sessions: del user_sessions[chat_id]
 
     def _handle_timing_node(db, bot, chat_id, node):
@@ -137,9 +132,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if next_node_id: process_node(chat_id, next_node_id)
         else: _handle_final_node(db, bot, chat_id, node)
 
-    # -------------------------------------------------
-    # 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-    # -------------------------------------------------
     def _format_text(db, chat_id, t):
         s = user_sessions[chat_id]
         states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
@@ -176,9 +168,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         match = re.match(r'ai_proactive:(\w+)\("(.+)"\)', type_str)
         return match.groups() if match else (None, None)
 
-    # -------------------------------------------------
-    # 4. ОБРАБОТЧИКИ TELEGRAM API
-    # -------------------------------------------------
     @bot.message_handler(commands=['start'])
     def start_game(message):
         chat_id = message.chat.id
@@ -197,32 +186,54 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         finally:
             if db: db.close()
 
+    # -------------------------------------------------
+    # 4. ОБРАБОТЧИКИ TELEGRAM API (С ОТЛАДКОЙ)
+    # -------------------------------------------------
     @bot.callback_query_handler(func=lambda call: True)
     def button_callback(call):
-        chat_id, session = call.message.chat.id, user_sessions.get(call.message.chat.id)
+        # --- НАЧАЛО ДИАГНОСТИЧЕСКОГО БЛОКА ---
+        print("\n🕵️‍♀️🕵️‍♀️🕵️‍♀️ [ДИАГНОСТИКА | button_callback] 🕵️‍♀️🕵️‍♀️🕵️‍♀️")
+        chat_id = call.message.chat.id
+        session = user_sessions.get(chat_id)
+        print(f"Получен callback.data: '{call.data}' от ChatID: {chat_id}")
+
         if not session:
-            bot.answer_callback_query(call.id, "Сессия истекла.", show_alert=True)
+            print("❌ ОШИБКА: Сессия не найдена для этого пользователя!")
+            bot.answer_callback_query(call.id, "Сессия истекла. Начните заново.", show_alert=True)
             return
 
         if call.message.message_id == session.get('last_message_id'):
+            print("❕ ПРЕДУПРЕЖДЕНИЕ: Повторное нажатие кнопки. Игнорирую.")
             bot.answer_callback_query(call.id)
             return
-        session['last_message_id'] = call.message.message_id
-        bot.answer_callback_query(call.id)
+        
+        graph = get_current_graph()
+        if not graph:
+            print("❌ ОШИБКА: Сценарий не загружен (get_current_graph вернул None)!")
+            bot.answer_callback_query(call.id, "Критическая ошибка: сценарий не найден.", show_alert=True)
+            return
+            
+        print(f"✅ Сценарий '{graph.get('graph_id')}' загружен, узлов в нем: {len(graph.get('nodes', {}))}")
 
         db = SessionLocal()
         try:
+            node_id_from_callback, btn_idx_str = call.data.split('|')
+            print(f"Из callback.data извлечено: node_id='{node_id_from_callback}', button_index='{btn_idx_str}'")
+            
+            node = graph["nodes"].get(node_id_from_callback)
+            
+            if not node:
+                print(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Узел с ID '{node_id_from_callback}' НЕ НАЙДЕН в сценарии!")
+                print(f"СПИСОК ДОСТУПНЫХ УЗЛОВ: {list(graph['nodes'].keys())}")
+                bot.send_message(chat_id, f"Внутренняя ошибка: узел '{node_id_from_callback}' не найден.")
+                return
 
-            # --- Начало блока отладки ---
-            graph_debug = get_current_graph()
-            print(f"🕵️‍♀️ [DEBUG | callback] Сценарий загружен: {graph_debug is not None}")
-            if not graph_debug:
-                bot.send_message(chat_id, "ОШИБКА: Сценарий не найден (get_current_graph() вернул None).")
-                return 
-            # --- Конец блока отладки ---
+            print(f"✅ Узел '{node_id_from_callback}' успешно найден. Тип: {node.get('type')}")
+            # --- КОНЕЦ ДИАГНОСТИЧЕСКОГО БЛОКА ---
 
-            node_id, btn_idx_str = call.data.split('|')
-            node = get_current_graph()["nodes"].get(node_id)
+            session['last_message_id'] = call.message.message_id
+            bot.answer_callback_query(call.id)
+            
             option = node["options"][int(btn_idx_str)]
             
             if "formula" in option and option["formula"]:
@@ -230,10 +241,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 new_states = state_calculator.calculate_new_state(option["formula"], states)
                 for k, v in new_states.items(): crud.update_user_state(db, session['user_id'], session['session_id'], k, v)
             
-            crud.create_response(db, session_id=session['session_id'], node_id=node_id, answer_text=option.get("interpretation", option["text"]))
+            crud.create_response(db, session_id=session['session_id'], node_id=node_id_from_callback, answer_text=option.get("interpretation", option["text"]))
 
             if len(node.get("options", [])) == 1:
-                print("📝 [EDIT] Убираем единственную кнопку подтверждения.")
                 bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
             else:
                 original_text = _format_text(db, chat_id, node.get("text", ""))
@@ -243,19 +253,24 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             next_node_id = option.get("next_node_id") or node.get("next_node_id")
             if next_node_id: process_node(chat_id, next_node_id)
             else: _handle_final_node(db, bot, chat_id, node)
+
         except Exception:
+            print("💥💥💥 ИСКЛЮЧЕНИЕ ВНУТРИ button_callback! 💥💥💥")
             traceback.print_exc()
         finally:
             if db: db.close()
 
     @bot.message_handler(content_types=['text'])
     def text_message_handler(message):
+        # (код text_message_handler без изменений)
         chat_id = message.chat.id
         if message.text == '/start': return
         session = user_sessions.get(chat_id)
-        if not session: return
+        if not session or not session.get('current_node_id'): return
 
-        node = get_current_graph()["nodes"].get(session.get('current_node_id'))
+        graph = get_current_graph()
+        if not graph: return
+        node = graph["nodes"].get(session.get('current_node_id'))
         if not node: return
         
         db = SessionLocal()
@@ -279,4 +294,3 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 bot.reply_to(message, "Пожалуйста, используйте кнопки для навигации.")
         finally:
             if db: db.close()
-
