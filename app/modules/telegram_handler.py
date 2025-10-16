@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.1 (16.10.2025): HOTFIX AI + PROACTIVE/REACTIVE
-# - ИСПРАВЛЕНО: node_type больше не обрезается по ':', что ломало ai_proactive.
-# - РЕАЛИЗОВАНО: Проактивный ИИ (срабатывает при входе в узел `ai_proactive:`).
-# - РЕАЛИЗОВАНО: Реактивный ИИ (отвечает на сообщения на узлах с `AI help`).
-# - СОХРАНЕНО: Рандомизация ответов, безопасные формулы и вся отладочная логика.
+# ВЕРСИЯ 3.3 (16.10.2025): ДИАГНОСТИКА + РОБАСТНЫЙ ПАРСЕР
+# - ДОБАВЛЕНО: Подробная диагностика для выяснения проблемы с ai_proactive.
+# - УЛУЧШЕН: Более гибкий регекс, устойчивый к разным форматам.
+# - ИСПРАВЛЕНО: Логика дублирования сообщений в финальных узлах.
 
 import random
 import math
@@ -77,7 +76,6 @@ class SafeStateCalculator:
 
 # --- Глобальные переменные и константы ---
 user_sessions = {}
-# Убираем ai_proactive из интерактивных, так как у него теперь своя логика
 INTERACTIVE_NODE_TYPES = ["task", "input_text", "question"]
 AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 
@@ -89,7 +87,7 @@ def _normalize_newlines(text: str) -> str:
     return text
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.1] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def process_node(chat_id, node_id):
         db = SessionLocal()
@@ -110,18 +108,25 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 return
 
             session['current_node_id'] = node_id
-            # ⭐ ИСПРАВЛЕНО: Больше не обрезаем node_type, используем полную строку
             node_type = node.get("type", "")
             print(f"🚀 [PROCESS] ChatID={chat_id} NodeID={node_id} FullType='{node_type}'")
+            
+            # ⭐ ДИАГНОСТИКА: Показываем весь узел для ai_proactive
+            if node_id == "game_failure" or "ai_proactive" in node_type:
+                print(f"🔍 [ДИАГНОСТИКА] Узел {node_id}:")
+                print(f"   - type: '{node.get('type')}'")
+                print(f"   - text: '{node.get('text', '')[:100]}...'")
+                print(f"   - options: {len(node.get('options', []))}")
+                print(f"   - ai_enabled: '{node.get('ai_enabled')}'")
 
             # --- ГЛАВНЫЙ МАРШРУТИЗАТОР УЗЛОВ ---
-            if node_type.startswith("ai_proactive:"):
+            if node_type.startswith("ai_proactive"):
                 _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
             elif node_type in AUTOMATIC_NODE_TYPES:
                 _handle_automatic_node(db, bot, chat_id, node)
             elif node_type in INTERACTIVE_NODE_TYPES:
                 _handle_interactive_node(db, bot, chat_id, node_id, node)
-            else: # Все остальное (узлы без next_id, простые сообщения) считаем терминальным
+            else:
                 _handle_terminal_node(db, bot, chat_id, node)
         except Exception:
             traceback.print_exc()
@@ -130,35 +135,66 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if db: db.close()
 
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
-        """Сначала генерирует и отправляет сообщение от ИИ, затем показывает основной контент узла."""
-        print(f"🤖 [AI PROACTIVE] Запуск для узла {node_id}")
-        bot.send_chat_action(chat_id, 'typing')
+        """Генерирует сообщение от ИИ, затем показывает основной контент."""
+        print(f"🤖 [AI PROACTIVE] === НАЧАЛО ОБРАБОТКИ ===")
+        print(f"🤖 [AI PROACTIVE] Узел: {node_id}")
+        print(f"🤖 [AI PROACTIVE] AI_AVAILABLE: {AI_AVAILABLE}")
+        
+        type_str = node.get("type", "")
+        print(f"🤖 [AI PROACTIVE] Полная строка типа: '{type_str}'")
+        print(f"🤖 [AI PROACTIVE] Длина строки: {len(type_str)}")
+        
+        ai_message_sent = False
+        
         try:
-            role, task_prompt = _parse_ai_proactive_prompt(node.get("type", ""))
-            print(f"🔍 [PARSE DEBUG] Role: {role}, Task: {task_prompt}") # Дополнительная отладка
+            role, task_prompt = _parse_ai_proactive_prompt(type_str)
+            print(f"🤖 [AI PROACTIVE] Результат парсинга: role='{role}', task='{task_prompt}'")
+            
             if role and task_prompt and AI_AVAILABLE:
+                print("🤖 [AI PROACTIVE] ✅ Все условия выполнены. Генерируем ответ...")
+                bot.send_chat_action(chat_id, 'typing')
+                
                 session = user_sessions[chat_id]
                 context = crud.build_full_context_for_ai(
                     db, session['session_id'], session['user_id'], task_prompt,
                     node.get("options", []), event_type="proactive", ai_persona=role
                 )
+                print(f"🤖 [AI PROACTIVE] Контекст создан длиной {len(context)} символов")
+                
                 ai_response = gigachat_handler.get_ai_response("", system_prompt=context)
+                print(f"🤖 [AI PROACTIVE] Получен ответ длиной {len(ai_response)} символов")
                 
                 bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
                 crud.create_ai_dialogue(db, session['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
+                ai_message_sent = True
+                print("🤖 [AI PROACTIVE] ✅ Сообщение успешно отправлено!")
             else:
-                print("🤖 [AI PROACTIVE] Пропущено: роль/задача не найдены или AI недоступен.")
+                print(f"🤖 [AI PROACTIVE] ❌ Условия не выполнены:")
+                print(f"   - role: {role}")
+                print(f"   - task_prompt: {task_prompt}")
+                print(f"   - AI_AVAILABLE: {AI_AVAILABLE}")
         except Exception as e:
-            print(f"❌ Ошибка в _handle_proactive_ai_node: {e}")
+            print(f"❌ [AI PROACTIVE] Ошибка: {e}")
+            traceback.print_exc()
         
-        # После (или если не удалось) ответа ИИ, показываем основной интерактивный элемент
-        _handle_interactive_node(db, bot, chat_id, node_id, node)
+        # Показываем основной контент узла
+        if node.get("options"):
+            print("🤖 [AI PROACTIVE] Показываем интерактивный контент")
+            _handle_interactive_node(db, bot, chat_id, node_id, node)
+        else:
+            print("🤖 [AI PROACTIVE] Терминальный узел")
+            if node.get("text"):
+                text = _format_text(db, chat_id, node.get("text"))
+                _send_message(bot, chat_id, node, text)
+        
+        print(f"🤖 [AI PROACTIVE] === КОНЕЦ ОБРАБОТКИ ===")
 
     def _handle_automatic_node(db, bot, chat_id, node):
         node_type = node.get("type")
         next_node_id = None
         if node_type == "state":
-            if node.get("text"): _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
+            if node.get("text"): 
+                _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
             next_node_id = node.get("next_node_id")
         elif node_type == "condition":
             s = user_sessions[chat_id]
@@ -171,30 +207,38 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if br:
                 next_node_id = random.choices(br, weights=[b.get("weight", 1) for b in br], k=1)[0].get("next_node_id")
             print(f"🎲 [RANDOMIZER] Next={next_node_id}")
-        if next_node_id: process_node(chat_id, next_node_id)
-        else: _handle_terminal_node(db, bot, chat_id, node)
+        
+        if next_node_id: 
+            process_node(chat_id, next_node_id)
+        else: 
+            _handle_terminal_node(db, bot, chat_id, node)
 
     def _handle_interactive_node(db, bot, chat_id, node_id, node):
-        """Просто показывает основной текст и кнопки узла."""
+        """Показывает текст и кнопки."""
+        print(f"📝 [INTERACTIVE] Узел {node_id}")
         text = _format_text(db, chat_id, node.get("text", "(нет текста)"))
         markup = _build_keyboard(node_id, node)
         _send_message(bot, chat_id, node, text, markup)
 
     def _handle_terminal_node(db, bot, chat_id, node):
-        """Обрабатывает финальный узел, завершает сессию."""
-        print(f"🏁 [SESSION END] ChatID={chat_id}")
+        """Финальный узел."""
+        print(f"🏁 [TERMINAL] Завершение для ChatID={chat_id}")
         if node.get("text"):
             _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get("text")))
         bot.send_message(chat_id, "Игра завершена. /start для новой игры")
         s_id = user_sessions.get(chat_id, {}).get('session_id')
-        if s_id and AI_AVAILABLE: crud.end_session(db, s_id)
-        if chat_id in user_sessions: del user_sessions[chat_id]
+        if s_id and AI_AVAILABLE: 
+            crud.end_session(db, s_id)
+        if chat_id in user_sessions: 
+            del user_sessions[chat_id]
 
     def _handle_timing_node(db, bot, chat_id, node):
         print(f"⏰ [TIMING] Команда '{node.get('timing')}'")
         next_node_id = node.get("next_node_id")
-        if next_node_id: process_node(chat_id, next_node_id)
-        else: _handle_terminal_node(db, bot, chat_id, node)
+        if next_node_id: 
+            process_node(chat_id, next_node_id)
+        else: 
+            _handle_terminal_node(db, bot, chat_id, node)
 
     def _format_text(db, chat_id, t):
         s = user_sessions[chat_id]
@@ -207,9 +251,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     def _build_keyboard(node_id, node):
         markup = InlineKeyboardMarkup()
         options = node.get("options", []).copy()
-        if not options: return None
+        if not options: 
+            return None
         
-        # Рандомизация ответов для "task" и для ai_proactive
         node_type = node.get("type", "")
         if (node_type == "task" or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
             random.shuffle(options)
@@ -242,13 +286,38 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             return False
 
     def _parse_ai_proactive_prompt(type_str):
-        m = re.match(r'ai_proactive:(\w+)\("(.+)"\)', type_str)
-        return m.groups() if m else (None, None)
+        """⭐ УЛУЧШЕННЫЙ ПАРСЕР с диагностикой"""
+        print(f"🔍 [PARSE] === НАЧАЛО ПАРСИНГА ===")
+        print(f"🔍 [PARSE] Входная строка: '{type_str}'")
+        print(f"🔍 [PARSE] Длина: {len(type_str)}")
+        print(f"🔍 [PARSE] Начинается с 'ai_proactive': {type_str.startswith('ai_proactive')}")
+        
+        # Пробуем несколько вариантов регекса
+        patterns = [
+            r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)',  # Основной
+            r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)',   # Без кавычек
+            r'ai_proactive\s*:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)', # С пробелами
+        ]
+        
+        for i, pattern in enumerate(patterns):
+            print(f"🔍 [PARSE] Пробуем паттерн {i+1}: {pattern}")
+            m = re.search(pattern, type_str)
+            if m:
+                groups = m.groups()
+                print(f"🔍 [PARSE] ✅ НАЙДЕНО! Группы: {groups}")
+                print(f"🔍 [PARSE] === КОНЕЦ ПАРСИНГА ===")
+                return groups
+            else:
+                print(f"🔍 [PARSE] ❌ Паттерн {i+1} не подошел")
+        
+        print("🔍 [PARSE] ❌ НИ ОДИН ПАТТЕРН НЕ ПОДОШЕЛ")
+        print(f"🔍 [PARSE] === КОНЕЦ ПАРСИНГА ===")
+        return (None, None)
 
     @bot.message_handler(commands=['start'])
     def start_game(message):
         chat_id = message.chat.id
-        print(f"🎮 [GAME START] ChatID={chat_id}, MODULES_AVAILABLE={AI_AVAILABLE}")
+        print(f"🎮 [GAME START] ChatID={chat_id}, AI_AVAILABLE={AI_AVAILABLE}")
         db = SessionLocal()
         try:
             if chat_id in user_sessions and AI_AVAILABLE:
@@ -270,7 +339,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     def button_callback(call):
         print("\n====== CALLBACK BEGIN ======")
         try:
-            print(f"CALL from ChatID={call.message.chat.id} data='{call.data}' MODULES_AVAILABLE={AI_AVAILABLE}")
+            print(f"CALL from ChatID={call.message.chat.id} data='{call.data}' AI_AVAILABLE={AI_AVAILABLE}")
         except Exception:
             traceback.print_exc()
 
@@ -278,19 +347,25 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         session = user_sessions.get(chat_id)
         if not session:
             print("SESSION MISSING -> answering alert")
-            try: bot.answer_callback_query(call.id, "Сессия истекла. Начните заново.", show_alert=True)
-            except Exception: pass
+            try: 
+                bot.answer_callback_query(call.id, "Сессия истекла. Начните заново.", show_alert=True)
+            except Exception: 
+                pass
             return
 
         if call.message.message_id == session.get('last_message_id'):
             print("DUPLICATE PRESS -> ignored")
-            try: bot.answer_callback_query(call.id)
-            except Exception: pass
+            try: 
+                bot.answer_callback_query(call.id)
+            except Exception: 
+                pass
             return
 
         session['last_message_id'] = call.message.message_id
-        try: bot.answer_callback_query(call.id)
-        except Exception: pass
+        try: 
+            bot.answer_callback_query(call.id)
+        except Exception: 
+            pass
 
         db = SessionLocal()
         try:
@@ -334,14 +409,17 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                                  node_text=node.get("text", ""))
 
             if len(options) == 1:
-                try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-                except Exception: pass
+                try: 
+                    bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+                except Exception: 
+                    pass
             else:
                 try:
                     original_text = _format_text(db, chat_id, node.get("text", ""))
                     new_text = f"{_normalize_newlines(original_text)}\n\n*Ваш ответ: {option['text']}*"
                     bot.edit_message_text(new_text, chat_id, call.message.message_id, reply_markup=None, parse_mode="Markdown")
-                except Exception: pass
+                except Exception: 
+                    pass
             
             next_node_id = option.get("next_node_id") or node.get("next_node_id")
             print(f"NEXT node_id={next_node_id}")
@@ -359,12 +437,16 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     @bot.message_handler(content_types=['text'])
     def text_message_handler(message):
         chat_id = message.chat.id
-        if message.text == '/start': return
+        if message.text == '/start': 
+            return
         session = user_sessions.get(chat_id)
-        if not session or not session.get('current_node_id'): return
+        if not session or not session.get('current_node_id'): 
+            return
         graph, node = get_current_graph(), None
-        if graph: node = graph.get("nodes", {}).get(session.get('current_node_id'))
-        if not node: return
+        if graph: 
+            node = graph.get("nodes", {}).get(session.get('current_node_id'))
+        if not node: 
+            return
         
         db = SessionLocal()
         try:
@@ -383,8 +465,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 crud.create_response(db, session['session_id'], session.get('current_node_id'),
                                      answer_text=message.text, node_text=node.get("text", ""))
                 next_node_id = node.get("next_node_id")
-                if next_node_id: process_node(chat_id, next_node_id)
-                else: _handle_terminal_node(db, bot, chat_id, node)
+                if next_node_id: 
+                    process_node(chat_id, next_node_id)
+                else: 
+                    _handle_terminal_node(db, bot, chat_id, node)
             else:
                 bot.reply_to(message, "Пожалуйста, используйте кнопки для навигации.")
         except Exception:
