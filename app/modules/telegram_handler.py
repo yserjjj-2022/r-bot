@@ -218,6 +218,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
     def _evaluate_condition(db, user_id, session_id, condition_str):
         states = crud.get_all_user_states(db, user_id, session_id)
+        print(f"DEBUG_EVAL: type(score)={type(states.get('score'))}, value={states.get('score')}")
         try:
             return eval(condition_str, SafeStateCalculator.SAFE_GLOBALS, states)
         except Exception as e:

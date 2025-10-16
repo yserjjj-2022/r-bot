@@ -120,33 +120,53 @@ def create_ai_dialogue(db: Session, session_id: int, node_id: str, user_message:
 
 def get_all_user_states(db: Session, user_id: int, session_id: int) -> dict:
     """
-    Получает все переменные состояния для пользователя в текущей сессии,
-    корректно преобразует типы и возвращает готовый для использования словарь.
+    Получает ПОСЛЕДНЕЕ состояние для каждой переменной, избегая проблем с дубликатами.
     """
     from . import models
     try:
-        user_states = db.query(models.UserState).filter(
+        # ШАГ 1: Найти ID последней записи для каждого ключа (state_key) в сессии.
+        subquery = db.query(
+            models.UserState.state_key,
+            func.max(models.UserState.id).label('max_id')
+        ).filter(
             models.UserState.user_id == user_id,
             models.UserState.session_id == session_id
+        ).group_by(models.UserState.state_key).subquery()
+
+        # ШАГ 2: Запросить только те записи, ID которых совпадает с найденными максимальными.
+        # Это гарантирует, что для каждого ключа мы получим только одну, самую последнюю, запись.
+        user_states = db.query(models.UserState).join(
+            subquery,
+            (models.UserState.state_key == subquery.c.state_key) & 
+            (models.UserState.id == subquery.c.max_id)
         ).all()
         
-        # ИСПРАВЛЕНО: Используем state.state_key и state.state_value
+        # --- Дальнейшая логика остается прежней ---
+
+        # ШАГ 3: Преобразование в словарь
         states_dict = {state.state_key: state.state_value for state in user_states}
         
-        # ОПТИМИЗАЦИЯ: Преобразуем значения из строк в числа
+        # ШАГ 4: Преобразование типов
         for key, value in states_dict.items():
-            try:
-                if isinstance(value, str):
+            if isinstance(value, str):
+                try:
                     if '.' in value:
                         states_dict[key] = float(value)
                     else:
                         states_dict[key] = int(value)
-            except (ValueError, TypeError):
-                pass # Оставляем как строку, если не конвертируется
+                except (ValueError, TypeError):
+                    pass
         
-        # Устанавливаем дефолты для ключевых переменных
+        # ШАГ 5: Установка дефолтов
         states_dict.setdefault('score', 0)
         states_dict.setdefault('capital_before', 0)
+
+        # ШАГ 6 (ЗАЩИТА): Финальная проверка типов на выходе, чтобы гарантировать числа.
+        if not isinstance(states_dict['score'], (int, float)):
+            print(f"🚨 [ЗАЩИТА] Некорректный тип для 'score': {type(states_dict['score'])}. Сброс на 0.")
+            states_dict['score'] = 0
+        if not isinstance(states_dict['capital_before'], (int, float)):
+            states_dict['capital_before'] = 0
 
         return states_dict
         
