@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.0 (16.10.2025): PROACTIVE + REACTIVE AI
+# ВЕРСИЯ 3.1 (16.10.2025): HOTFIX AI + PROACTIVE/REACTIVE
+# - ИСПРАВЛЕНО: node_type больше не обрезается по ':', что ломало ai_proactive.
 # - РЕАЛИЗОВАНО: Проактивный ИИ (срабатывает при входе в узел `ai_proactive:`).
 # - РЕАЛИЗОВАНО: Реактивный ИИ (отвечает на сообщения на узлах с `AI help`).
-# - РЕАЛИЗОВАНО: Рандомизация порядка ответов для узлов типа "task".
-# - РЕАЛИЗОВАНО: Нормализация переносов строк ('\\n' -> '\n').
-# - УНИФИЦИРОВАНО: Оба режима ИИ используют единую систему ролей из crud.py.
-# - СОХРАНЕНО: Вся отладочная логика из v2.10.
+# - СОХРАНЕНО: Рандомизация ответов, безопасные формулы и вся отладочная логика.
 
 import random
 import math
@@ -91,7 +89,7 @@ def _normalize_newlines(text: str) -> str:
     return text
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print("✅ [HANDLER v3.0 PROACTIVE/REACTIVE] Регистрация обработчиков...")
+    print(f"✅ [HANDLER v3.1] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def process_node(chat_id, node_id):
         db = SessionLocal()
@@ -112,8 +110,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 return
 
             session['current_node_id'] = node_id
+            # ⭐ ИСПРАВЛЕНО: Больше не обрезаем node_type, используем полную строку
             node_type = node.get("type", "")
-            print(f"🚀 [PROCESS] ChatID={chat_id} NodeID={node_id} Type={node_type}")
+            print(f"🚀 [PROCESS] ChatID={chat_id} NodeID={node_id} FullType='{node_type}'")
 
             # --- ГЛАВНЫЙ МАРШРУТИЗАТОР УЗЛОВ ---
             if node_type.startswith("ai_proactive:"):
@@ -136,6 +135,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         bot.send_chat_action(chat_id, 'typing')
         try:
             role, task_prompt = _parse_ai_proactive_prompt(node.get("type", ""))
+            print(f"🔍 [PARSE DEBUG] Role: {role}, Task: {task_prompt}") # Дополнительная отладка
             if role and task_prompt and AI_AVAILABLE:
                 session = user_sessions[chat_id]
                 context = crud.build_full_context_for_ai(
@@ -146,6 +146,8 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 
                 bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
                 crud.create_ai_dialogue(db, session['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
+            else:
+                print("🤖 [AI PROACTIVE] Пропущено: роль/задача не найдены или AI недоступен.")
         except Exception as e:
             print(f"❌ Ошибка в _handle_proactive_ai_node: {e}")
         
@@ -206,8 +208,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         markup = InlineKeyboardMarkup()
         options = node.get("options", []).copy()
         if not options: return None
-
-        if node.get("type") == "task" and node.get("randomize_options", False):
+        
+        # Рандомизация ответов для "task" и для ai_proactive
+        node_type = node.get("type", "")
+        if (node_type == "task" or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
             random.shuffle(options)
             print(f"🔀 Узел {node_id}: ответы перемешаны.")
         
@@ -238,7 +242,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             return False
 
     def _parse_ai_proactive_prompt(type_str):
-        m = re.match(r'ai_proactive:(\w+)\(\"(.+)\"\)', type_str)
+        m = re.match(r'ai_proactive:(\w+)\("(.+)"\)', type_str)
         return m.groups() if m else (None, None)
 
     @bot.message_handler(commands=['start'])
@@ -275,18 +279,18 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if not session:
             print("SESSION MISSING -> answering alert")
             try: bot.answer_callback_query(call.id, "Сессия истекла. Начните заново.", show_alert=True)
-            except Exception: traceback.print_exc()
+            except Exception: pass
             return
-        
+
         if call.message.message_id == session.get('last_message_id'):
             print("DUPLICATE PRESS -> ignored")
             try: bot.answer_callback_query(call.id)
-            except Exception: traceback.print_exc()
+            except Exception: pass
             return
 
         session['last_message_id'] = call.message.message_id
         try: bot.answer_callback_query(call.id)
-        except Exception: traceback.print_exc()
+        except Exception: pass
 
         db = SessionLocal()
         try:
@@ -306,8 +310,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if not node:
                 print(f"NODE '{node_id}' NOT FOUND"); return
 
-            options = node.get("options", [])
-            # Здесь можно будет добавить логику для восстановления перемешанного порядка, если понадобится
+            options = node.get("options", []).copy()
+            if (node.get("type", "") == "task" or node.get("type", "").startswith("ai_proactive")) and node.get("randomize_options", False):
+                random.shuffle(options)
             
             if not options or btn_idx >= len(options):
                 print("OPTION INDEX ERROR"); return
@@ -328,7 +333,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                                  answer_text=option.get("interpretation", option["text"]),
                                  node_text=node.get("text", ""))
 
-            if len(node.get("options", [])) == 1:
+            if len(options) == 1:
                 try: bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
                 except Exception: pass
             else:
@@ -357,7 +362,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if message.text == '/start': return
         session = user_sessions.get(chat_id)
         if not session or not session.get('current_node_id'): return
-
         graph, node = get_current_graph(), None
         if graph: node = graph.get("nodes", {}).get(session.get('current_node_id'))
         if not node: return
@@ -375,14 +379,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
                 crud.create_ai_dialogue(db, session['session_id'], session.get('current_node_id'), message.text, ai_answer)
                 bot.reply_to(message, _normalize_newlines(ai_answer), parse_mode="Markdown")
-
             elif node.get("type") == "input_text":
                 crud.create_response(db, session['session_id'], session.get('current_node_id'),
                                      answer_text=message.text, node_text=node.get("text", ""))
                 next_node_id = node.get("next_node_id")
                 if next_node_id: process_node(chat_id, next_node_id)
                 else: _handle_terminal_node(db, bot, chat_id, node)
-            
             else:
                 bot.reply_to(message, "Пожалуйста, используйте кнопки для навигации.")
         except Exception:
