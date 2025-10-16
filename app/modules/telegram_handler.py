@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.5 (16.10.2025): ФИКС ЗАДВОЕНИЯ (флаг завершения)
-# - Добавлен флаг session['finished'] для предотвращения любых повторных отправок после окончания игры.
-# - Глобальные проверки флага в process_node и _handle_terminal_node.
-# - Безопасное завершение из button_callback при отсутствии next_node_id.
+# ВЕРСИЯ 3.5.1 (16.10.2025): Хотфикс — _format_text undefined
+# - Исправлено: вызовы _format_text() заменены на существующую функцию _format_text,
+#   добавлен её корректный порядок объявления выше по коду.
 
 import random
 import math
@@ -76,11 +75,23 @@ AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 def _normalize_newlines(text: str) -> str:
     return text.replace('\\n', '\n') if isinstance(text, str) else text
 
+# ВАЖНО: объявляем форматтер текста раньше использования
+
+def _format_text(db, chat_id, t):
+    s = user_sessions.get(chat_id, {})
+    try:
+        states = crud.get_all_user_states(db, s.get('user_id'), s.get('session_id'))
+    except Exception:
+        states = {}
+    try:
+        return t.format(**states) if isinstance(t, str) else t
+    except Exception:
+        return t
+
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.5] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.5.1] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
-        """Единая точка завершения игры. Учитывает флаг finished и тип узла."""
         s = user_sessions.get(chat_id)
         if not s:
             return
@@ -88,13 +99,11 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             print("🏁 [FINISH] Уже завершено -> skip")
             return
         s['finished'] = True
-        # текст повторно не отправляем для автоматических узлов
         if node.get('text') and node.get('type') not in AUTOMATIC_NODE_TYPES:
             _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get('text')))
         bot.send_message(chat_id, "Игра завершена. /start для новой игры")
         if s.get('session_id') and AI_AVAILABLE:
             crud.end_session(db, s['session_id'])
-        # Сессию чистим в самом конце
         user_sessions.pop(chat_id, None)
 
     def process_node(chat_id, node_id):
@@ -118,8 +127,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             s['current_node_id'] = node_id
             node_type = node.get("type", "")
-            print(f"🚀 [PROCESS] ChatID={chat_id} NodeID={node_id} FullType='{node_type}'")
-
             if node_type.startswith("ai_proactive"):
                 _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
             elif node_type in AUTOMATIC_NODE_TYPES:
@@ -148,7 +155,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
         except Exception:
             traceback.print_exc()
-        # основной контент узла
         if node.get("options"):
             _handle_interactive_node(db, bot, chat_id, node_id, node)
         else:
@@ -252,12 +258,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if s.get('finished'):
             try: bot.answer_callback_query(call.id)
             except Exception: pass
-            print("🚫 [CALLBACK] Сессия уже завершена -> skip")
             return
         if call.message.message_id == s.get('last_message_id'):
             try: bot.answer_callback_query(call.id)
             except Exception: pass
-            print("DUPLICATE PRESS -> ignored")
             return
         s['last_message_id'] = call.message.message_id
         try:
@@ -272,10 +276,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             except Exception as e:
                 print(f"PARSE ERROR call.data='{call.data}': {e}")
                 return
-            graph = get_current_graph()
-            if not graph:
-                return
-            node = graph.get("nodes", {}).get(node_id)
+            graph = get_current_graph(); node = graph.get("nodes", {}).get(node_id) if graph else None
             if not node:
                 return
             options = node.get("options", []).copy()
@@ -294,7 +295,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             crud.create_response(db, s['session_id'], node_id, answer_text=option.get("interpretation", option["text"]), node_text=node.get("text", ""))
 
-            # скрываем кнопки / помечаем ответ
             try:
                 if len(options) == 1:
                     bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
@@ -323,9 +323,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         s = user_sessions.get(chat_id)
         if not s or not s.get('current_node_id') or s.get('finished'):
             return
-        graph = get_current_graph(); node = None
-        if graph:
-            node = graph.get("nodes", {}).get(s.get('current_node_id'))
+        graph = get_current_graph(); node = graph.get("nodes", {}).get(s.get('current_node_id')) if graph else None
         if not node:
             return
         db = SessionLocal()
