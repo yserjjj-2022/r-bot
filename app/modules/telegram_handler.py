@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.5.1 (16.10.2025): Хотфикс — _format_text undefined
-# - Исправлено: вызовы _format_text() заменены на существующую функцию _format_text,
-#   добавлен её корректный порядок объявления выше по коду.
+# ВЕРСИЯ 3.6 (17.10.2025): ИСПРАВЛЕНИЕ ЗАДВОЕНИЯ В AI_PROACTIVE УЗЛАХ
+# - ИСПРАВЛЕНО: Убрана ошибочная логика "терминального узла" из _handle_proactive_ai_node
+# - Теперь все ai_proactive узлы всегда передают управление _handle_interactive_node
+# - Это устраняет дублирование сообщений при переходе к финалу игры
 
 import random
 import math
@@ -75,8 +76,6 @@ AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
 def _normalize_newlines(text: str) -> str:
     return text.replace('\\n', '\n') if isinstance(text, str) else text
 
-# ВАЖНО: объявляем форматтер текста раньше использования
-
 def _format_text(db, chat_id, t):
     s = user_sessions.get(chat_id, {})
     try:
@@ -89,7 +88,7 @@ def _format_text(db, chat_id, t):
         return t
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.5.1] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.6] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -142,6 +141,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if db: db.close()
 
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
+        """ИСПРАВЛЕНО: генерирует ответ ИИ, затем ВСЕГДА передаёт управление _handle_interactive_node"""
         try:
             type_str = node.get("type", "")
             role, task_prompt = _parse_ai_proactive_prompt(type_str)
@@ -155,11 +155,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
         except Exception:
             traceback.print_exc()
-        if node.get("options"):
-            _handle_interactive_node(db, bot, chat_id, node_id, node)
-        else:
-            if node.get("text"):
-                _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get("text")))
+        
+        # ИСПРАВЛЕНИЕ: всегда передаём управление стандартному обработчику интерактивных узлов
+        # Он покажет текст узла и кнопки (если есть), а дальнейшую логику обработает button_callback
+        _handle_interactive_node(db, bot, chat_id, node_id, node)
 
     def _handle_automatic_node(db, bot, chat_id, node):
         node_type = node.get("type")
