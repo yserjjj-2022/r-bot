@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.3 (16.10.2025): ДИАГНОСТИКА + РОБАСТНЫЙ ПАРСЕР
+# ВЕРСИЯ 3.4 (16.10.2025): ИСПРАВЛЕНИЕ ЗАДВОЕНИЯ ФИНАЛЬНЫХ СООБЩЕНИЙ
 # - ДОБАВЛЕНО: Подробная диагностика для выяснения проблемы с ai_proactive.
 # - УЛУЧШЕН: Более гибкий регекс, устойчивый к разным форматам.
-# - ИСПРАВЛЕНО: Логика дублирования сообщений в финальных узлах.
+# - ИСПРАВЛЕНО: Логика дублирования сообщений в финальных узлах (предотвращение повтора для автоматических узлов).
 
 import random
 import math
@@ -87,7 +87,7 @@ def _normalize_newlines(text: str) -> str:
     return text
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.4] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def process_node(chat_id, node_id):
         db = SessionLocal()
@@ -223,8 +223,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     def _handle_terminal_node(db, bot, chat_id, node):
         """Финальный узел."""
         print(f"🏁 [TERMINAL] Завершение для ChatID={chat_id}")
-        if node.get("text"):
+        
+        # ИСПРАВЛЕНИЕ: Отправляем текст, только если это не автоматический узел.
+        # Текст автоматических узлов (state, condition) уже был отправлен ранее.
+        if node.get("text") and node.get("type") not in AUTOMATIC_NODE_TYPES:
             _send_message(bot, chat_id, node, _format_text(db, chat_id, node.get("text")))
+        
         bot.send_message(chat_id, "Игра завершена. /start для новой игры")
         s_id = user_sessions.get(chat_id, {}).get('session_id')
         if s_id and AI_AVAILABLE: 
