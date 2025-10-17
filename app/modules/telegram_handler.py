@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.6 (17.10.2025): ИСПРАВЛЕНИЕ ЗАДВОЕНИЯ В AI_PROACTIVE УЗЛАХ
-# - ИСПРАВЛЕНО: Убрана ошибочная логика "терминального узла" из _handle_proactive_ai_node
-# - Теперь все ai_proactive узлы всегда передают управление _handle_interactive_node
-# - Это устраняет дублирование сообщений при переходе к финалу игры
+# ВЕРСИЯ 3.7 (17.10.2025): ИСПРАВЛЕНИЕ УСЛОВНОЙ ЛОГИКИ + ПОДДЕРЖКА РУССКИХ ТИПОВ
+# - ИСПРАВЛЕНО: Корректная обработка узлов типа "Условие" с поддержкой then/else переходов
+# - ДОБАВЛЕНО: Поддержка русских названий типов узлов (Условие, Задача, Вопрос, и т.д.)
+# - УЛУЧШЕНО: Более надежная оценка условий с подстановкой переменных из БД
+# - ДОБАВЛЕНО: Детальное логирование условных переходов для отладки
 
 import random
 import math
@@ -70,8 +71,8 @@ class SafeStateCalculator:
             return current_state
 
 user_sessions = {}
-INTERACTIVE_NODE_TYPES = ["task", "input_text", "question"]
-AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state"]
+INTERACTIVE_NODE_TYPES = ["task", "input_text", "question", "Задача", "Вопрос"]
+AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state", "Условие", "Рандомизатор", "Состояние"]
 
 def _normalize_newlines(text: str) -> str:
     return text.replace('\\n', '\n') if isinstance(text, str) else text
@@ -87,8 +88,45 @@ def _format_text(db, chat_id, t):
     except Exception:
         return t
 
+def _extract_condition_targets(node):
+    """Извлекает then/else узлы из структуры узла, поддерживая разные схемы."""
+    then_id = node.get("then_node_id") or node.get("then")
+    else_id = node.get("else_node_id") or node.get("else")
+    
+    # Если не нашли, попробуем в options
+    if not (then_id and else_id):
+        options = node.get("options", [])
+        for opt in options:
+            label = (opt.get("label") or opt.get("text") or "").strip().lower()
+            if label in ("then", "тогда") and not then_id:
+                then_id = opt.get("next_node_id")
+            elif label in ("else", "иначе") and not else_id:
+                else_id = opt.get("next_node_id")
+    
+    return then_id, else_id
+
+def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
+    """Улучшенная оценка условий с подстановкой переменных и детальным логированием."""
+    # Получаем все состояния пользователя
+    states = crud.get_all_user_states(db, user_id, session_id) if AI_AVAILABLE else {'score': 0}
+    
+    # Нормализуем строку условия - заменяем {var} на var
+    normalized_expr = re.sub(r'\{([a-zA-Z_]\w*)\}', r'\1', condition_str)
+    
+    print(f"🔍 [CONDITION DEBUG] Исходное: '{condition_str}'")
+    print(f"🔍 [CONDITION DEBUG] Нормализованное: '{normalized_expr}'")
+    print(f"🔍 [CONDITION DEBUG] Состояния: {states}")
+    
+    try:
+        result = bool(eval(normalized_expr, SafeStateCalculator.SAFE_GLOBALS, states))
+        print(f"🔍 [CONDITION DEBUG] Результат: {result}")
+        return result
+    except Exception as e:
+        print(f"❌ [CONDITION ERROR] '{condition_str}' -> '{normalized_expr}': {e}")
+        return False
+
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.6] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.7] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -126,6 +164,8 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             s['current_node_id'] = node_id
             node_type = node.get("type", "")
+            print(f"🚀 [PROCESS] NodeID={node_id}, Type='{node_type}'")
+            
             if node_type.startswith("ai_proactive"):
                 _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
             elif node_type in AUTOMATIC_NODE_TYPES:
@@ -133,6 +173,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             elif node_type in INTERACTIVE_NODE_TYPES:
                 _handle_interactive_node(db, bot, chat_id, node_id, node)
             else:
+                print(f"⚠️ [PROCESS] Неизвестный тип '{node_type}', завершаем игру")
                 _graceful_finish(db, chat_id, node)
         except Exception:
             traceback.print_exc()
@@ -141,7 +182,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if db: db.close()
 
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
-        """ИСПРАВЛЕНО: генерирует ответ ИИ, затем ВСЕГДА передаёт управление _handle_interactive_node"""
+        """Генерирует ответ ИИ, затем передает управление интерактивному обработчику."""
         try:
             type_str = node.get("type", "")
             role, task_prompt = _parse_ai_proactive_prompt(type_str)
@@ -156,26 +197,34 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         except Exception:
             traceback.print_exc()
         
-        # ИСПРАВЛЕНИЕ: всегда передаём управление стандартному обработчику интерактивных узлов
-        # Он покажет текст узла и кнопки (если есть), а дальнейшую логику обработает button_callback
         _handle_interactive_node(db, bot, chat_id, node_id, node)
 
     def _handle_automatic_node(db, bot, chat_id, node):
         node_type = node.get("type")
         next_node_id = None
-        if node_type == "state":
+        
+        if node_type in ("state", "Состояние"):
             if node.get("text"):
                 _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
             next_node_id = node.get("next_node_id")
-        elif node_type == "condition":
+        elif node_type in ("condition", "Условие"):
             s = user_sessions[chat_id]
             expr = node.get("text") or node.get("condition_string") or "False"
-            res = _evaluate_condition(db, s['user_id'], s['session_id'], expr)
-            next_node_id = node.get("then_node_id") if res else node.get("else_node_id")
-        elif node_type == "randomizer":
+            
+            # ИСПРАВЛЕНИЕ: используем улучшенную оценку условий
+            res = _evaluate_condition_enhanced(db, s['user_id'], s['session_id'], expr)
+            
+            # ИСПРАВЛЕНИЕ: поддержка then/else из CSV-структуры
+            then_id, else_id = _extract_condition_targets(node)
+            next_node_id = then_id if res else else_id
+            
+            print(f"⚖️ [CONDITION] '{expr}' -> {res}. Переход: {'THEN -> ' + str(then_id) if res else 'ELSE -> ' + str(else_id)}")
+        elif node_type in ("randomizer", "Рандомизатор"):
             br = node.get("branches", [])
             if br:
                 next_node_id = random.choices(br, weights=[b.get("weight", 1) for b in br], k=1)[0].get("next_node_id")
+            print(f"🎲 [RANDOMIZER] Next={next_node_id}")
+        
         if next_node_id:
             process_node(chat_id, next_node_id)
         else:
@@ -192,7 +241,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             return None
         markup = InlineKeyboardMarkup()
         node_type = node.get("type", "")
-        if (node_type == "task" or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
+        if (node_type in ("task", "Задача") or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
             random.shuffle(options)
         for i, option in enumerate(options):
             markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{node_id}|{i}"))
@@ -212,6 +261,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             bot.send_message(chat_id, processed_text)
 
     def _evaluate_condition(db, user_id, session_id, condition_str):
+        """Базовая функция оценки условий (оставлена для совместимости)."""
         states = crud.get_all_user_states(db, user_id, session_id)
         try:
             return eval(condition_str, SafeStateCalculator.SAFE_GLOBALS, states)
@@ -279,7 +329,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if not node:
                 return
             options = node.get("options", []).copy()
-            if (node.get("type", "") == "task" or node.get("type", "").startswith("ai_proactive")) and node.get("randomize_options", False):
+            if (node.get("type", "") in ("task", "Задача") or node.get("type", "").startswith("ai_proactive")) and node.get("randomize_options", False):
                 random.shuffle(options)
             if not options or btn_idx >= len(options):
                 return
