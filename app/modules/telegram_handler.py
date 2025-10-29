@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.8 (29.10.2025): ФИКС РАСХОЖДЕНИЯ МЕЖДУ ВИДИМЫМ ПОРЯДКОМ КНОПОК И РАСЧЕТОМ
-# - Сохраняем перемешанный порядок опций в сессии пользователя (shuffled_options)
-# - Используем сохранённый порядок в button_callback
-# - Очищаем сохранённый порядок после использования
+# ВЕРСИЯ 3.8.1 (29.10.2025): ДОБАВЛЕНЫ ОТСУТСТВУЮЩИЕ ФУНКЦИИ ДЛЯ УСЛОВИЙ
+# - Добавлены _evaluate_condition_enhanced и _extract_condition_targets (если отсутствуют)
+# - Оставлена логика v3.8 по сохранению порядка опций
 
 import random
 import math
@@ -87,19 +86,50 @@ def _format_text(db, chat_id, t):
     except Exception:
         return t
 
-# === НОВОЕ: сохраняем порядок опций в сессии ===
+# === УТИЛИТЫ ДЛЯ УСЛОВИЙ (если их нет в файле) ===
+try:
+    _extract_condition_targets
+except NameError:
+    def _extract_condition_targets(node):
+        """Извлекает then/else узлы из структуры узла, поддерживая разные схемы."""
+        then_id = node.get("then_node_id") or node.get("then")
+        else_id = node.get("else_node_id") or node.get("else")
+        if not (then_id and else_id):
+            options = node.get("options", [])
+            for opt in options:
+                label = (opt.get("label") or opt.get("text") or "").strip().lower()
+                if label in ("then", "тогда") and not then_id:
+                    then_id = opt.get("next_node_id")
+                elif label in ("else", "иначе") and not else_id:
+                    else_id = opt.get("next_node_id")
+        return then_id, else_id
+
+try:
+    _evaluate_condition_enhanced
+except NameError:
+    def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
+        """Улучшенная оценка условий с подстановкой переменных и логированием."""
+        states = crud.get_all_user_states(db, user_id, session_id) if AI_AVAILABLE else {'score': 0}
+        normalized_expr = re.sub(r'\{([a-zA-Z_]\w*)\}', r'\1', condition_str or "False")
+        print(f"🔍 [CONDITION DEBUG] Исходное: '{condition_str}' -> Нормализованное: '{normalized_expr}', states={states}")
+        try:
+            result = bool(eval(normalized_expr, SafeStateCalculator.SAFE_GLOBALS, states))
+        except Exception as e:
+            print(f"❌ [CONDITION ERROR] '{condition_str}' -> '{normalized_expr}': {e}")
+            result = False
+        return result
+
+# === ХРАНЕНИЕ ПОРЯДКА ОПЦИЙ ===
+
 def _save_shuffled_options(chat_id, node_id, options):
     sess = user_sessions.setdefault(chat_id, {})
     sess.setdefault('shuffled', {})
-    # Храним по ключу node_id -> массив опций
     sess['shuffled'][str(node_id)] = options
-
 
 def _get_shuffled_options(chat_id, node_id):
     sess = user_sessions.get(chat_id, {})
     store = sess.get('shuffled') or {}
     return store.get(str(node_id))
-
 
 def _clear_shuffled_options(chat_id, node_id):
     sess = user_sessions.get(chat_id, {})
@@ -109,7 +139,7 @@ def _clear_shuffled_options(chat_id, node_id):
 
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.8] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.8.1] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -213,7 +243,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         node_type = node.get("type", "")
         if (node_type in ("task", "Задача") or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
             random.shuffle(options)
-        # Сохраняем перемешанный порядок для последующей обработки в callback
         _save_shuffled_options(chat_id, node_id, options)
         markup = _build_keyboard_from_options(node_id, options)
         _send_message(bot, chat_id, node, text, markup)
@@ -227,7 +256,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         return markup
 
     def _build_keyboard(node_id, node):
-        # Не используется больше напрямую для перемешивания; оставлено для совместимости
         return _build_keyboard_from_options(node_id, node.get("options", []))
 
     def _send_message(bot, chat_id, node, text, markup=None):
@@ -311,7 +339,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if not node:
                 return
 
-            # === НОВОЕ: используем сохранённый порядок ===
             shuffled = _get_shuffled_options(chat_id, node_id)
             if shuffled is not None:
                 options = shuffled
@@ -324,8 +351,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if not options or btn_idx >= len(options):
                 return
             option = options[btn_idx]
-
-            # Очистим сохранённый порядок для этого узла, чтобы не влиял на будущие
             _clear_shuffled_options(chat_id, node_id)
 
             if option.get("formula"):
