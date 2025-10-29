@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.8.3 (29.10.2025): HOTFIX — восстановлена проверка ai_proactive без побочных изменений
-# - Используем ровно прежнюю проверку: node.get("type", "").startswith("ai_proactive")
-# - Сохраняем только фиксы порядка кнопок (shuffled_options) и условной логики
+# ВЕРСИЯ 4.0 (30.10.2025): Интеграция с TimingEngine v2.0
+# - Добавлена универсальная обработка ключа "timing" в узлах.
+# - Логика отображения узла вынесена в _execute_node_logic.
+# - process_node теперь является "timing-aware" диспетчером.
 
 import random
 import math
@@ -17,6 +18,8 @@ try:
     from app.modules.database import SessionLocal, crud
     from app.modules import gigachat_handler
     from app.modules.hot_reload import get_current_graph
+    # ИМПОРТИРУЕМ TIMING ENGINE
+    from app.modules.timing_engine import process_node_timing
     AI_AVAILABLE = True
 except Exception as e:
     print(f"⚠️ Модули частично недоступны ({e}). Включены заглушки.")
@@ -24,6 +27,10 @@ except Exception as e:
 
     def get_current_graph(): return None
     def SessionLocal(): return None
+    # Заглушка для timing_engine
+    def process_node_timing(user_id, session_id, node_id, timing_config, callback, **context):
+        print("⚠️ Timing engine заглушка: немедленный вызов callback")
+        callback()
 
     class crud:
         @staticmethod
@@ -86,8 +93,6 @@ def _format_text(db, chat_id, t):
     except Exception:
         return t
 
-# === УТИЛИТЫ ДЛЯ УСЛОВИЙ ===
-
 def _extract_condition_targets(node):
     then_id = node.get("then_node_id") or node.get("then")
     else_id = node.get("else_node_id") or node.get("else")
@@ -101,7 +106,6 @@ def _extract_condition_targets(node):
                 else_id = opt.get("next_node_id")
     return then_id, else_id
 
-
 def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
     states = crud.get_all_user_states(db, user_id, session_id) if AI_AVAILABLE else {'score': 0}
     normalized_expr = re.sub(r'\{([a-zA-Z_]\w*)\}', r'\1', condition_str or "False")
@@ -112,19 +116,15 @@ def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
         print(f"❌ [CONDITION ERROR] '{condition_str}' -> '{normalized_expr}': {e}")
         return False
 
-# === ХРАНЕНИЕ ПОРЯДКА ОПЦИЙ ===
-
 def _save_shuffled_options(chat_id, node_id, options):
     sess = user_sessions.setdefault(chat_id, {})
     sess.setdefault('shuffled', {})
     sess['shuffled'][str(node_id)] = options
 
-
 def _get_shuffled_options(chat_id, node_id):
     sess = user_sessions.get(chat_id, {})
     store = sess.get('shuffled') or {}
     return store.get(str(node_id))
-
 
 def _clear_shuffled_options(chat_id, node_id):
     sess = user_sessions.get(chat_id, {})
@@ -132,9 +132,8 @@ def _clear_shuffled_options(chat_id, node_id):
     if str(node_id) in store:
         del store[str(node_id)]
 
-
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.8.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -151,6 +150,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             crud.end_session(db, s['session_id'])
         user_sessions.pop(chat_id, None)
 
+    # --- НОВАЯ, ОСНОВНАЯ ФУНКЦИЯ-ДИСПЕТЧЕР ---
     def process_node(chat_id, node_id):
         db = SessionLocal()
         try:
@@ -170,21 +170,62 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 bot.send_message(chat_id, f"Ошибка сценария: узел '{node_id}' не найден.")
                 return
 
-            s['current_node_id'] = node_id
-            node_type = node.get("type", "")
-            if node_type.startswith("ai_proactive"):
-                _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
-            elif node_type in AUTOMATIC_NODE_TYPES:
-                _handle_automatic_node(db, bot, chat_id, node)
-            elif node_type in INTERACTIVE_NODE_TYPES:
-                _handle_interactive_node(db, bot, chat_id, node_id, node)
+            # Проверяем наличие команды timing
+            timing_config = node.get("timing")
+            if timing_config:
+                print(f"⏱️ [TIMING DETECTED] Узел {node_id}, конфиг: {timing_config}")
+
+                # Функция, которая будет вызвана ПОСЛЕ отработки таймера
+                def execute_node_callback():
+                    callback_db = SessionLocal()
+                    try:
+                        _execute_node_logic(callback_db, bot, chat_id, node_id, node)
+                    finally:
+                        callback_db.close()
+
+                # Готовим контекст для TimingEngine
+                context = {
+                    'bot': bot, 'chat_id': chat_id,
+                    'user_id': s.get('user_id'), 'session_id': s.get('session_id'),
+                    'node_id': node_id, 'node_text': node.get('text', ''),
+                    'buttons': node.get('options', []),
+                    'next_node_id': node.get('next_node_id')
+                }
+
+                # Вызываем TimingEngine
+                process_node_timing(
+                    user_id=s.get('user_id'), session_id=s.get('session_id'),
+                    node_id=node_id, timing_config=timing_config,
+                    callback=execute_node_callback, **context
+                )
             else:
-                _graceful_finish(db, chat_id, node)
+                # Если timing нет, выполняем логику узла немедленно
+                _execute_node_logic(db, bot, chat_id, node_id, node)
+
         except Exception:
             traceback.print_exc()
             bot.send_message(chat_id, "Критическая ошибка движка. /start")
         finally:
             if db: db.close()
+
+    # --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ С ЛОГИКОЙ УЗЛА ---
+    def _execute_node_logic(db, bot, chat_id, node_id, node):
+        """Выполнение основной логики узла (вынесено из process_node)"""
+        s = user_sessions.get(chat_id)
+        if not s: 
+            return
+
+        s['current_node_id'] = node_id
+        node_type = node.get("type", "")
+        
+        if node_type.startswith("ai_proactive"):
+            _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
+        elif node_type in AUTOMATIC_NODE_TYPES:
+            _handle_automatic_node(db, bot, chat_id, node)
+        elif node_type in INTERACTIVE_NODE_TYPES:
+            _handle_interactive_node(db, bot, chat_id, node_id, node)
+        else:
+            _graceful_finish(db, chat_id, node)
 
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
         try:
@@ -260,9 +301,13 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             img = node.get("image_id")
             server_url = config("SERVER_URL", default=None)
             if img and server_url:
-                bot.send_photo(chat_id, f"{server_url}/images/{img}", caption=processed_text, reply_markup=markup, parse_mode="Markdown")
+                sent_msg = bot.send_photo(chat_id, f"{server_url}/images/{img}", caption=processed_text, reply_markup=markup, parse_mode="Markdown")
             else:
-                bot.send_message(chat_id, processed_text, reply_markup=markup, parse_mode="Markdown")
+                sent_msg = bot.send_message(chat_id, processed_text, reply_markup=markup, parse_mode="Markdown")
+            
+            # Сохраняем ID сообщения для timeout
+            if user_sessions.get(chat_id):
+                user_sessions[chat_id]['question_message_id'] = sent_msg.message_id
         except Exception as e:
             print(f"send_message error: {e}")
             bot.send_message(chat_id, processed_text)
