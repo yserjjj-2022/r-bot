@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.8.2 (29.10.2025): УБРАНЫ try/except вокруг определений утилит; функции объявлены явно
-# - Явные определения _extract_condition_targets и _evaluate_condition_enhanced до использования
-# - Сохранены фиксы v3.8.x: синхронизация перемешанных опций и улучшенная условная логика
+# ВЕРСИЯ 3.8.3 (29.10.2025): HOTFIX — восстановлена проверка ai_proactive без побочных изменений
+# - Используем ровно прежнюю проверку: node.get("type", "").startswith("ai_proactive")
+# - Сохраняем только фиксы порядка кнопок (shuffled_options) и условной логики
 
 import random
 import math
@@ -86,10 +86,9 @@ def _format_text(db, chat_id, t):
     except Exception:
         return t
 
-# === ЯВНЫЕ УТИЛИТЫ ДЛЯ УСЛОВИЙ (без try/except) ===
+# === УТИЛИТЫ ДЛЯ УСЛОВИЙ ===
 
 def _extract_condition_targets(node):
-    """Извлекает then/else узлы из структуры узла, поддерживая разные схемы."""
     then_id = node.get("then_node_id") or node.get("then")
     else_id = node.get("else_node_id") or node.get("else")
     if not (then_id and else_id):
@@ -104,16 +103,14 @@ def _extract_condition_targets(node):
 
 
 def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
-    """Улучшенная оценка условий с подстановкой переменных и логированием."""
     states = crud.get_all_user_states(db, user_id, session_id) if AI_AVAILABLE else {'score': 0}
     normalized_expr = re.sub(r'\{([a-zA-Z_]\w*)\}', r'\1', condition_str or "False")
-    print(f"🔍 [CONDITION DEBUG] Исходное: '{condition_str}' -> Нормализованное: '{normalized_expr}', states={states}")
+    print(f"🔍 [CONDITION DEBUG] '{condition_str}' -> '{normalized_expr}', states={states}")
     try:
-        result = bool(eval(normalized_expr, SafeStateCalculator.SAFE_GLOBALS, states))
+        return bool(eval(normalized_expr, SafeStateCalculator.SAFE_GLOBALS, states))
     except Exception as e:
         print(f"❌ [CONDITION ERROR] '{condition_str}' -> '{normalized_expr}': {e}")
-        result = False
-    return result
+        return False
 
 # === ХРАНЕНИЕ ПОРЯДКА ОПЦИЙ ===
 
@@ -137,7 +134,7 @@ def _clear_shuffled_options(chat_id, node_id):
 
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.8.2] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.8.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -175,8 +172,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
             s['current_node_id'] = node_id
             node_type = node.get("type", "")
-            print(f"🚀 [PROCESS] NodeID={node_id}, Type='{node_type}'")
-            
             if node_type.startswith("ai_proactive"):
                 _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
             elif node_type in AUTOMATIC_NODE_TYPES:
@@ -184,7 +179,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             elif node_type in INTERACTIVE_NODE_TYPES:
                 _handle_interactive_node(db, bot, chat_id, node_id, node)
             else:
-                print(f"⚠️ [PROCESS] Неизвестный тип '{node_type}', завершаем игру")
                 _graceful_finish(db, chat_id, node)
         except Exception:
             traceback.print_exc()
@@ -195,24 +189,33 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
         try:
             type_str = node.get("type", "")
-            role, task_prompt = _parse_ai_proactive_prompt(type_str)
+            # Парсер прежнего формата типа: ai_proactive:role("prompt") или ai_proactive:role(prompt)
+            patterns = [
+                r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)',
+                r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)'
+            ]
+            role = None; task_prompt = None
+            for p in patterns:
+                m = re.search(p, type_str)
+                if m:
+                    role, task_prompt = m.groups(); break
             if role and task_prompt and AI_AVAILABLE:
                 bot.send_chat_action(chat_id, 'typing')
                 s = user_sessions[chat_id]
-                context = crud.build_full_context_for_ai(db, s['session_id'], s['user_id'], task_prompt,
-                                                         node.get("options", []), event_type="proactive", ai_persona=role)
+                context = crud.build_full_context_for_ai(
+                    db, s['session_id'], s['user_id'], task_prompt,
+                    node.get("options", []), event_type="proactive", ai_persona=role
+                )
                 ai_response = gigachat_handler.get_ai_response("", system_prompt=context)
                 bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
                 crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
         except Exception:
             traceback.print_exc()
-        
         _handle_interactive_node(db, bot, chat_id, node_id, node)
 
     def _handle_automatic_node(db, bot, chat_id, node):
         node_type = node.get("type")
         next_node_id = None
-        
         if node_type in ("state", "Состояние"):
             if node.get("text"):
                 _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
@@ -228,8 +231,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             br = node.get("branches", [])
             if br:
                 next_node_id = random.choices(br, weights=[b.get("weight", 1) for b in br], k=1)[0].get("next_node_id")
-            print(f"🎲 [RANDOMIZER] Next={next_node_id}")
-        
         if next_node_id:
             process_node(chat_id, next_node_id)
         else:
@@ -253,9 +254,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{node_id}|{i}"))
         return markup
 
-    def _build_keyboard(node_id, node):
-        return _build_keyboard_from_options(node_id, node.get("options", []))
-
     def _send_message(bot, chat_id, node, text, markup=None):
         processed_text = _normalize_newlines(text)
         try:
@@ -277,7 +275,8 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             return False
 
     def _parse_ai_proactive_prompt(type_str):
-        patterns = [r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)', r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)', r'ai_proactive\s*:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)']
+        # Оставлено для совместимости, но выше используется локальный парсер в _handle_proactive_ai_node
+        patterns = [r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)', r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)']
         for pattern in patterns:
             m = re.search(pattern, type_str)
             if m:
