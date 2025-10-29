@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 3.7 (17.10.2025): ИСПРАВЛЕНИЕ УСЛОВНОЙ ЛОГИКИ + ПОДДЕРЖКА РУССКИХ ТИПОВ
-# - ИСПРАВЛЕНО: Корректная обработка узлов типа "Условие" с поддержкой then/else переходов
-# - ДОБАВЛЕНО: Поддержка русских названий типов узлов (Условие, Задача, Вопрос, и т.д.)
-# - УЛУЧШЕНО: Более надежная оценка условий с подстановкой переменных из БД
-# - ДОБАВЛЕНО: Детальное логирование условных переходов для отладки
+# ВЕРСИЯ 3.8 (29.10.2025): ФИКС РАСХОЖДЕНИЯ МЕЖДУ ВИДИМЫМ ПОРЯДКОМ КНОПОК И РАСЧЕТОМ
+# - Сохраняем перемешанный порядок опций в сессии пользователя (shuffled_options)
+# - Используем сохранённый порядок в button_callback
+# - Очищаем сохранённый порядок после использования
 
 import random
 import math
@@ -88,45 +87,29 @@ def _format_text(db, chat_id, t):
     except Exception:
         return t
 
-def _extract_condition_targets(node):
-    """Извлекает then/else узлы из структуры узла, поддерживая разные схемы."""
-    then_id = node.get("then_node_id") or node.get("then")
-    else_id = node.get("else_node_id") or node.get("else")
-    
-    # Если не нашли, попробуем в options
-    if not (then_id and else_id):
-        options = node.get("options", [])
-        for opt in options:
-            label = (opt.get("label") or opt.get("text") or "").strip().lower()
-            if label in ("then", "тогда") and not then_id:
-                then_id = opt.get("next_node_id")
-            elif label in ("else", "иначе") and not else_id:
-                else_id = opt.get("next_node_id")
-    
-    return then_id, else_id
+# === НОВОЕ: сохраняем порядок опций в сессии ===
+def _save_shuffled_options(chat_id, node_id, options):
+    sess = user_sessions.setdefault(chat_id, {})
+    sess.setdefault('shuffled', {})
+    # Храним по ключу node_id -> массив опций
+    sess['shuffled'][str(node_id)] = options
 
-def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
-    """Улучшенная оценка условий с подстановкой переменных и детальным логированием."""
-    # Получаем все состояния пользователя
-    states = crud.get_all_user_states(db, user_id, session_id) if AI_AVAILABLE else {'score': 0}
-    
-    # Нормализуем строку условия - заменяем {var} на var
-    normalized_expr = re.sub(r'\{([a-zA-Z_]\w*)\}', r'\1', condition_str)
-    
-    print(f"🔍 [CONDITION DEBUG] Исходное: '{condition_str}'")
-    print(f"🔍 [CONDITION DEBUG] Нормализованное: '{normalized_expr}'")
-    print(f"🔍 [CONDITION DEBUG] Состояния: {states}")
-    
-    try:
-        result = bool(eval(normalized_expr, SafeStateCalculator.SAFE_GLOBALS, states))
-        print(f"🔍 [CONDITION DEBUG] Результат: {result}")
-        return result
-    except Exception as e:
-        print(f"❌ [CONDITION ERROR] '{condition_str}' -> '{normalized_expr}': {e}")
-        return False
+
+def _get_shuffled_options(chat_id, node_id):
+    sess = user_sessions.get(chat_id, {})
+    store = sess.get('shuffled') or {}
+    return store.get(str(node_id))
+
+
+def _clear_shuffled_options(chat_id, node_id):
+    sess = user_sessions.get(chat_id, {})
+    store = sess.get('shuffled') or {}
+    if str(node_id) in store:
+        del store[str(node_id)]
+
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.7] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v3.8] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -182,7 +165,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if db: db.close()
 
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
-        """Генерирует ответ ИИ, затем передает управление интерактивному обработчику."""
         try:
             type_str = node.get("type", "")
             role, task_prompt = _parse_ai_proactive_prompt(type_str)
@@ -210,14 +192,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         elif node_type in ("condition", "Условие"):
             s = user_sessions[chat_id]
             expr = node.get("text") or node.get("condition_string") or "False"
-            
-            # ИСПРАВЛЕНИЕ: используем улучшенную оценку условий
             res = _evaluate_condition_enhanced(db, s['user_id'], s['session_id'], expr)
-            
-            # ИСПРАВЛЕНИЕ: поддержка then/else из CSV-структуры
             then_id, else_id = _extract_condition_targets(node)
             next_node_id = then_id if res else else_id
-            
             print(f"⚖️ [CONDITION] '{expr}' -> {res}. Переход: {'THEN -> ' + str(then_id) if res else 'ELSE -> ' + str(else_id)}")
         elif node_type in ("randomizer", "Рандомизатор"):
             br = node.get("branches", [])
@@ -232,20 +209,26 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
     def _handle_interactive_node(db, bot, chat_id, node_id, node):
         text = _format_text(db, chat_id, node.get("text", "(нет текста)"))
-        markup = _build_keyboard(node_id, node)
-        _send_message(bot, chat_id, node, text, markup)
-
-    def _build_keyboard(node_id, node):
         options = node.get("options", []).copy()
-        if not options:
-            return None
-        markup = InlineKeyboardMarkup()
         node_type = node.get("type", "")
         if (node_type in ("task", "Задача") or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
             random.shuffle(options)
+        # Сохраняем перемешанный порядок для последующей обработки в callback
+        _save_shuffled_options(chat_id, node_id, options)
+        markup = _build_keyboard_from_options(node_id, options)
+        _send_message(bot, chat_id, node, text, markup)
+
+    def _build_keyboard_from_options(node_id, options):
+        if not options:
+            return None
+        markup = InlineKeyboardMarkup()
         for i, option in enumerate(options):
             markup.add(InlineKeyboardButton(text=option["text"], callback_data=f"{node_id}|{i}"))
         return markup
+
+    def _build_keyboard(node_id, node):
+        # Не используется больше напрямую для перемешивания; оставлено для совместимости
+        return _build_keyboard_from_options(node_id, node.get("options", []))
 
     def _send_message(bot, chat_id, node, text, markup=None):
         processed_text = _normalize_newlines(text)
@@ -261,7 +244,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             bot.send_message(chat_id, processed_text)
 
     def _evaluate_condition(db, user_id, session_id, condition_str):
-        """Базовая функция оценки условий (оставлена для совместимости)."""
         states = crud.get_all_user_states(db, user_id, session_id)
         try:
             return eval(condition_str, SafeStateCalculator.SAFE_GLOBALS, states)
@@ -328,12 +310,23 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             graph = get_current_graph(); node = graph.get("nodes", {}).get(node_id) if graph else None
             if not node:
                 return
-            options = node.get("options", []).copy()
-            if (node.get("type", "") in ("task", "Задача") or node.get("type", "").startswith("ai_proactive")) and node.get("randomize_options", False):
-                random.shuffle(options)
+
+            # === НОВОЕ: используем сохранённый порядок ===
+            shuffled = _get_shuffled_options(chat_id, node_id)
+            if shuffled is not None:
+                options = shuffled
+            else:
+                options = node.get("options", []).copy()
+                node_type = node.get("type", "")
+                if (node_type in ("task", "Задача") or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
+                    random.shuffle(options)
+
             if not options or btn_idx >= len(options):
                 return
             option = options[btn_idx]
+
+            # Очистим сохранённый порядок для этого узла, чтобы не влиял на будущие
+            _clear_shuffled_options(chat_id, node_id)
 
             if option.get("formula"):
                 states_before = crud.get_all_user_states(db, s['user_id'], s['session_id'])
