@@ -7,16 +7,38 @@ import uuid
 import shutil
 from flask import Flask, request, send_from_directory
 
-# Настройка чтения секретов из файлов (Amvera) или переменных окружения (локально)
+# Настройка чтения секретов: фильтруем только файлы, игнорируем вложенные каталоги (например, kubernetes.io)
 from decouple import config as default_config, Config, RepositorySecret
 
-if os.path.exists('/run/secrets'):
-    # Чтение секретов из файлов в Amvera
-    secret_repo = RepositorySecret('/run/secrets')
-    config = Config(repository=secret_repo)
-else:
-    # Чтение из переменных окружения или .env файла (локально)
-    config = default_config
+def build_secret_config() -> Config:
+    base_dir = '/run/secrets'
+    if not os.path.exists(base_dir):
+        # Локальная разработка: .env/переменные окружения
+        return default_config
+    # Собираем только файловые секреты из корня /run/secrets
+    tmp_dir = '/tmp/rbot_secrets'
+    try:
+        os.makedirs(tmp_dir, exist_ok=True)
+        for name in os.listdir(base_dir):
+            src_path = os.path.join(base_dir, name)
+            dst_path = os.path.join(tmp_dir, name)
+            # Берём только обычные файлы; каталоги (например, kubernetes.io) пропускаем
+            if os.path.isfile(src_path):
+                # Читаем как текст и переписываем без завершающих переводов строки
+                try:
+                    with open(src_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        value = f.read().strip()
+                    with open(dst_path, 'w', encoding='utf-8') as f:
+                        f.write(value)
+                except Exception:
+                    # В случае проблем — пропускаем конкретный секрет
+                    pass
+        return Config(repository=RepositorySecret(tmp_dir))
+    except Exception:
+        # Фоллбэк на стандартный конфиг, чтобы не падать
+        return default_config
+
+config = build_secret_config()
 
 # --- ИМПОРТИРУЕМ HOT-RELOAD ---
 from app.modules.hot_reload import start_hot_reload, get_current_graph
