@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# app/modules/telegram_handler.py — ВОССТАНОВЛЕННАЯ ВЕРСИЯ с отменой timeout (добавлены недостающие функции)
+# app/modules/telegram_handler.py — ВОССТАНОВЛЕННАЯ ВЕРСИЯ с отменой timeout (завершённый button_callback)
 
 import random
 import math
@@ -72,7 +72,7 @@ def _format_text(db, chat_id, t):
 # === ПУБЛИЧНАЯ ФУНКЦИЯ РЕГИСТРАЦИИ ОБРАБОТЧИКОВ ===
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.4] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.5] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -159,7 +159,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         else:
             _graceful_finish(db, chat_id, node)
 
-    # === MISSING HANDLERS RESTORED ===
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
         try:
             type_str = node.get("type", "")
@@ -194,7 +193,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
             next_node_id = node.get("next_node_id")
         elif node_type in ("condition", "Условие"):
-            # Упрощено
             next_node_id = node.get("next_node_id")
         elif node_type in ("randomizer", "Рандомизатор"):
             br = node.get("branches", [])
@@ -272,3 +270,45 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             bot.answer_callback_query(call.id)
         except Exception:
             pass
+
+        db = SessionLocal()
+        try:
+            # Разбор callback_data формата "{node_id}|{index}"
+            try:
+                node_id, btn_idx_str = call.data.split('|')
+                btn_idx = int(btn_idx_str)
+            except Exception as e:
+                print(f"PARSE ERROR call.data='{call.data}': {e}")
+                return
+
+            graph = get_current_graph()
+            node = graph.get("nodes", {}).get(node_id) if graph else None
+            if not node:
+                return
+
+            options = node.get("options", []).copy()
+            if not options or btn_idx >= len(options):
+                return
+            option = options[btn_idx]
+
+            # Запись ответа в БД
+            try:
+                crud.create_response(db, s['session_id'], node_id, answer_text=option.get("interpretation", option["text"]), node_text=node.get("text", ""))
+            except Exception:
+                pass
+
+            # UI: сбросить клавиатуру
+            try:
+                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            except Exception:
+                pass
+
+            next_node_id = option.get("next_node_id") or node.get("next_node_id")
+            if next_node_id:
+                process_node(chat_id, next_node_id)
+            else:
+                _graceful_finish(db, chat_id, node)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            if db: db.close()
