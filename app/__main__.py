@@ -2,10 +2,21 @@
 
 import telebot
 import json  # ← НУЖЕН ДЛЯ load_graph()
-from decouple import config
-from flask import Flask, request, send_from_directory
 import os
+import uuid
 import shutil
+from flask import Flask, request, send_from_directory
+
+# Настройка чтения секретов из файлов (Amvera) или переменных окружения (локально)
+from decouple import config as default_config, Config, RepositorySecret
+
+if os.path.exists('/run/secrets'):
+    # Чтение секретов из файлов в Amvera
+    secret_repo = RepositorySecret('/run/secrets')
+    config = Config(repository=secret_repo)
+else:
+    # Чтение из переменных окружения или .env файла (локально)
+    config = default_config
 
 # --- ИМПОРТИРУЕМ HOT-RELOAD ---
 from app.modules.hot_reload import start_hot_reload, get_current_graph
@@ -21,10 +32,14 @@ def load_graph(filename: str) -> dict:
         return None
 
 # --- Инициализация ---
-BOT_TOKEN = config("TELEGRAM_BOT_TOKEN")
-GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json") 
-SERVER_URL = config("SERVER_URL") 
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+# Читаем секреты с защитой от лишних символов
+BOT_TOKEN = config("TELEGRAM_BOT_TOKEN").strip()
+GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json")
+SERVER_URL = config("SERVER_URL")
+
+# Безопасное создание webhook URL без использования BOT_TOKEN
+WEBHOOK_SECRET = config("WEBHOOK_SECRET", default=str(uuid.uuid4())).strip()
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
 
 app = Flask(__name__)
