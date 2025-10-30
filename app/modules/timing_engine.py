@@ -10,6 +10,7 @@ R-Bot Timing Engine - система временных механик с ада
 06.10.2025 - ДОБАВЛЕН Silent Mode для сценарных timeout'ов
 06.10.2025 - ВОССТАНОВЛЕНЫ заглушки для daily/remind/deadline (для будущих спринтов)
 30.10.2025 - РЕФАКТОРИНГ к примитивам: добавлена поддержка DynamicPause для typing/process
+30.10.2025 - АКТИВИРОВАН progressbar режим для typing команд
 
 DSL команды:
 - timeout:15s:no_answer - интерактивный timeout с countdown (если есть кнопки)
@@ -651,14 +652,15 @@ class TimingEngine:
         threading.Timer(duration, callback).start()
 
     def _execute_typing(self, command: Dict[str, Any], callback: Callable, **context) -> None:
-        """Выполнение typing через примитив DynamicPause (этап 1: безопасная пауза)"""
+        """Выполнение typing через примитив DynamicPause - АКТИВИРОВАН progressbar режим"""
         duration = float(command.get('duration', 0))
         process_name = command.get('process_name', 'Обработка')
 
         bot = context.get('bot')
         chat_id = context.get('chat_id')
 
-        pause = DynamicPause(bot=bot, chat_id=chat_id, duration=duration, fill_type='silent', message_text=process_name)
+        # ИЗМЕНЕНО: теперь используем 'progressbar' вместо 'silent'
+        pause = DynamicPause(bot=bot, chat_id=chat_id, duration=duration, fill_type='progressbar', message_text=process_name)
         pause.execute(on_complete_callback=callback)
 
     def _execute_process(self, command: Dict[str, Any], callback: Callable, **context) -> None:
