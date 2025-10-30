@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# app/modules/telegram_handler.py — СТАБИЛЬНАЯ БАЗОВАЯ ВЕРСИЯ (ОТКАТ)
-# Полный откат к состоянию до внедрения TemporalAction и последующих правок
-# БЕЗ интеграции таймеров и без дополнительных оптимизаций
+# app/modules/telegram_handler.py
+# ВЕРСИЯ 4.0.2 (30.10.2025): СТАБИЛЬНАЯ БАЗОВАЯ ВЕРСИЯ ОТ COMMIT 15cd207
+# Возврат к последней полностью рабочей версии 30 октября до экспериментов со второй функцией тайминга
 
 import random
 import math
@@ -9,17 +9,44 @@ import re
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import traceback
+from sqlalchemy.orm import Session
+from decouple import config
 
 try:
     from app.modules.database import SessionLocal, crud
     from app.modules import gigachat_handler
     from app.modules.hot_reload import get_current_graph
+    from app.modules.timing_engine import process_node_timing
     AI_AVAILABLE = True
 except Exception as e:
     print(f"⚠️ Модули частично недоступны ({e}). Включены заглушки.")
     AI_AVAILABLE = False
+
     def get_current_graph(): return None
     def SessionLocal(): return None
+    def process_node_timing(user_id, session_id, node_id, timing_config, callback, **context):
+        print("⚠️ Timing engine заглушка: немедленный вызов callback")
+        callback()
+
+    class crud:
+        @staticmethod
+        def get_or_create_user(db, telegram_id): return type('obj', (), {'id': 1, 'telegram_id': telegram_id})()
+        @staticmethod
+        def create_session(db, user_id, graph_id): return type('obj', (), {'id': 1, 'user_id': user_id})()
+        @staticmethod
+        def end_session(db, session_id): pass
+        @staticmethod
+        def create_response(db, session_id, node_id, answer_text, node_text=""): pass
+        @staticmethod
+        def get_user_state(db, user_id, session_id, key, default=None): return default if default is not None else 0
+        @staticmethod
+        def update_user_state(db, user_id, session_id, key, value): pass
+        @staticmethod
+        def get_all_user_states(db, user_id, session_id): return {'score': 0}
+        @staticmethod
+        def create_ai_dialogue(db, session_id, node_id, user_message, ai_response): pass
+        @staticmethod
+        def build_full_context_for_ai(db, s_id, u_id, q, opts, et, ap): return "Контекст для AI"
 
 class SafeStateCalculator:
     SAFE_GLOBALS = {"__builtins__": None, "random": random, "math": math,
@@ -49,12 +76,12 @@ INTERACTIVE_NODE_TYPES = ["task", "input_text", "question", "Задача", "В�
 AUTOMATIC_NODE_TYPES = ["condition", "randomizer", "state", "Условие", "Рандомизатор", "Состояние"]
 
 def _normalize_newlines(text: str) -> str:
-    return text.replace('\n', '\n') if isinstance(text, str) else text
+    return text.replace('\\n', '\n') if isinstance(text, str) else text
 
-def _format_text(db, chat_id, t, local_states=None):
+def _format_text(db, chat_id, t):
     s = user_sessions.get(chat_id, {})
     try:
-        states = local_states if local_states is not None else crud.get_all_user_states(db, s.get('user_id'), s.get('session_id'))
+        states = crud.get_all_user_states(db, s.get('user_id'), s.get('session_id'))
     except Exception:
         states = {}
     try:
@@ -62,16 +89,54 @@ def _format_text(db, chat_id, t, local_states=None):
     except Exception:
         return t
 
-# === РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ (БЕЗ ТАЙМЕРОВ) ===
+def _extract_condition_targets(node):
+    then_id = node.get("then_node_id") or node.get("then")
+    else_id = node.get("else_node_id") or node.get("else")
+    if not (then_id and else_id):
+        options = node.get("options", [])
+        for opt in options:
+            label = (opt.get("label") or opt.get("text") or "").strip().lower()
+            if label in ("then", "тогда") and not then_id:
+                then_id = opt.get("next_node_id")
+            elif label in ("else", "иначе") and not else_id:
+                else_id = opt.get("next_node_id")
+    return then_id, else_id
+
+def _evaluate_condition_enhanced(db, user_id, session_id, condition_str):
+    states = crud.get_all_user_states(db, user_id, session_id) if AI_AVAILABLE else {'score': 0}
+    normalized_expr = re.sub(r'\{([a-zA-Z_]\w*)\}', r'\1', condition_str or "False")
+    print(f"🔍 [CONDITION DEBUG] '{condition_str}' -> '{normalized_expr}', states={states}")
+    try:
+        return bool(eval(normalized_expr, SafeStateCalculator.SAFE_GLOBALS, states))
+    except Exception as e:
+        print(f"❌ [CONDITION ERROR] '{condition_str}' -> '{normalized_expr}': {e}")
+        return False
+
+def _save_shuffled_options(chat_id, node_id, options):
+    sess = user_sessions.setdefault(chat_id, {})
+    sess.setdefault('shuffled', {})
+    sess['shuffled'][str(node_id)] = options
+
+def _get_shuffled_options(chat_id, node_id):
+    sess = user_sessions.get(chat_id, {})
+    store = sess.get('shuffled') or {}
+    return store.get(str(node_id))
+
+def _clear_shuffled_options(chat_id, node_id):
+    sess = user_sessions.get(chat_id, {})
+    store = sess.get('shuffled') or {}
+    if str(node_id) in store:
+        del store[str(node_id)]
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v3.7 BASELINE] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.2 STABLE] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
         if not s:
             return
         if s.get('finished'):
+            print("🏁 [FINISH] Уже завершено -> skip")
             return
         s['finished'] = True
         if node.get('text') and node.get('type') not in AUTOMATIC_NODE_TYPES:
@@ -86,6 +151,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         try:
             s = user_sessions.get(chat_id)
             if s and s.get('finished'):
+                print("🚫 [PROCESS] Сессия уже завершена -> skip")
                 return
             graph = get_current_graph()
             if not graph:
@@ -98,8 +164,37 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if not node:
                 bot.send_message(chat_id, f"Ошибка сценария: узел '{node_id}' не найден.")
                 return
-            s['current_node_id'] = node_id
-            _execute_node_logic(db, bot, chat_id, node_id, node)
+
+            timing_config = node.get("timing")
+            if timing_config:
+                print(f"⏱️ [TIMING DETECTED] Узел {node_id}, конфиг: {timing_config}")
+
+                def execute_node_callback():
+                    callback_db = SessionLocal()
+                    try:
+                        _execute_node_logic(callback_db, bot, chat_id, node_id, node)
+                    finally:
+                        callback_db.close()
+
+                context = {
+                    'bot': bot, 'chat_id': chat_id,
+                    'telegram_user_id': s.get('user_id'),
+                    'session_reference': s.get('session_id'),
+                    'current_node_id': node_id,  # ИСПРАВЛЕНО: было 'node_id'
+                    'node_text': node.get('text', ''),
+                    'buttons': node.get('options', []),
+                    'next_node_id': node.get('next_node_id'),
+                    'question_message_id': user_sessions.get(chat_id, {}).get('question_message_id')
+                }
+
+                process_node_timing(
+                    user_id=s.get('user_id'), session_id=s.get('session_id'),
+                    node_id=node_id, timing_config=timing_config,
+                    callback=execute_node_callback, **context
+                )
+            else:
+                _execute_node_logic(db, bot, chat_id, node_id, node)
+
         except Exception:
             traceback.print_exc()
             bot.send_message(chat_id, "Критическая ошибка движка. /start")
@@ -107,6 +202,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             if db: db.close()
 
     def _execute_node_logic(db, bot, chat_id, node_id, node):
+        s = user_sessions.get(chat_id)
+        if not s:
+            return
+        s['current_node_id'] = node_id
         node_type = node.get("type", "")
         if node_type.startswith("ai_proactive"):
             _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
@@ -144,26 +243,19 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         _handle_interactive_node(db, bot, chat_id, node_id, node)
 
     def _handle_automatic_node(db, bot, chat_id, node):
-        next_node_id = None
         node_type = node.get("type")
+        next_node_id = None
         if node_type in ("state", "Состояние"):
-            formula = node.get("formula")
-            if formula and AI_AVAILABLE:
-                s = user_sessions.get(chat_id)
-                if s:
-                    try:
-                        current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
-                        new_states = SafeStateCalculator.calculate(formula, current_states)
-                        for k, v in new_states.items():
-                            if k not in current_states or current_states[k] != v:
-                                crud.set_user_state(db, s['user_id'], s['session_id'], k, v)
-                    except Exception as e:
-                        print(f"⚠️ [STATE ERROR] {e}")
             if node.get("text"):
                 _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
             next_node_id = node.get("next_node_id")
         elif node_type in ("condition", "Условие"):
-            next_node_id = node.get("next_node_id")
+            s = user_sessions[chat_id]
+            expr = node.get("text") or node.get("condition_string") or "False"
+            res = _evaluate_condition_enhanced(db, s['user_id'], s['session_id'], expr)
+            then_id, else_id = _extract_condition_targets(node)
+            next_node_id = then_id if res else else_id
+            print(f"⚖️ [CONDITION] '{expr}' -> {res}. Переход: {'THEN -> ' + str(then_id) if res else 'ELSE -> ' + str(else_id)}")
         elif node_type in ("randomizer", "Рандомизатор"):
             br = node.get("branches", [])
             if br:
@@ -174,23 +266,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             _graceful_finish(db, chat_id, node)
 
     def _handle_interactive_node(db, bot, chat_id, node_id, node):
-        s = user_sessions.get(chat_id)
-        # Выполнить формулу узла (если есть) и использовать локальные значения для форматирования
-        local_states = {}
-        formula = node.get("formula")
-        if formula and AI_AVAILABLE and s:
-            try:
-                current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
-                local_states = SafeStateCalculator.calculate(formula, current_states)
-                for k, v in local_states.items():
-                    if k not in current_states or current_states[k] != v:
-                        crud.set_user_state(db, s['user_id'], s['session_id'], k, v)
-            except Exception as e:
-                print(f"⚠️ [NODE ERROR] {e}")
-        text = _format_text(db, chat_id, node.get("text", "(нет текста)"), local_states or None)
+        text = _format_text(db, chat_id, node.get("text", "(нет текста)"))
         options = node.get("options", []).copy()
-        if s:
-            s['node_options'] = {node_id: options}
+        node_type = node.get("type", "")
+        if (node_type in ("task", "Задача") or node_type.startswith("ai_proactive")) and node.get("randomize_options", False):
+            random.shuffle(options)
+        _save_shuffled_options(chat_id, node_id, options)
         markup = _build_keyboard_from_options(node_id, options)
         _send_message(bot, chat_id, node, text, markup)
 
@@ -205,7 +286,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     def _send_message(bot, chat_id, node, text, markup=None):
         processed_text = _normalize_newlines(text)
         try:
-            sent_msg = bot.send_message(chat_id, processed_text, reply_markup=markup, parse_mode="Markdown")
+            img = node.get("image_id")
+            server_url = config("SERVER_URL", default=None)
+            if img and server_url:
+                sent_msg = bot.send_photo(chat_id, f"{server_url}/images/{img}", caption=processed_text, reply_markup=markup, parse_mode="Markdown")
+            else:
+                sent_msg = bot.send_message(chat_id, processed_text, reply_markup=markup, parse_mode="Markdown")
             if user_sessions.get(chat_id):
                 user_sessions[chat_id]['question_message_id'] = sent_msg.message_id
         except Exception as e:
@@ -244,49 +330,91 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             try: bot.answer_callback_query(call.id)
             except Exception: pass
             return
+        if call.message.message_id == s.get('last_message_id'):
+            try: bot.answer_callback_query(call.id)
+            except Exception: pass
+            return
+        s['last_message_id'] = call.message.message_id
         try:
             bot.answer_callback_query(call.id)
         except Exception:
             pass
+
         db = SessionLocal()
         try:
             try:
-                node_id, btn_idx_str = call.data.split('|')
-                btn_idx = int(btn_idx_str)
+                node_id, btn_idx_str = call.data.split('|'); btn_idx = int(btn_idx_str)
             except Exception as e:
                 print(f"PARSE ERROR call.data='{call.data}': {e}")
                 return
-            graph = get_current_graph()
-            node = graph.get("nodes", {}).get(node_id) if graph else None
+            graph = get_current_graph(); node = graph.get("nodes", {}).get(node_id) if graph else None
             if not node:
                 return
-            options = s.get('node_options', {}).get(node_id) or node.get("options", []).copy()
+
+            options = _get_shuffled_options(chat_id, node_id) or node.get("options", []).copy()
             if not options or btn_idx >= len(options):
                 return
             option = options[btn_idx]
-            formula = option.get("formula")
-            if formula and AI_AVAILABLE:
-                try:
-                    current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
-                    new_states = SafeStateCalculator.calculate(formula, current_states)
-                    for k, v in new_states.items():
-                        if k not in current_states or current_states[k] != v:
-                            crud.set_user_state(db, s['user_id'], s['session_id'], k, v)
-                except Exception as e:
-                    print(f"⚠️ [BUTTON ERROR] {e}")
+            _clear_shuffled_options(chat_id, node_id)
+
+            if option.get("formula"):
+                states_before = crud.get_all_user_states(db, s['user_id'], s['session_id'])
+                states_after = SafeStateCalculator.calculate(option["formula"], states_before)
+                for k, v in states_after.items():
+                    if k not in states_before or states_before[k] != v:
+                        crud.update_user_state(db, s['user_id'], s['session_id'], k, v)
+
+            crud.create_response(db, s['session_id'], node_id, answer_text=option.get("interpretation", option["text"]), node_text=node.get("text", ""))
+
             try:
-                crud.create_response(db, s['session_id'], node_id, answer_text=option.get("interpretation", option["text"]), node_text=node.get("text", ""))
+                if len(options) == 1:
+                    bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+                else:
+                    original_text = _format_text(db, chat_id, node.get("text", ""))
+                    new_text = f"{_normalize_newlines(original_text)}\n\n*Ваш ответ: {option['text']}*"
+                    bot.edit_message_text(new_text, chat_id, call.message.message_id, reply_markup=None, parse_mode="Markdown")
             except Exception:
                 pass
-            try:
-                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
-            except Exception:
-                pass
+
             next_node_id = option.get("next_node_id") or node.get("next_node_id")
             if next_node_id:
                 process_node(chat_id, next_node_id)
             else:
                 _graceful_finish(db, chat_id, node)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            if db: db.close()
+
+    @bot.message_handler(content_types=['text'])
+    def text_message_handler(message):
+        chat_id = message.chat.id
+        if message.text == '/start':
+            return
+        s = user_sessions.get(chat_id)
+        if not s or not s.get('current_node_id') or s.get('finished'):
+            return
+        graph = get_current_graph(); node = graph.get("nodes", {}).get(s.get('current_node_id')) if graph else None
+        if not node:
+            return
+        db = SessionLocal()
+        try:
+            ai_role = node.get("ai_enabled")
+            if ai_role and AI_AVAILABLE:
+                bot.send_chat_action(chat_id, 'typing')
+                context = crud.build_full_context_for_ai(db, s['session_id'], s['user_id'], message.text, node.get("options", []), event_type="reactive", ai_persona=ai_role)
+                ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
+                crud.create_ai_dialogue(db, s['session_id'], s.get('current_node_id'), message.text, ai_answer)
+                bot.reply_to(message, _normalize_newlines(ai_answer), parse_mode="Markdown")
+            elif node.get("type") == "input_text":
+                crud.create_response(db, s['session_id'], s.get('current_node_id'), answer_text=message.text, node_text=node.get("text", ""))
+                next_node_id = node.get("next_node_id")
+                if next_node_id:
+                    process_node(chat_id, next_node_id)
+                else:
+                    _graceful_finish(db, chat_id, node)
+            else:
+                bot.reply_to(message, "Пожалуйста, используйте кнопки для навигации.")
         except Exception:
             traceback.print_exc()
         finally:

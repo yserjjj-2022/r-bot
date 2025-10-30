@@ -1,11 +1,12 @@
-# app/__main__.py - ВЕРСИЯ С HOT-RELOAD (ИСПРАВЛЕННАЯ)
+# app/__main__.py - Консолидированная версия для Amvera (env-based secrets + безопасный webhook + авто-регистрация)
 
 import telebot
-import json  # ← НУЖЕН ДЛЯ load_graph()
-from decouple import config
-from flask import Flask, request, send_from_directory
+import json
 import os
+import uuid
 import shutil
+from flask import Flask, request, send_from_directory
+from decouple import config
 
 # --- ИМПОРТИРУЕМ HOT-RELOAD ---
 from app.modules.hot_reload import start_hot_reload, get_current_graph
@@ -15,16 +16,24 @@ def load_graph(filename: str) -> dict:
     """DEPRECATED: используйте hot_reload.get_current_graph()"""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
-            return json.load(f)  # ← ВОТ ЗДЕСЬ НУЖЕН json
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Ошибка загрузки графа {filename}: {e}")
         return None
 
-# --- Инициализация ---
+# --- Инициализация конфигурации ---
+# Согласно документации Amvera, и переменные, и секреты доступны через окружение
 BOT_TOKEN = config("TELEGRAM_BOT_TOKEN")
-GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json") 
-SERVER_URL = config("SERVER_URL") 
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json")
+SERVER_URL = config("SERVER_URL")
+WEBHOOK_SECRET = config("WEBHOOK_SECRET", default=str(uuid.uuid4()))
+
+# Проверка наличия критически важных переменных
+if not BOT_TOKEN or not SERVER_URL:
+    raise ValueError("TELEGRAM_BOT_TOKEN and SERVER_URL must be set in Amvera secrets/environment variables.")
+
+# Безопасный путь и URL вебхука (не используем BOT_TOKEN в URL)
+WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
 
 app = Flask(__name__)
@@ -34,6 +43,15 @@ def health_check():
     return "Bot is alive and listening!", 200
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# --- Регистрация вебхука в Telegram ---
+try:
+    print("Setting webhook...")
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Webhook successfully set to: {WEBHOOK_URL}")
+except Exception as e:
+    print(f"Failed to set webhook: {e}")
 
 # --- ПОДГОТОВКА ФАЙЛА СЦЕНАРИЯ ---
 template_graph_path = '/app/data/default_interview.json'
@@ -74,7 +92,7 @@ def serve_image(filename):
         print(f"Файл не найден: {image_directory}/{filename}")
         return "File not found", 404
 
-# --- WEBHOOK ---
+# --- WEBHOOK endpoint ---
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
