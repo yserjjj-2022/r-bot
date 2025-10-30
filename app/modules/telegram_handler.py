@@ -81,6 +81,13 @@ def _format_text(db, chat_id, t):
     except Exception:
         return t
 
+def _format_text_with_local_state(text, local_states: dict):
+    """Форматирует текст, используя локальный словарь состояний."""
+    try:
+        return text.format(**local_states) if isinstance(text, str) else text
+    except Exception:
+        return text
+
 # === ОСНОВНАЯ ФУНКЦИЯ РЕГИСТРАЦИИ ОБРАБОТЧИКОВ ===
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
@@ -290,22 +297,38 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         """Обработка интерактивных узлов."""
         s = user_sessions.get(chat_id)
         
-        # ИСПРАВЛЕНИЕ #1: Выполнить формулу узла ПЕРЕД форматированием текста
+        # ИСПРАВЛЕНИЕ #1.2: Вычислить формулу И использовать результат для форматирования текста
+        local_states = {}
         formula = node.get("formula")
         if formula and AI_AVAILABLE and s:
             try:
                 current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
-                new_states = SafeStateCalculator.calculate(formula, current_states)
+                local_states = SafeStateCalculator.calculate(formula, current_states)
                 
-                for key, value in new_states.items():
+                # Сохранить новые значения в БД
+                for key, value in local_states.items():
                     if key not in current_states or current_states[key] != value:
                         crud.set_user_state(db, s['user_id'], s['session_id'], key, value)
                 
                 print(f"✅ [NODE CALC] Формула '{formula}' выполнена для узла {node_id}")
             except Exception as e:
                 print(f"⚠️ [NODE ERROR] Ошибка вычисления формулы '{formula}': {e}")
+                # Fallback к обычным состояниям из БД
+                try:
+                    local_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
+                except Exception:
+                    local_states = {}
+        else:
+            # Если формулы нет, использовать состояния из БД
+            try:
+                local_states = crud.get_all_user_states(db, s['user_id'], s['session_id']) if s else {}
+            except Exception:
+                local_states = {}
         
-        text = _format_text(db, chat_id, node.get("text", "(нет текста)"))
+        # Форматировать текст с актуальными значениями
+        raw_text = node.get("text", "(нет текста)")
+        text = _format_text_with_local_state(raw_text, local_states)
+        
         options = node.get("options", []).copy()
         
         # Сохранить порядок опций в сессии для синхронизации с callback
