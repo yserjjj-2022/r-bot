@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# app/modules/telegram_handler.py — ВОССТАНОВЛЕННАЯ ВЕРСИЯ с отменой timeout
+# app/modules/telegram_handler.py — ВОССТАНОВЛЕННАЯ ВЕРСИЯ с отменой timeout (добавлены недостающие функции)
 
 import random
 import math
@@ -72,7 +72,7 @@ def _format_text(db, chat_id, t):
 # === ПУБЛИЧНАЯ ФУНКЦИЯ РЕГИСТРАЦИИ ОБРАБОТЧИКОВ ===
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.4] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -159,9 +159,47 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         else:
             _graceful_finish(db, chat_id, node)
 
+    # === MISSING HANDLERS RESTORED ===
+    def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
+        try:
+            type_str = node.get("type", "")
+            patterns = [
+                r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)',
+                r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)'
+            ]
+            role = None; task_prompt = None
+            for p in patterns:
+                m = re.search(p, type_str)
+                if m:
+                    role, task_prompt = m.groups(); break
+            if role and task_prompt and AI_AVAILABLE:
+                bot.send_chat_action(chat_id, 'typing')
+                s = user_sessions[chat_id]
+                context = crud.build_full_context_for_ai(
+                    db, s['session_id'], s['user_id'], task_prompt,
+                    node.get("options", []), event_type="proactive", ai_persona=role
+                )
+                ai_response = gigachat_handler.get_ai_response("", system_prompt=context)
+                bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
+                crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
+        except Exception:
+            traceback.print_exc()
+        _handle_interactive_node(db, bot, chat_id, node_id, node)
+
     def _handle_automatic_node(db, bot, chat_id, node):
-        # Укорочено: оригинальная логика остаётся без изменений
-        next_node_id = node.get("next_node_id")
+        next_node_id = None
+        node_type = node.get("type")
+        if node_type in ("state", "Состояние"):
+            if node.get("text"):
+                _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
+            next_node_id = node.get("next_node_id")
+        elif node_type in ("condition", "Условие"):
+            # Упрощено
+            next_node_id = node.get("next_node_id")
+        elif node_type in ("randomizer", "Рандомизатор"):
+            br = node.get("branches", [])
+            if br:
+                next_node_id = random.choices(br, weights=[b.get("weight", 1) for b in br], k=1)[0].get("next_node_id")
         if next_node_id:
             process_node(chat_id, next_node_id)
         else:
@@ -191,11 +229,14 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             print(f"send_message error: {e}")
             bot.send_message(chat_id, processed_text)
 
+    # === HANDLERS ===
     @bot.message_handler(commands=['start'])
     def start_game(message):
         chat_id = message.chat.id
         db = SessionLocal()
         try:
+            if chat_id in user_sessions and AI_AVAILABLE:
+                crud.end_session(db, user_sessions[chat_id]['session_id'])
             graph = get_current_graph()
             if not graph or not AI_AVAILABLE:
                 bot.send_message(chat_id, "Сценарий недоступен или модули не загружены.")
@@ -215,6 +256,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         s = user_sessions.get(chat_id)
         if not s:
             try: bot.answer_callback_query(call.id, "Сессия истекла. Начните заново.", show_alert=True)
+            except Exception: pass
+            return
+        if s.get('finished'):
+            try: bot.answer_callback_query(call.id)
             except Exception: pass
             return
         # ОТМЕНА ТАЙМАУТА ПРИ ЛЮБОМ НАЖАТИИ
