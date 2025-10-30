@@ -1,4 +1,4 @@
-# app/__main__.py - Финальная, надежная версия
+# app/__main__.py - ДИАГНОСТИЧЕСКАЯ ВЕРСИЯ
 
 import telebot
 import json
@@ -7,7 +7,7 @@ import uuid
 import shutil
 from flask import Flask, request, send_from_directory
 
-# --- Ручное чтение секретов ---
+# --- Ручное чтение секретов с отладкой ---
 SECRETS = {}
 secrets_dir = '/run/secrets'
 
@@ -17,9 +17,12 @@ def load_secrets():
     """
     if os.path.isdir(secrets_dir):
         # Окружение Amvera: читаем секреты из файлов
-        for filename in os.listdir(secrets_dir):
+        found_files = os.listdir(secrets_dir)
+        # ВЫВОДИМ В ЛОГ ВСЕ, ЧТО НАШЛИ
+        print(f"[DEBUG] Secrets directory found. Content: {found_files}")
+
+        for filename in found_files:
             filepath = os.path.join(secrets_dir, filename)
-            # Убеждаемся, что это файл, а не директория
             if os.path.isfile(filepath):
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
@@ -27,7 +30,8 @@ def load_secrets():
                 except Exception as e:
                     print(f"Warning: Could not read secret file {filepath}: {e}")
     else:
-        # Локальное окружение: читаем из os.environ
+        # Локальное окружение
+        print("[DEBUG] Secrets directory not found. Reading from environment variables.")
         SECRETS['TELEGRAM_BOT_TOKEN'] = os.environ.get('TELEGRAM_BOT_TOKEN')
         SECRETS['WEBHOOK_SECRET'] = os.environ.get('WEBHOOK_SECRET')
         SECRETS['SERVER_URL'] = os.environ.get('SERVER_URL')
@@ -35,21 +39,6 @@ def load_secrets():
 
 # Запускаем загрузку секретов
 load_secrets()
-
-
-# --- ИМПОРТИРУЕМ HOT-RELOAD ПОСЛЕ ЗАГРУЗКИ КОНФИГА ---
-from app.modules.hot_reload import start_hot_reload, get_current_graph
-
-
-# --- Вспомогательные функции ---
-def load_graph(filename: str) -> dict:
-    """DEPRECATED: используйте hot_reload.get_current_graph()"""
-    try:
-        with open(filename, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Ошибка загрузки графа {filename}: {e}")
-        return None
 
 # --- Инициализация ---
 BOT_TOKEN = SECRETS.get("TELEGRAM_BOT_TOKEN")
@@ -59,11 +48,18 @@ WEBHOOK_SECRET = SECRETS.get("WEBHOOK_SECRET", str(uuid.uuid4()))
 
 # Проверка наличия критически важных переменных
 if not BOT_TOKEN or not SERVER_URL:
+    # Выводим что именно мы получили, перед падением
+    print(f"[DEBUG] Loaded secrets dictionary: {SECRETS}")
     raise ValueError("TELEGRAM_BOT_TOKEN and SERVER_URL must be set.")
+
+# --- Остальная часть файла без изменений ---
 
 # Безопасное создание webhook URL
 WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
+
+# Импорты, которые должны идти после конфигурации
+from app.modules.hot_reload import start_hot_reload, get_current_graph
 
 app = Flask(__name__)
 
