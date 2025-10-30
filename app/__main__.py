@@ -1,4 +1,4 @@
-# app/__main__.py - ДИАГНОСТИЧЕСКАЯ ВЕРСИЯ
+# app/__main__.py - Консолидированная версия для Amvera (env-based secrets + безопасный webhook + авто-регистрация)
 
 import telebot
 import json
@@ -6,60 +6,35 @@ import os
 import uuid
 import shutil
 from flask import Flask, request, send_from_directory
+from decouple import config
 
-# --- Ручное чтение секретов с отладкой ---
-SECRETS = {}
-secrets_dir = '/run/secrets'
+# --- ИМПОРТИРУЕМ HOT-RELOAD ---
+from app.modules.hot_reload import start_hot_reload, get_current_graph
 
-def load_secrets():
-    """
-    Загружает секреты из /run/secrets (Amvera) или из переменных окружения (локально).
-    """
-    if os.path.isdir(secrets_dir):
-        # Окружение Amvera: читаем секреты из файлов
-        found_files = os.listdir(secrets_dir)
-        # ВЫВОДИМ В ЛОГ ВСЕ, ЧТО НАШЛИ
-        print(f"[DEBUG] Secrets directory found. Content: {found_files}")
+# --- Вспомогательные функции ---
+def load_graph(filename: str) -> dict:
+    """DEPRECATED: используйте hot_reload.get_current_graph()"""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Ошибка загрузки графа {filename}: {e}")
+        return None
 
-        for filename in found_files:
-            filepath = os.path.join(secrets_dir, filename)
-            if os.path.isfile(filepath):
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        SECRETS[filename] = f.read().strip()
-                except Exception as e:
-                    print(f"Warning: Could not read secret file {filepath}: {e}")
-    else:
-        # Локальное окружение
-        print("[DEBUG] Secrets directory not found. Reading from environment variables.")
-        SECRETS['TELEGRAM_BOT_TOKEN'] = os.environ.get('TELEGRAM_BOT_TOKEN')
-        SECRETS['WEBHOOK_SECRET'] = os.environ.get('WEBHOOK_SECRET')
-        SECRETS['SERVER_URL'] = os.environ.get('SERVER_URL')
-        SECRETS['GRAPH_PATH'] = os.environ.get('GRAPH_PATH')
-
-# Запускаем загрузку секретов
-load_secrets()
-
-# --- Инициализация ---
-BOT_TOKEN = SECRETS.get("TELEGRAM_BOT_TOKEN")
-GRAPH_PATH = SECRETS.get("GRAPH_PATH", "/data/default_interview.json")
-SERVER_URL = SECRETS.get("SERVER_URL")
-WEBHOOK_SECRET = SECRETS.get("WEBHOOK_SECRET", str(uuid.uuid4()))
+# --- Инициализация конфигурации ---
+# Согласно документации Amvera, и переменные, и секреты доступны через окружение
+BOT_TOKEN = config("TELEGRAM_BOT_TOKEN")
+GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json")
+SERVER_URL = config("SERVER_URL")
+WEBHOOK_SECRET = config("WEBHOOK_SECRET", default=str(uuid.uuid4()))
 
 # Проверка наличия критически важных переменных
 if not BOT_TOKEN or not SERVER_URL:
-    # Выводим что именно мы получили, перед падением
-    print(f"[DEBUG] Loaded secrets dictionary: {SECRETS}")
-    raise ValueError("TELEGRAM_BOT_TOKEN and SERVER_URL must be set.")
+    raise ValueError("TELEGRAM_BOT_TOKEN and SERVER_URL must be set in Amvera secrets/environment variables.")
 
-# --- Остальная часть файла без изменений ---
-
-# Безопасное создание webhook URL
+# Безопасный путь и URL вебхука (не используем BOT_TOKEN в URL)
 WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
-
-# Импорты, которые должны идти после конфигурации
-from app.modules.hot_reload import start_hot_reload, get_current_graph
 
 app = Flask(__name__)
 
@@ -68,6 +43,15 @@ def health_check():
     return "Bot is alive and listening!", 200
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# --- Регистрация вебхука в Telegram ---
+try:
+    print("Setting webhook...")
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
+    print(f"Webhook successfully set to: {WEBHOOK_URL}")
+except Exception as e:
+    print(f"Failed to set webhook: {e}")
 
 # --- ПОДГОТОВКА ФАЙЛА СЦЕНАРИЯ ---
 template_graph_path = '/app/data/default_interview.json'
@@ -108,7 +92,7 @@ def serve_image(filename):
         print(f"Файл не найден: {image_directory}/{filename}")
         return "File not found", 404
 
-# --- WEBHOOK ---
+# --- WEBHOOK endpoint ---
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
