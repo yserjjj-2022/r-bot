@@ -109,16 +109,4 @@ class TimingEngine:
 _timing_engine = TimingEngine()
 
 def process_node_timing(user_id: int, session_id: int, node_id: str, timing_config: str, callback: Callable, **context) -> None:
-    return _timming_guard(lambda: _timing_engine.process_timing(user_id, session_id, node_id, timing_config, callback, **context))
-
-# Вспомогательный guard от случайных опечаток/исключений модуля
-def _timming_guard(fn: Callable):
-    try:
-        return fn()
-    except Exception as e:
-        logger.error(f"TimingEngine fatal error: {e}")
-        try:  # аварийный fallback: сразу выполнить коллбэк
-            # fn замыкает callback, так что он будет вызван внутри process_timing
-            pass
-        except Exception:
-            pass
+    return _timing_engine.process_timing(user_id, session_id, node_id, timing_config, callback, **context)
