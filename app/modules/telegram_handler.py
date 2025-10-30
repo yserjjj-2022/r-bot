@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 4.0.1 (30.10.2025): Исправление коллизии параметров user_id
-# - Переименованы ключи в context для исключения конфликта
+# ВЕРСИЯ 4.0.2 (30.10.2025): Исправление коллизии параметров node_id
+# - Переименованы ключи в context (node_id->current_node_id)
 # - Сохранена вся функциональность
 
 import random
@@ -17,7 +17,6 @@ try:
     from app.modules.database import SessionLocal, crud
     from app.modules import gigachat_handler
     from app.modules.hot_reload import get_current_graph
-    # ИМПОРТИРУЕМ TIMING ENGINE
     from app.modules.timing_engine import process_node_timing
     AI_AVAILABLE = True
 except Exception as e:
@@ -26,7 +25,6 @@ except Exception as e:
 
     def get_current_graph(): return None
     def SessionLocal(): return None
-    # Заглушка для timing_engine
     def process_node_timing(user_id, session_id, node_id, timing_config, callback, **context):
         print("⚠️ Timing engine заглушка: немедленный вызов callback")
         callback()
@@ -132,7 +130,7 @@ def _clear_shuffled_options(chat_id, node_id):
         del store[str(node_id)]
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.1] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.2] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -149,7 +147,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             crud.end_session(db, s['session_id'])
         user_sessions.pop(chat_id, None)
 
-    # --- НОВАЯ, ОСНОВНАЯ ФУНКЦИЯ-ДИСПЕТЧЕР ---
     def process_node(chat_id, node_id):
         db = SessionLocal()
         try:
@@ -169,12 +166,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 bot.send_message(chat_id, f"Ошибка сценария: узел '{node_id}' не найден.")
                 return
 
-            # Проверяем наличие команды timing
             timing_config = node.get("timing")
             if timing_config:
                 print(f"⏱️ [TIMING DETECTED] Узел {node_id}, конфиг: {timing_config}")
 
-                # Функция, которая будет вызвана ПОСЛЕ отработки таймера
                 def execute_node_callback():
                     callback_db = SessionLocal()
                     try:
@@ -182,24 +177,23 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     finally:
                         callback_db.close()
 
-                # Готовим контекст для TimingEngine (ИСПРАВЛЕНО: разные ключи)
                 context = {
                     'bot': bot, 'chat_id': chat_id,
-                    'telegram_user_id': s.get('user_id'),  # Исправлено: разные ключи
-                    'session_reference': s.get('session_id'),  # Исправлено
-                    'node_id': node_id, 'node_text': node.get('text', ''),
+                    'telegram_user_id': s.get('user_id'),
+                    'session_reference': s.get('session_id'),
+                    'current_node_id': node_id,  # ИСПРАВЛЕНО: было 'node_id'
+                    'node_text': node.get('text', ''),
                     'buttons': node.get('options', []),
-                    'next_node_id': node.get('next_node_id')
+                    'next_node_id': node.get('next_node_id'),
+                    'question_message_id': user_sessions.get(chat_id, {}).get('question_message_id')
                 }
 
-                # Вызываем TimingEngine (параметры остаются прежними)
                 process_node_timing(
                     user_id=s.get('user_id'), session_id=s.get('session_id'),
                     node_id=node_id, timing_config=timing_config,
                     callback=execute_node_callback, **context
                 )
             else:
-                # Если timing нет, выполняем логику узла немедленно
                 _execute_node_logic(db, bot, chat_id, node_id, node)
 
         except Exception:
@@ -208,16 +202,12 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         finally:
             if db: db.close()
 
-    # --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ С ЛОГИКОЙ УЗЛА ---
     def _execute_node_logic(db, bot, chat_id, node_id, node):
-        """Выполнение основной логики узла (вынесено из process_node)"""
         s = user_sessions.get(chat_id)
-        if not s: 
+        if not s:
             return
-
         s['current_node_id'] = node_id
         node_type = node.get("type", "")
-        
         if node_type.startswith("ai_proactive"):
             _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
         elif node_type in AUTOMATIC_NODE_TYPES:
@@ -230,7 +220,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
     def _handle_proactive_ai_node(db, bot, chat_id, node_id, node):
         try:
             type_str = node.get("type", "")
-            # Парсер прежнего формата типа: ai_proactive:role("prompt") или ai_proactive:role(prompt)
             patterns = [
                 r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)',
                 r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)'
@@ -304,8 +293,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 sent_msg = bot.send_photo(chat_id, f"{server_url}/images/{img}", caption=processed_text, reply_markup=markup, parse_mode="Markdown")
             else:
                 sent_msg = bot.send_message(chat_id, processed_text, reply_markup=markup, parse_mode="Markdown")
-            
-            # Сохраняем ID сообщения для timeout
             if user_sessions.get(chat_id):
                 user_sessions[chat_id]['question_message_id'] = sent_msg.message_id
         except Exception as e:
@@ -320,7 +307,6 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
             return False
 
     def _parse_ai_proactive_prompt(type_str):
-        # Оставлено для совместимости, но выше используется локальный парсер в _handle_proactive_ai_node
         patterns = [r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\("(.+?)"\)', r'ai_proactive:\s*([a-zA-Z0-9_]+)\s*\((.+?)\)']
         for pattern in patterns:
             m = re.search(pattern, type_str)
