@@ -288,11 +288,27 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
 
     def _handle_interactive_node(db, bot, chat_id, node_id, node):
         """Обработка интерактивных узлов."""
+        s = user_sessions.get(chat_id)
+        
+        # ИСПРАВЛЕНИЕ #1: Выполнить формулу узла ПЕРЕД форматированием текста
+        formula = node.get("formula")
+        if formula and AI_AVAILABLE and s:
+            try:
+                current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
+                new_states = SafeStateCalculator.calculate(formula, current_states)
+                
+                for key, value in new_states.items():
+                    if key not in current_states or current_states[key] != value:
+                        crud.set_user_state(db, s['user_id'], s['session_id'], key, value)
+                
+                print(f"✅ [NODE CALC] Формула '{formula}' выполнена для узла {node_id}")
+            except Exception as e:
+                print(f"⚠️ [NODE ERROR] Ошибка вычисления формулы '{formula}': {e}")
+        
         text = _format_text(db, chat_id, node.get("text", "(нет текста)"))
         options = node.get("options", []).copy()
         
         # Сохранить порядок опций в сессии для синхронизации с callback
-        s = user_sessions.get(chat_id)
         if s:
             s['node_options'] = {node_id: options}
         
