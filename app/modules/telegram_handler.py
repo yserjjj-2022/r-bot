@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# app/modules/telegram_handler.py — ВОССТАНОВЛЕННАЯ ВЕРСИЯ с отменой timeout (ИСПРАВЛЕНА логика state)
+# app/modules/telegram_handler.py — ВОССТАНОВЛЕННАЯ ВЕРСИЯ с отменой timeout (ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ логики формул)
 
 import random
 import math
@@ -72,7 +72,7 @@ def _format_text(db, chat_id, t):
 # === ПУБЛИЧНАЯ ФУНКЦИЯ РЕГИСТРАЦИИ ОБРАБОТЧИКОВ ===
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.6] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.7] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -149,6 +149,20 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if not s:
             return
         s['current_node_id'] = node_id
+        
+        # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Выполнение формул ПЕРЕД определением типа обработки
+        formula = node.get("formula")
+        if formula and AI_AVAILABLE:
+            try:
+                current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
+                new_states = SafeStateCalculator.calculate(formula, current_states)
+                for key, value in new_states.items():
+                    if key not in current_states or current_states[key] != value:
+                        crud.set_user_state(db, s['user_id'], s['session_id'], key, value)
+                print(f"✅ [NODE FORMULA] Формула '{formula}' выполнена для узла {node_id}")
+            except Exception as e:
+                print(f"⚠️ [NODE FORMULA ERROR] Ошибка вычисления формулы '{formula}': {e}")
+
         node_type = node.get("type", "")
         if node_type.startswith("ai_proactive"):
             _handle_proactive_ai_node(db, bot, chat_id, node_id, node)
@@ -189,26 +203,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         next_node_id = None
         node_type = node.get("type")
         
-        # ИСПРАВЛЕНИЕ: Выполнение формул для узлов типа state/Задача с формулами
-        if node_type in ("state", "Состояние", "task", "Задача"):
-            formula = node.get("formula")
-            if formula and AI_AVAILABLE:
-                s = user_sessions.get(chat_id)
-                if s:
-                    try:
-                        # Получить текущее состояние
-                        current_states = crud.get_all_user_states(db, s['user_id'], s['session_id'])
-                        # Вычислить новое состояние
-                        new_states = SafeStateCalculator.calculate(formula, current_states)
-                        # Сохранить обновленные переменные
-                        for key, value in new_states.items():
-                            if key not in current_states or current_states[key] != value:
-                                crud.set_user_state(db, s['user_id'], s['session_id'], key, value)
-                        print(f"✅ [STATE CALC] Формула '{formula}' выполнена для узла {node.get('id', 'unknown')}")
-                    except Exception as e:
-                        print(f"⚠️ [STATE ERROR] Ошибка вычисления формулы '{formula}': {e}")
-            
-            # После вычислений - отобразить текст с обновленными переменными
+        if node_type in ("state", "Состояние"):
             if node.get("text"):
                 _send_message(bot, chat_id, node, _format_text(db, chat_id, node["text"]))
             next_node_id = node.get("next_node_id")
