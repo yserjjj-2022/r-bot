@@ -1,66 +1,67 @@
-# app/__main__.py - ВЕРСИЯ С HOT-RELOAD (ИСПРАВЛЕННАЯ)
+# app/__main__.py - Финальная, надежная версия
 
 import telebot
-import json  # ← НУЖЕН ДЛЯ load_graph()
+import json
 import os
 import uuid
 import shutil
 from flask import Flask, request, send_from_directory
 
-# Настройка чтения секретов: фильтруем только файлы, игнорируем вложенные каталоги (например, kubernetes.io)
-from decouple import config as default_config, Config, RepositorySecret
+# --- Ручное чтение секретов ---
+SECRETS = {}
+secrets_dir = '/run/secrets'
 
-def build_secret_config() -> Config:
-    base_dir = '/run/secrets'
-    if not os.path.exists(base_dir):
-        # Локальная разработка: .env/переменные окружения
-        return default_config
-    # Собираем только файловые секреты из корня /run/secrets
-    tmp_dir = '/tmp/rbot_secrets'
-    try:
-        os.makedirs(tmp_dir, exist_ok=True)
-        for name in os.listdir(base_dir):
-            src_path = os.path.join(base_dir, name)
-            dst_path = os.path.join(tmp_dir, name)
-            # Берём только обычные файлы; каталоги (например, kubernetes.io) пропускаем
-            if os.path.isfile(src_path):
-                # Читаем как текст и переписываем без завершающих переводов строки
+def load_secrets():
+    """
+    Загружает секреты из /run/secrets (Amvera) или из переменных окружения (локально).
+    """
+    if os.path.isdir(secrets_dir):
+        # Окружение Amvera: читаем секреты из файлов
+        for filename in os.listdir(secrets_dir):
+            filepath = os.path.join(secrets_dir, filename)
+            # Убеждаемся, что это файл, а не директория
+            if os.path.isfile(filepath):
                 try:
-                    with open(src_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        value = f.read().strip()
-                    with open(dst_path, 'w', encoding='utf-8') as f:
-                        f.write(value)
-                except Exception:
-                    # В случае проблем — пропускаем конкретный секрет
-                    pass
-        return Config(repository=RepositorySecret(tmp_dir))
-    except Exception:
-        # Фоллбэк на стандартный конфиг, чтобы не падать
-        return default_config
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        SECRETS[filename] = f.read().strip()
+                except Exception as e:
+                    print(f"Warning: Could not read secret file {filepath}: {e}")
+    else:
+        # Локальное окружение: читаем из os.environ
+        SECRETS['TELEGRAM_BOT_TOKEN'] = os.environ.get('TELEGRAM_BOT_TOKEN')
+        SECRETS['WEBHOOK_SECRET'] = os.environ.get('WEBHOOK_SECRET')
+        SECRETS['SERVER_URL'] = os.environ.get('SERVER_URL')
+        SECRETS['GRAPH_PATH'] = os.environ.get('GRAPH_PATH')
 
-config = build_secret_config()
+# Запускаем загрузку секретов
+load_secrets()
 
-# --- ИМПОРТИРУЕМ HOT-RELOAD ---
+
+# --- ИМПОРТИРУЕМ HOT-RELOAD ПОСЛЕ ЗАГРУЗКИ КОНФИГА ---
 from app.modules.hot_reload import start_hot_reload, get_current_graph
+
 
 # --- Вспомогательные функции ---
 def load_graph(filename: str) -> dict:
     """DEPRECATED: используйте hot_reload.get_current_graph()"""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
-            return json.load(f)  # ← ВОТ ЗДЕСЬ НУЖЕН json
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Ошибка загрузки графа {filename}: {e}")
         return None
 
 # --- Инициализация ---
-# Читаем секреты с защитой от лишних символов
-BOT_TOKEN = config("TELEGRAM_BOT_TOKEN").strip()
-GRAPH_PATH = config("GRAPH_PATH", default="/data/default_interview.json")
-SERVER_URL = config("SERVER_URL")
+BOT_TOKEN = SECRETS.get("TELEGRAM_BOT_TOKEN")
+GRAPH_PATH = SECRETS.get("GRAPH_PATH", "/data/default_interview.json")
+SERVER_URL = SECRETS.get("SERVER_URL")
+WEBHOOK_SECRET = SECRETS.get("WEBHOOK_SECRET", str(uuid.uuid4()))
 
-# Безопасное создание webhook URL без использования BOT_TOKEN
-WEBHOOK_SECRET = config("WEBHOOK_SECRET", default=str(uuid.uuid4())).strip()
+# Проверка наличия критически важных переменных
+if not BOT_TOKEN or not SERVER_URL:
+    raise ValueError("TELEGRAM_BOT_TOKEN and SERVER_URL must be set.")
+
+# Безопасное создание webhook URL
 WEBHOOK_PATH = f"/webhook/{WEBHOOK_SECRET}"
 WEBHOOK_URL = f"{SERVER_URL}{WEBHOOK_PATH}"
 
