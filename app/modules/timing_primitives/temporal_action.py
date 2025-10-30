@@ -1,54 +1,81 @@
 # app/modules/timing_primitives/temporal_action.py
-# ВЕРСИЯ 1.0 (30.10.2025): Базовая заглушка для безопасной интеграции
+# ВЕРСИЯ 1.1 (30.10.2025): Визуальный обратный отсчёт + отмена
 
 import time
 import threading
 
 class TemporalAction:
     """
-    Примитив для выполнения действий по истечении времени с возможностью отмены.
-    
-    Основные возможности:
-    - Таймауты на ответы пользователя
-    - Драматургические задержки с переходами
-    - Система напоминаний (планируется)
-    - Дедлайны с предупреждениями (планируется)
+    Примитив для действий по истечении времени с возможностью отмены и визуальным обратным отсчётом.
     """
-    
-    def __init__(self, bot, chat_id: int, duration: float, target_action: callable, 
-                 countdown_mode: bool = False, countdown_text: str = ""):
+    def __init__(self, bot, chat_id: int, duration: float, target_action: callable,
+                 countdown_mode: bool = True, countdown_text: str = "Осталось: {sec} сек"):
         self.bot = bot
         self.chat_id = chat_id
-        self.duration = float(duration or 0)
+        self.duration = int(float(duration or 0))
         self.target_action = target_action
         self.countdown_mode = countdown_mode
-        self.countdown_text = countdown_text or "Осталось времени: {time}"
-        self._timer_thread = None
-        self._cancelled = False
+        self.countdown_text = countdown_text
+        self._cancel_event = threading.Event()
+        self._thread = None
+        self._msg_id = None
 
     def execute(self, on_complete_callback: callable = None):
-        """Запустить таймер. Не блокирует основной поток."""
-        if self._cancelled:
-            return
-            
-        self._timer_thread = threading.Thread(target=self._run, daemon=True)
-        self._timer_thread.start()
+        """Запуск в отдельном потоке."""
+        self._thread = threading.Thread(target=self._run, args=(on_complete_callback,), daemon=True)
+        self._thread.start()
 
     def cancel(self):
-        """Отменить выполнение таймера."""
-        self._cancelled = True
-        if self._timer_thread and self._timer_thread.is_alive():
-            # В будущих версиях здесь будет более элегантная отмена
-            pass
+        """Мягкая отмена счётчика."""
+        self._cancel_event.set()
 
     # --- internal ---
-    def _run(self):
-        """Внутренняя логика выполнения таймера."""
-        # ЭТАП 1: Пока просто безопасная пауза
-        time.sleep(self.duration)
-        
-        if not self._cancelled and callable(self.target_action):
-            try:
+    def _run(self, on_complete_callback):
+        try:
+            if self.countdown_mode and self.bot and self.chat_id:
+                try:
+                    m = self.bot.send_message(self.chat_id, self.countdown_text.format(sec=self.duration))
+                    self._msg_id = getattr(m, 'message_id', None)
+                except Exception:
+                    self.countdown_mode = False
+
+            for remaining in range(self.duration - 1, -1, -1):
+                if self._cancel_event.is_set():
+                    self._notify_cancelled()
+                    return
+                if self.countdown_mode and self._msg_id:
+                    try:
+                        self.bot.edit_message_text(
+                            chat_id=self.chat_id,
+                            message_id=self._msg_id,
+                            text=self.countdown_text.format(sec=max(remaining, 0))
+                        )
+                    except Exception:
+                        pass
+                time.sleep(1)
+
+            # Таймер истёк
+            if self._cancel_event.is_set():
+                self._notify_cancelled()
+                return
+
+            if callable(self.target_action):
                 self.target_action()
-            except Exception as e:
-                print(f"[TemporalAction] Ошибка выполнения target_action: {e}")
+
+            if on_complete_callback and callable(on_complete_callback):
+                on_complete_callback()
+        except Exception as e:
+            print(f"[TemporalAction] error: {e}")
+
+    def _notify_cancelled(self):
+        if self.countdown_mode and self._msg_id and self.bot:
+            try:
+                self.bot.edit_message_text(
+                    chat_id=self.chat_id,
+                    message_id=self._msg_id,
+                    text="✅ Ответ получен, таймер отменен."
+                )
+                time.sleep(1)
+                self.bot.delete_message(self.chat_id, self._msg_id)
+            except Exception:
+                pass
