@@ -3,7 +3,7 @@
 ## Concept Origin
 This concept originated from the "Grounded Theory AI" project, where we used LLMs to reconstruct the "volitional act" of respondents (investors) based on their interview answers. We found that breaking down a textual response into a structured causal graph provides a powerful model of human decision-making.
 
-## The Core Model
+## The Core Model (v1.0)
 Instead of treating text as a bag of words, we treat behavior as a **Volitional Graph** consisting of specific node types:
 1.  **TRIGGER**: External stimulus (e.g., "Boss advises IPO", "Enemy attacks").
 2.  **STATE**: Internal context (e.g., "Belief in market efficiency", "Low health").
@@ -12,6 +12,31 @@ Instead of treating text as a bag of words, we treat behavior as a **Volitional 
 5.  **CONFLICT**: The clash between competing signals (e.g., Impulse vs Goal).
 6.  **INHIBITION**: The "willpower" mechanism (Veto power).
 7.  **ACTION**: The observable outcome.
+
+## Synthetic Model v2.0 (Integrated with COM-B)
+Synthesizing the micro-graph approach with the COM-B model (Capability, Opportunity, Motivation - Behavior) results in a more robust 8-step process.
+
+### The 8-Step Volitional Cycle
+1.  **CONTEXT (Pre-conditions)**
+    *   *State*: Internal psychophysiological state (beliefs, fatigue, mood).
+    *   *Capability*: Physical and psychological skills required.
+    *   *Opportunity*: External factors and social norms facilitating/hindering action.
+2.  **TRIGGER**
+    *   External or internal stimulus initiating the cycle.
+3.  **DOUBLE ACTIVATION (Motivation)**
+    *   *Impulse (System 1)*: Automatic, habitual, or emotional reaction (Automatic Motivation).
+    *   *Goal (System 2)*: Reflective, conscious intention or plan (Reflective Motivation).
+4.  **CONFLICT**
+    *   The collision point. If Impulse == Goal, skip to Action. If Impulse != Goal, engage Regulation.
+5.  **REGULATION & CHECK**
+    *   *Inhibition*: The "free won't" mechanic; suppressing the Impulse.
+    *   *Capacity Check*: Verifying if current resources (Willpower/Capability) are sufficient to sustain Inhibition.
+6.  **ARBITRATION**
+    *   The collapse of the wave function. The final decision is made: Impulse wins (failure), Goal wins (success), or Compromise.
+7.  **ACTION**
+    *   Observable behavior.
+8.  **REFLECTION & FEEDBACK**
+    *   Updating the *Context* based on the outcome. Success increases Capability (Self-Efficacy); failure alters State.
 
 ## Applications in R-Bot and Games
 
