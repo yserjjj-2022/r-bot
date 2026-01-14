@@ -318,3 +318,16 @@ def get_current_state_context(db: Session, user_id: int, session_id: int) -> str
     score = get_user_state(db, user_id, session_id, 'score', '0')
     return f"Счет: {score}"
 
+def pause_session(db: Session, session_id: int):
+    """Ставит сессию на паузу (AI недоступен)"""
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if session:
+        session.is_paused = True
+        db.commit()
+
+def resume_session(db: Session, session_id: int):
+    """Снимает сессию с паузы"""
+    session = db.query(models.Session).filter(models.Session.id == session_id).first()
+    if session:
+        session.is_paused = False
+        db.commit()

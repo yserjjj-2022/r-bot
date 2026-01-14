@@ -14,6 +14,7 @@ from decouple import config
 
 try:
     from app.modules.database import SessionLocal, crud
+    from app.modules.database import models  # NEW: для проверки is_paused
     from app.modules import gigachat_handler
     from app.modules.hot_reload import get_current_graph
     from app.modules.timing_engine import process_node_timing
@@ -236,8 +237,16 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                     node.get("options", []), event_type="proactive", ai_persona=role
                 )
                 ai_response = gigachat_handler.get_ai_response("", system_prompt=context)
+                
+                # NEW: проверка недоступности AI
+                if ai_response.startswith("⚠️"):
+                    bot.send_message(chat_id, ai_response)
+                    crud.pause_session(db, s['session_id'])
+                    return
+                
                 bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
                 crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
+
         except Exception:
             traceback.print_exc()
         _handle_interactive_node(db, bot, chat_id, node_id, node)
@@ -394,7 +403,19 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         s = user_sessions.get(chat_id)
         if not s or not s.get('current_node_id') or s.get('finished'):
             return
+        
+        # NEW: проверка паузы сессии
+        db_check = SessionLocal()
+        try:
+            session = db_check.query(models.Session).filter(models.Session.id == s['session_id']).first()
+            if session and session.is_paused:
+                bot.reply_to(message, "⏸️ Игра приостановлена из-за недоступности сервиса. Попробуйте позже.")
+                return
+        finally:
+            db_check.close()
+        
         graph = get_current_graph(); node = graph.get("nodes", {}).get(s.get('current_node_id')) if graph else None
+
         if not node:
             return
         db = SessionLocal()
@@ -404,8 +425,16 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 bot.send_chat_action(chat_id, 'typing')
                 context = crud.build_full_context_for_ai(db, s['session_id'], s['user_id'], message.text, node.get("options", []), event_type="reactive", ai_persona=ai_role)
                 ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
+                
+                # NEW: проверка недоступности AI
+                if ai_answer.startswith("⚠️"):
+                    bot.reply_to(message, ai_answer)
+                    crud.pause_session(db, s['session_id'])
+                    return
+                
                 crud.create_ai_dialogue(db, s['session_id'], s.get('current_node_id'), message.text, ai_answer)
                 bot.reply_to(message, _normalize_newlines(ai_answer), parse_mode="Markdown")
+
             elif node.get("type") == "input_text":
                 crud.create_response(db, s['session_id'], s.get('current_node_id'), answer_text=message.text, node_text=node.get("text", ""))
                 next_node_id = node.get("next_node_id")

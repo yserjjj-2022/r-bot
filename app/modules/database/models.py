@@ -35,6 +35,10 @@ class Session(Base):
     graph_id = Column(String, nullable=False)
     start_time = Column(DateTime(timezone=True), server_default=func.now())
     end_time = Column(DateTime(timezone=True), nullable=True)
+
+        # NEW: маркер официальных исследований и пауза при сбое AI
+    is_official_research = Column(Boolean, default=False)
+    is_paused = Column(Boolean, default=False)
     
     # === НОВЫЕ ПОЛЯ ЭТАПА 0 ===
     group_id = Column(Integer, default=None)
