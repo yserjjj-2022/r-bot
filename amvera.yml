@@ -1,12 +1,14 @@
-# amvera.yml - Теперь он просто указывает на Dockerfile
-
 meta:
-  # Мы больше не указываем environment: python, т.к. Dockerfile делает это за нас.
   name: r-bot
+  environment: docker
+  toolchain:
+    name: docker
+    version: latest
+
+build:
+  dockerfile: Dockerfile
+  skip: false
 
 run:
-  # Порт, который мы пробрасываем наружу для вебхуков.
   containerPort: 8443
-  
-  # Хранилище, которое мы подключаем к нашему контейнеру.
   persistenceMount: /data
