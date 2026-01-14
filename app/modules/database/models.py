@@ -2,7 +2,7 @@
 # Финальная версия 6.0: Этап 0 - добавлены новые модели + исправлен deprecated datetime.utcnow
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
