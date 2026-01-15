@@ -7,9 +7,14 @@ import uuid
 import shutil
 from flask import Flask, request, send_from_directory
 from decouple import config
+from dotenv import load_dotenv
 
 # --- ИМПОРТИРУЕМ HOT-RELOAD ---
 from app.modules.hot_reload import start_hot_reload, get_current_graph
+
+# --- Инициализация окружения ---
+# [NEW] Явная загрузка .env для локальной разработки
+load_dotenv()
 
 # --- Вспомогательные функции ---
 def load_graph(filename: str) -> dict:
