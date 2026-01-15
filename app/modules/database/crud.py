@@ -9,6 +9,7 @@
 
 import json
 import os
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from . import models
@@ -331,3 +332,42 @@ def resume_session(db: Session, session_id: int):
     if session:
         session.is_paused = False
         db.commit()
+
+
+# === TIMING ENGINE CRUD ===
+
+def create_timer(db: Session, session_id: int, timer_type: str, end_time: datetime, target_node_id: str = None, payload: dict = None):
+    """Создает новый активный таймер."""
+    timer = models.ActiveTimer(
+        session_id=session_id,
+        type=timer_type,
+        end_time=end_time,
+        target_node_id=target_node_id,
+        payload=payload or {}
+    )
+    db.add(timer)
+    db.commit()
+    db.refresh(timer)
+    return timer
+
+def get_active_timers_by_time(db: Session, check_time: datetime = None):
+    """Возвращает все таймеры, у которых end_time <= check_time (или now)."""
+    if check_time is None:
+        check_time = datetime.now(timezone.utc)
+    
+    return db.query(models.ActiveTimer).filter(
+        models.ActiveTimer.end_time <= check_time
+    ).all()
+
+def delete_timer(db: Session, timer_id: int):
+    """Удаляет таймер по ID."""
+    db.query(models.ActiveTimer).filter(models.ActiveTimer.id == timer_id).delete()
+    db.commit()
+
+def delete_timers_by_session_and_type(db: Session, session_id: int, timer_type: str):
+    """Удаляет таймеры определенного типа для сессии (для отмены предыдущих)."""
+    db.query(models.ActiveTimer).filter(
+        models.ActiveTimer.session_id == session_id,
+        models.ActiveTimer.type == timer_type
+    ).delete()
+    db.commit()
