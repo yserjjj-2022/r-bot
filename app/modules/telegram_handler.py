@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 4.0.5 (16.01.2026): Исправлена отправка картинок при локальном запуске (без SERVER_URL)
+# ВЕРСИЯ 4.0.4 (15.01.2026): Добавлена AI_DEFAULT_ROLE и красивые заголовки ролей
+# Возврат к последней полностью рабочей версии 30 октября до экспериментов со второй функцией тайминга
 
 import random
 import math
 import re
-import os
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import traceback
@@ -133,7 +133,7 @@ def _clear_shuffled_options(chat_id, node_id):
         del store[str(node_id)]
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.5] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.4] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -319,34 +319,10 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         try:
             img = node.get("image_id")
             server_url = config("SERVER_URL", default=None)
-            sent_msg = None
-
-            # [FIX] Логика отправки изображений
-            if img:
-                if server_url:
-                    # Режим Webhook / Cloud: отправляем URL
-                    try:
-                        sent_msg = bot.send_photo(chat_id, f"{server_url}/images/{img}", caption=processed_text, reply_markup=markup, parse_mode="Markdown")
-                    except Exception as e:
-                        print(f"⚠️ Ошибка отправки фото по URL: {e}. Пробую текст.")
-                        # Fallback to text handled below if sent_msg is None
-                else:
-                    # Режим Polling / Local: отправляем файл с диска
-                    try:
-                        # Пытаемся найти файл. Предполагаем, что data/images в корне проекта
-                        local_path = os.path.join("data", "images", img)
-                        if os.path.exists(local_path):
-                            with open(local_path, "rb") as photo:
-                                sent_msg = bot.send_photo(chat_id, photo, caption=processed_text, reply_markup=markup, parse_mode="Markdown")
-                        else:
-                            print(f"⚠️ Локальный файл картинки не найден: {local_path}")
-                    except Exception as e:
-                         print(f"⚠️ Ошибка отправки локального фото: {e}")
-
-            # Если фото не отправилось (или его нет), шлем текст
-            if sent_msg is None:
+            if img and server_url:
+                sent_msg = bot.send_photo(chat_id, f"{server_url}/images/{img}", caption=processed_text, reply_markup=markup, parse_mode="Markdown")
+            else:
                 sent_msg = bot.send_message(chat_id, processed_text, reply_markup=markup, parse_mode="Markdown")
-            
             if user_sessions.get(chat_id):
                 user_sessions[chat_id]['question_message_id'] = sent_msg.message_id
         except Exception as e:
