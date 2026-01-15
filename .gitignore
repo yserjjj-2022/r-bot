@@ -27,3 +27,5 @@ __pycache__/
 
 # 5. Временный код
 create_tables.py
+
+default_interview.json
