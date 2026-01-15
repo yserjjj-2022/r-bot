@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 4.0.3 (15.01.2026): Добавлена визуальная индикация "Думаю..." с редактированием сообщения
+# ВЕРСИЯ 4.0.4 (15.01.2026): Добавлена AI_DEFAULT_ROLE и красивые заголовки ролей
 # Возврат к последней полностью рабочей версии 30 октября до экспериментов со второй функцией тайминга
 
 import random
@@ -48,6 +48,9 @@ except Exception as e:
         def create_ai_dialogue(db, session_id, node_id, user_message, ai_response): pass
         @staticmethod
         def build_full_context_for_ai(db, s_id, u_id, q, opts, et, ap): return "Контекст для AI"
+
+# NEW: Дефолтное имя роли для заголовков
+AI_DEFAULT_ROLE = config("AI_DEFAULT_ROLE", default="Мастер Игры")
 
 class SafeStateCalculator:
     SAFE_GLOBALS = {"__builtins__": None, "random": random, "math": math,
@@ -130,7 +133,7 @@ def _clear_shuffled_options(chat_id, node_id):
         del store[str(node_id)]
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.4] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -230,7 +233,11 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 if m:
                     role, task_prompt = m.groups(); break
             if role and task_prompt and AI_AVAILABLE:
-                # NEW: Отправляем заглушку "Думаю..."
+                # NEW: Определяем отображаемое имя роли
+                display_role = role
+                if str(role).lower() in ('true', '1', 'yes', 'on', 'default'):
+                    display_role = AI_DEFAULT_ROLE
+
                 wait_msg = bot.send_message(chat_id, "⏳ ...")
                 
                 s = user_sessions[chat_id]
@@ -240,25 +247,25 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 )
                 ai_response = gigachat_handler.get_ai_response("", system_prompt=context)
                 
-                # Проверка недоступности AI
                 if ai_response.startswith("⚠️"):
                     bot.edit_message_text(ai_response, chat_id, wait_msg.message_id)
                     crud.pause_session(db, s['session_id'])
                     return
                 
-                # NEW: Редактируем заглушку на финальный ответ
+                # NEW: Добавляем заголовок с ролью
+                final_text = f"🎭 *{display_role}:*\n{ai_response}"
+                
                 try:
                     bot.edit_message_text(
-                        _normalize_newlines(ai_response), 
+                        _normalize_newlines(final_text), 
                         chat_id, 
                         wait_msg.message_id, 
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    # Страховка: если не удалось отредактировать (битый markdown и т.п.)
                     print(f"⚠️ Edit error: {e}")
                     bot.delete_message(chat_id, wait_msg.message_id)
-                    bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
+                    bot.send_message(chat_id, _normalize_newlines(final_text), parse_mode="Markdown")
                 
                 crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
 
@@ -437,31 +444,35 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         try:
             ai_role = node.get("ai_enabled")
             if ai_role and AI_AVAILABLE:
-                # NEW: Отправляем заглушку как ответ на сообщение пользователя
+                # NEW: Определяем отображаемое имя роли
+                display_role = ai_role
+                if str(ai_role).lower() in ('true', '1', 'yes', 'on', 'default'):
+                    display_role = AI_DEFAULT_ROLE
+                
                 wait_msg = bot.reply_to(message, "⏳ ...")
                 
                 context = crud.build_full_context_for_ai(db, s['session_id'], s['user_id'], message.text, node.get("options", []), event_type="reactive", ai_persona=ai_role)
                 ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
                 
-                # Проверка недоступности AI
                 if ai_answer.startswith("⚠️"):
                     bot.edit_message_text(ai_answer, chat_id, wait_msg.message_id)
                     crud.pause_session(db, s['session_id'])
                     return
                 
-                # NEW: Редактируем заглушку на финальный ответ
+                # NEW: Добавляем заголовок с ролью
+                final_text = f"🎭 *{display_role}:*\n{ai_answer}"
+                
                 try:
                     bot.edit_message_text(
-                        _normalize_newlines(ai_answer),
+                        _normalize_newlines(final_text),
                         chat_id,
                         wait_msg.message_id,
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    # Страховка при ошибке редактирования
                     print(f"⚠️ Edit error: {e}")
                     bot.delete_message(chat_id, wait_msg.message_id)
-                    bot.reply_to(message, _normalize_newlines(ai_answer), parse_mode="Markdown")
+                    bot.reply_to(message, _normalize_newlines(final_text), parse_mode="Markdown")
                 
                 crud.create_ai_dialogue(db, s['session_id'], s.get('current_node_id'), message.text, ai_answer)
 
