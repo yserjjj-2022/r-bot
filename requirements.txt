@@ -1,6 +1,6 @@
 pandas
 pytz
-python-telegram-bot
+pyTelegramBotAPI
 python-dotenv
 psycopg2-binary
 gigachat
