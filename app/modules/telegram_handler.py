@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # app/modules/telegram_handler.py
-# ВЕРСИЯ 4.0.2 (30.10.2025): СТАБИЛЬНАЯ БАЗОВАЯ ВЕРСИЯ ОТ COMMIT 15cd207
+# ВЕРСИЯ 4.0.3 (15.01.2026): Добавлена визуальная индикация "Думаю..." с редактированием сообщения
 # Возврат к последней полностью рабочей версии 30 октября до экспериментов со второй функцией тайминга
 
 import random
@@ -130,7 +130,7 @@ def _clear_shuffled_options(chat_id, node_id):
         del store[str(node_id)]
 
 def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
-    print(f"✅ [HANDLER v4.0.2 STABLE] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
+    print(f"✅ [HANDLER v4.0.3] Регистрация обработчиков... AI_AVAILABLE={AI_AVAILABLE}")
 
     def _graceful_finish(db, chat_id, node):
         s = user_sessions.get(chat_id)
@@ -230,7 +230,9 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 if m:
                     role, task_prompt = m.groups(); break
             if role and task_prompt and AI_AVAILABLE:
-                bot.send_chat_action(chat_id, 'typing')
+                # NEW: Отправляем заглушку "Думаю..."
+                wait_msg = bot.send_message(chat_id, "⏳ ...")
+                
                 s = user_sessions[chat_id]
                 context = crud.build_full_context_for_ai(
                     db, s['session_id'], s['user_id'], task_prompt,
@@ -238,13 +240,26 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
                 )
                 ai_response = gigachat_handler.get_ai_response("", system_prompt=context)
                 
-                # NEW: проверка недоступности AI
+                # Проверка недоступности AI
                 if ai_response.startswith("⚠️"):
-                    bot.send_message(chat_id, ai_response)
+                    bot.edit_message_text(ai_response, chat_id, wait_msg.message_id)
                     crud.pause_session(db, s['session_id'])
                     return
                 
-                bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
+                # NEW: Редактируем заглушку на финальный ответ
+                try:
+                    bot.edit_message_text(
+                        _normalize_newlines(ai_response), 
+                        chat_id, 
+                        wait_msg.message_id, 
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    # Страховка: если не удалось отредактировать (битый markdown и т.п.)
+                    print(f"⚠️ Edit error: {e}")
+                    bot.delete_message(chat_id, wait_msg.message_id)
+                    bot.send_message(chat_id, _normalize_newlines(ai_response), parse_mode="Markdown")
+                
                 crud.create_ai_dialogue(db, s['session_id'], node_id, f"PROACTIVE: {task_prompt}", ai_response)
 
         except Exception:
@@ -404,7 +419,7 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         if not s or not s.get('current_node_id') or s.get('finished'):
             return
         
-        # NEW: проверка паузы сессии
+        # Проверка паузы сессии
         db_check = SessionLocal()
         try:
             session = db_check.query(models.Session).filter(models.Session.id == s['session_id']).first()
@@ -422,18 +437,33 @@ def register_handlers(bot: telebot.TeleBot, initial_graph_data: dict):
         try:
             ai_role = node.get("ai_enabled")
             if ai_role and AI_AVAILABLE:
-                bot.send_chat_action(chat_id, 'typing')
+                # NEW: Отправляем заглушку как ответ на сообщение пользователя
+                wait_msg = bot.reply_to(message, "⏳ ...")
+                
                 context = crud.build_full_context_for_ai(db, s['session_id'], s['user_id'], message.text, node.get("options", []), event_type="reactive", ai_persona=ai_role)
                 ai_answer = gigachat_handler.get_ai_response(message.text, system_prompt=context)
                 
-                # NEW: проверка недоступности AI
+                # Проверка недоступности AI
                 if ai_answer.startswith("⚠️"):
-                    bot.reply_to(message, ai_answer)
+                    bot.edit_message_text(ai_answer, chat_id, wait_msg.message_id)
                     crud.pause_session(db, s['session_id'])
                     return
                 
+                # NEW: Редактируем заглушку на финальный ответ
+                try:
+                    bot.edit_message_text(
+                        _normalize_newlines(ai_answer),
+                        chat_id,
+                        wait_msg.message_id,
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    # Страховка при ошибке редактирования
+                    print(f"⚠️ Edit error: {e}")
+                    bot.delete_message(chat_id, wait_msg.message_id)
+                    bot.reply_to(message, _normalize_newlines(ai_answer), parse_mode="Markdown")
+                
                 crud.create_ai_dialogue(db, s['session_id'], s.get('current_node_id'), message.text, ai_answer)
-                bot.reply_to(message, _normalize_newlines(ai_answer), parse_mode="Markdown")
 
             elif node.get("type") == "input_text":
                 crud.create_response(db, s['session_id'], s.get('current_node_id'), answer_text=message.text, node_text=node.get("text", ""))
