@@ -1,5 +1,5 @@
 # app/modules/gigachat_handler.py
-# Версия 4.0: Мультимодельная поддержка (GigaChat + VseGPT/DeepSeek)
+# Версия 4.1: Добавлена настройка температуры генерации (AI_TEMPERATURE)
 
 """
 === ИНСТРУКЦИЯ ПО ВЫБОРУ МОДЕЛИ ===
@@ -26,6 +26,7 @@
 Переменные окружения (.env):
 - COMPLIANCE_MODE=true/false
 - ACTIVE_MODEL=deepseek-main
+- AI_TEMPERATURE=0.6 (0.0 - строгий робот, 1.0 - креатив/хаос)
 - GIGACHAT_CREDENTIALS=...
 - VSEGPT_API_KEY=sk-...
 """
@@ -48,6 +49,8 @@ except ImportError:
 # Безопасный дефолт: официальное исследование
 COMPLIANCE_MODE = config("COMPLIANCE_MODE", default=True, cast=bool)
 ACTIVE_MODEL = config("ACTIVE_MODEL", default="deepseek-main")
+# Температура: 0.5-0.7 оптимум для ролеплея. Ниже - суше, выше - бред.
+AI_TEMPERATURE = config("AI_TEMPERATURE", default=0.6, cast=float)
 
 # === МОДЕЛИ ===
 MODELS = {
@@ -63,7 +66,7 @@ MODELS = {
     },
     "qwen-max": {
         "backend": "vsegpt",
-        "model_id": "qwen/qwen3-max",
+        "model_id": "qwen/qwen-max",
         "description": "🎭 Лучшая для roleplay"
     },
     "gigachat-pro": {
@@ -121,10 +124,11 @@ print("\n" + "=" * 72)
 if COMPLIANCE_MODE:
     print("🛡️  R-BOT AI MODE: COMPLIANCE_MODE=TRUE (OFFICIAL RESEARCH)")
     print("    Provider locked: GigaChat only")
-    print("    Model: GigaChat-2-Pro")
+    print(f"    Temperature: {AI_TEMPERATURE}")
 else:
     print("🔬 R-BOT AI MODE: COMPLIANCE_MODE=FALSE (EXPERIMENT)")
     print(f"    Selected model: {ACTIVE_MODEL}")
+    print(f"    Temperature: {AI_TEMPERATURE}")
     print(f"    Description: {MODELS.get(ACTIVE_MODEL, {}).get('description', 'N/A')}")
 print("=" * 72 + "\n")
 
@@ -209,7 +213,8 @@ def _call_gigachat(user_message: str, system_prompt: str, model_id: str) -> str:
     
     response = gigachat_client.chat(Chat(
         messages=messages,
-        model=model_id
+        model=model_id,
+        temperature=AI_TEMPERATURE  # NEW: Температура
     ))
     
     if response.choices and response.choices[0].message.content:
@@ -228,7 +233,8 @@ def _call_vsegpt(user_message: str, system_prompt: str, model_id: str) -> str:
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message}
-        ]
+        ],
+        temperature=AI_TEMPERATURE  # NEW: Температура
     )
     
     if response.choices and response.choices[0].message.content:
