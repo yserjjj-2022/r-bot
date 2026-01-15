@@ -10,3 +10,4 @@ python-decouple
 boto3
 gunicorn
 openai
+httpx==0.27.2
