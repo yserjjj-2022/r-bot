@@ -103,18 +103,16 @@ class UserState(Base):
 # === НОВЫЕ МОДЕЛИ ДЛЯ ЭТАПА 0 ===
 
 class ActiveTimer(Base):
-    """Активные таймеры для timing механик"""
+    """Активные таймеры для timing механик (timeout, remind)"""
     __tablename__ = 'active_timers'
     
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey('sessions.id'))
-    timer_type = Column(String(50), default='remind')  # remind, timeout, cooldown
-    target_timestamp = Column(DateTime)  # когда сработать
-    message_text = Column(Text, default='')
-    callback_node_id = Column(String(50))  # на какой узел перейти
-    callback_data = Column(JSON, default={})
-    status = Column(String(20), default='pending')  # pending, executed, cancelled
-    created_at = Column(DateTime, default=utc_now)  # ИСПРАВЛЕНО: современный UTC
+    session_id = Column(Integer, ForeignKey('sessions.id'), nullable=False)
+    target_node_id = Column(String, nullable=True)   # куда переходить или что делать
+    end_time = Column(DateTime(timezone=True), nullable=False) # когда таймер должен сработать
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    type = Column(String(50), nullable=False)        # тип таймера ('timeout', 'reminder', 'typing')
+    payload = Column(JSON, default={})               # доп. данные (текст напоминания и т.д.)
 
 
 class ResearchGroup(Base):
