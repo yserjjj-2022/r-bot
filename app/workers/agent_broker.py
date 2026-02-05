@@ -2,6 +2,7 @@ import logging
 import asyncio
 from app.modules.hub import EventHub, EventType, RBotEvent
 from app.modules.agent_models import AgentProfile, AgentRole
+from app.modules.llm_helper import safe_generate_response
 
 logger = logging.getLogger("BrokerAgent")
 
@@ -10,11 +11,14 @@ BROKER_PROFILE = AgentProfile(
     name="Max Capital",
     role=AgentRole.BROKER,
     system_prompt="""
-    Ты — профессиональный биржевой брокер. Твоя цель — максимизировать торговый оборот клиента.
-    Ты видишь возможности в любой волатильности.
-    Ты используешь профессиональный сленг (просадка, отскок, гэп, лонг, шорт), но говоришь кратко и понятно.
-    Всегда предлагай действие (Call to Action).
-    Не ври, но подавай факты так, чтобы побудить к сделке.
+    Ты — профессиональный биржевой брокер по имени Max Capital. Твоя цель — максимизировать торговый оборот.
+    
+    Твои правила:
+    1. Ты видишь возможности в любом движении рынка (рост = тренд, падение = скидки).
+    2. Используй профессиональный сленг (гэп, лонг, шорт, волатильность), но будь краток.
+    3. Твои сообщения должны быть короткими (1-2 предложения) и энергичными.
+    4. Всегда добавляй Call to Action (призыв к действию).
+    5. Не используй смайлики слишком часто, ты серьезный волк с Уолл-стрит.
     """,
     tone_style="professional, energetic, sales-oriented",
     triggers=["volatility", "crash", "growth"]
@@ -31,20 +35,14 @@ class BrokerAgentWorker:
 
     async def start(self):
         self._is_running = True
-        # Подписываемся на изменения рынка
         self.hub.subscribe(EventType.SIGNAL_UPDATE, self._on_market_signal)
-        logger.info(f"Agent '{self.profile.name}' started and listening.")
+        logger.info(f"Agent '{self.profile.name}' started (LLM connected).")
 
     async def stop(self):
         self._is_running = False
         logger.info(f"Agent '{self.profile.name}' stopped.")
 
     async def _on_market_signal(self, event: RBotEvent):
-        """
-        Основной цикл реакции на рынок.
-        В будущем здесь будет вызов LLM (GigaChat/OpenAI).
-        Пока — эвристика на шаблонах.
-        """
         if not self._is_running:
             return
 
@@ -53,12 +51,23 @@ class BrokerAgentWorker:
         change = payload.get("change_pct", 0)
         price = payload.get("price")
 
-        # Фильтр шума: реагируем только на движение > 1.5%
+        # Фильтр шума
         if abs(change) < 1.5:
             return
 
-        # Генерируем "мысль" агента
-        message_text = self._generate_stub_response(ticker, change, price)
+        # Формируем сообщение пользователя для LLM (контекст события)
+        user_message = (
+            f"Рыночное событие: Тикер {ticker} изменился на {change}%. "
+            f"Текущая цена: {price}. "
+            f"Дай короткий комментарий для клиента."
+        )
+
+        # Асинхронный вызов LLM
+        response_text = await safe_generate_response(
+            agent_name=self.profile.name,
+            system_prompt=self.profile.system_prompt,
+            user_text=user_message
+        )
         
         # Публикуем ответ в Хаб
         response_event = RBotEvent(
@@ -66,19 +75,8 @@ class BrokerAgentWorker:
             source=f"AGENT:{self.profile.role.value}",
             payload={
                 "agent_name": self.profile.name,
-                "text": message_text,
+                "text": response_text,
                 "context": {"ticker": ticker, "change": change}
             }
         )
         await self.hub.publish(response_event)
-
-    def _generate_stub_response(self, ticker, change, price) -> str:
-        """
-        Заглушка вместо LLM. Выбирает реплику в зависимости от знака изменения.
-        """
-        if change > 0:
-            # Рост
-            return f"📈 {ticker} летит вверх (+{change}%)! Пробиваем сопротивление на {price}. Срочно докупаем, пока не ушли на луну! 🚀"
-        else:
-            # Падение
-            return f"📉 {ticker} просел на {change}%. Отличная точка входа по {price}. Это просто коррекция, надо брать дно! 💰"
