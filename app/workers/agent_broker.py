@@ -1,66 +1,84 @@
 import logging
 import asyncio
 from app.modules.hub import EventHub, EventType, RBotEvent
+from app.modules.agent_models import AgentProfile, AgentRole
 
 logger = logging.getLogger("BrokerAgent")
 
-class BrokerAgent:
+# Определяем профиль "Честного Брокера"
+BROKER_PROFILE = AgentProfile(
+    name="Max Capital",
+    role=AgentRole.BROKER,
+    system_prompt="""
+    Ты — профессиональный биржевой брокер. Твоя цель — максимизировать торговый оборот клиента.
+    Ты видишь возможности в любой волатильности.
+    Ты используешь профессиональный сленг (просадка, отскок, гэп, лонг, шорт), но говоришь кратко и понятно.
+    Всегда предлагай действие (Call to Action).
+    Не ври, но подавай факты так, чтобы побудить к сделке.
+    """,
+    tone_style="professional, energetic, sales-oriented",
+    triggers=["volatility", "crash", "growth"]
+)
+
+class BrokerAgentWorker:
     """
-    Агент-Брокер (The Salesman).
-    Цель: Стимулировать торговую активность, используя рыночные инфоповоды.
-    Стиль общения: Профессиональный, деловой, с легким акцентом на возможности.
+    Агент-Брокер. Реагирует на рыночные события и пытается 'продать' идею пользователю.
     """
-    def __init__(self, hub: EventHub, agent_id: str = "BROKER_01"):
+    def __init__(self, hub: EventHub, profile: AgentProfile = BROKER_PROFILE):
         self.hub = hub
-        self.agent_id = agent_id
-        
+        self.profile = profile
+        self._is_running = False
+
     async def start(self):
+        self._is_running = True
         # Подписываемся на изменения рынка
         self.hub.subscribe(EventType.SIGNAL_UPDATE, self._on_market_signal)
-        # Подписываемся на действия пользователя (чтобы хвалить за сделки)
-        self.hub.subscribe(EventType.USER_ACTION, self._on_user_action)
-        logger.info(f"Agent {self.agent_id} started listening")
+        logger.info(f"Agent '{self.profile.name}' started and listening.")
+
+    async def stop(self):
+        self._is_running = False
+        logger.info(f"Agent '{self.profile.name}' stopped.")
 
     async def _on_market_signal(self, event: RBotEvent):
-        """Реакция на рыночные данные"""
+        """
+        Основной цикл реакции на рынок.
+        В будущем здесь будет вызов LLM (GigaChat/OpenAI).
+        Пока — эвристика на шаблонах.
+        """
+        if not self._is_running:
+            return
+
         payload = event.payload
         ticker = payload.get("ticker")
         change = payload.get("change_pct", 0)
         price = payload.get("price")
 
-        # Фильтр шума: реагируем только на изменения > 1%
-        if abs(change) < 1.0:
+        # Фильтр шума: реагируем только на движение > 1.5%
+        if abs(change) < 1.5:
             return
 
-        # Генерация "мысли" агента (в будущем здесь будет LLM)
-        if change < -1.5:
-            message = f"📉 {ticker}: коррекция на {change}%. Текущая цена {price}. Техническая картина допускает вход в длинную позицию на отскок."
-        elif change > 1.5:
-            message = f"📈 {ticker}: рост на {change}% (цена {price}). Наблюдаем сильный импульс. Возможно, стоит усилить позицию по тренду."
-        else:
-            return
-
-        # Отправка реакции в Хаб
+        # Генерируем "мысль" агента
+        message_text = self._generate_stub_response(ticker, change, price)
+        
+        # Публикуем ответ в Хаб
         response_event = RBotEvent(
             event_type=EventType.AGENT_MESSAGE,
-            source=self.agent_id,
+            source=f"AGENT:{self.profile.role.value}",
             payload={
-                "text": message,
-                "target_user": "ALL", # Пока вещаем всем
-                "intent": "persuasion_trade"
+                "agent_name": self.profile.name,
+                "text": message_text,
+                "context": {"ticker": ticker, "change": change}
             }
         )
         await self.hub.publish(response_event)
-        logger.info(f"Broker sent message: {message}")
 
-    async def _on_user_action(self, event: RBotEvent):
-        """Реакция на действия пользователя"""
-        # Заглушка: Брокер всегда одобряет активность
-        action_type = event.payload.get("action_type")
-        if action_type == "ORDER_NEW":
-            msg = "Ордер принят в обработку. Оперативное решение."
-            await self.hub.publish(RBotEvent(
-                event_type=EventType.AGENT_MESSAGE,
-                source=self.agent_id,
-                payload={"text": msg}
-            ))
+    def _generate_stub_response(self, ticker, change, price) -> str:
+        """
+        Заглушка вместо LLM. Выбирает реплику в зависимости от знака изменения.
+        """
+        if change > 0:
+            # Рост
+            return f"📈 {ticker} летит вверх (+{change}%)! Пробиваем сопротивление на {price}. Срочно докупаем, пока не ушли на луну! 🚀"
+        else:
+            # Падение
+            return f"📉 {ticker} просел на {change}%. Отличная точка входа по {price}. Это просто коррекция, надо брать дно! 💰"
