@@ -11,8 +11,8 @@ from .schemas import (
     AgentType
 )
 from .memory import MemorySystem
+from .infrastructure.llm import LLMService
 from .agents import (
-    MockLLMClient, # В будущем заменим на RealDeepSeekClient
     IntuitionAgent,
     AmygdalaAgent,
     PrefrontalAgent,
@@ -23,10 +23,10 @@ from .agents import (
 class RCoreKernel:
     def __init__(self, config: BotConfig):
         self.config = config
-        self.llm = MockLLMClient() # Пока мок
-        self.memory = MemorySystem()
+        self.llm = LLMService() 
+        self.memory = MemorySystem(store=None) # Will use PostgresMemoryStore by default
         
-        # Инициализация агентов
+        # Инициализация агентов (LLMService прокидывается внутри, если не передан явно)
         self.agents = [
             IntuitionAgent(self.llm),
             AmygdalaAgent(self.llm),
@@ -43,7 +43,7 @@ class RCoreKernel:
         perception_task = self._mock_perception(message)
         
         # 2. Retrieval (Recall)
-        # Ищем контекст по тексту сообщения
+        # Ищем контекст по тексту сообщения (Embeddings + DB)
         context = await self.memory.recall_context(message.user_id, message.text)
         
         # Ждем завершения восприятия, чтобы сохранить новые факты
@@ -51,7 +51,7 @@ class RCoreKernel:
         await self.memory.memorize_event(message, extraction_result)
 
         # 3. Parliament Debate (Agents)
-        # Запускаем всех агентов параллельно
+        # Запускаем всех агентов параллельно. Теперь они ходят в реальный API.
         agent_tasks = [
             agent.process(message, context, self.config.sliders) 
             for agent in self.agents
@@ -64,7 +64,8 @@ class RCoreKernel:
         winner = signals[0]
         
         # 5. Response Generation (Action)
-        # Генерируем ответ в стиле победителя
+        # Генерируем ответ. Можно подключить LLM, но для теста оставим шаблоны,
+        # чтобы четко видеть, какой агент победил.
         response_text = await self._generate_response(winner.agent_name, message.text)
         
         # Сборка финального ответа
@@ -86,11 +87,20 @@ class RCoreKernel:
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         """
         Имитация работы DeepSeek по извлечению фактов (Extractor).
+        Здесь стоит подключить реальный LLM для извлечения троек и цитат.
+        Для Sprint 2 оставим базовое сохранение цитаты.
         """
         await asyncio.sleep(0.1)
+        # Эмулируем, что мы "запомнили" сообщение как эпизод
         return {
-            "triples": [], # Пока пусто, чтобы не засорять
-            "anchors": [],
+            "triples": [], 
+            "anchors": [
+                {
+                    "raw_text": message.text,
+                    "emotion_score": 0.5,
+                    "tags": ["auto-memory"]
+                }
+            ],
             "volitional_pattern": None
         }
 
@@ -99,10 +109,10 @@ class RCoreKernel:
         Имитация генерации текста в стиле победителя.
         """
         styles = {
-            AgentType.AMYGDALA: f"⚠️ ОСТОРОЖНО! Я чувствую напряжение в твоих словах: '{user_text}'. Давай успокоимся.",
-            AgentType.SOCIAL: f"Ох, я понимаю... '{user_text}' звучит грустно. Я с тобой, держись! ❤️",
-            AgentType.PREFRONTAL: f"Принято. Анализирую запрос: '{user_text}'. Задача ясна.",
-            AgentType.STRIATUM: f"Ого! '{user_text}'?! Это звучит интересно! Давай попробуем!",
-            AgentType.INTUITION: f"Хм... '{user_text}'... мне кажется, я уже видел такое раньше."
+            AgentType.AMYGDALA: f"⚠️ [Amygdala] ОСТОРОЖНО! Я чувствую напряжение: '{user_text}'.",
+            AgentType.SOCIAL: f"❤️ [Social] Ох, я понимаю... '{user_text}' звучит важно. Я с тобой!",
+            AgentType.PREFRONTAL: f"🧠 [Logic] Принято. Анализирую: '{user_text}'.",
+            AgentType.STRIATUM: f"🔥 [Striatum] Ого! '{user_text}'?! Звучит хайпово!",
+            AgentType.INTUITION: f"🔮 [Intuition] Хм... '{user_text}'... дежавю."
         }
         return styles.get(agent_name, "Я здесь.")
