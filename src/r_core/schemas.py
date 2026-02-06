@@ -38,6 +38,7 @@ class PersonalitySliders(BaseModel):
 class BotConfig(BaseModel):
     character_id: str
     name: str
+    gender: str = "Neutral"
     sliders: PersonalitySliders
     core_values: List[str]
 
@@ -108,7 +109,7 @@ class CoreAction(BaseModel):
     """
     type: str # "send_text", "show_keyboard", "wait"
     payload: Dict[str, Any]
-
+    
 class CoreResponse(BaseModel):
     """
     Финальный ответ ядра
