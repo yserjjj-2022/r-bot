@@ -68,16 +68,26 @@ class MetricsModel(Base):
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
 
-# --- NEW: Short Term Memory Model ---
 class ChatHistoryModel(Base):
     __tablename__ = "chat_history"
-    
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     session_id: Mapped[str] = mapped_column(String(64), index=True)
-    role: Mapped[str] = mapped_column(String(20)) # 'user' or 'assistant'
+    role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+# --- NEW: User Profile Model ---
+class UserProfileModel(Base):
+    __tablename__ = "user_profiles"
+    
+    user_id: Mapped[int] = mapped_column(primary_key=True) # One profile per user
+    name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True) # 'M', 'F', 'N'
+    preferred_mode: Mapped[str] = mapped_column(String(20), default="formal") # 'formal' (Вы), 'informal' (Ты)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    attributes: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) # Flexible storage
 
 # --- Init DB Helper ---
 
