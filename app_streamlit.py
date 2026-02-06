@@ -32,6 +32,7 @@ if "sliders" not in st.session_state:
 
 if "bot_name" not in st.session_state:
     st.session_state.bot_name = "R-Bot"
+    st.session_state.bot_gender = "Neutral"
 
 def run_async(coro):
     try:
@@ -46,11 +47,12 @@ async def get_all_agents():
         result = await session.execute(select(AgentProfileModel))
         return result.scalars().all()
 
-async def create_agent(name: str, desc: str, sliders: Dict):
+async def create_agent(name: str, desc: str, gender: str, sliders: Dict):
     async with AsyncSessionLocal() as session:
         new_agent = AgentProfileModel(
             name=name, 
             description=desc, 
+            gender=gender,
             sliders_preset=sliders
         )
         session.add(new_agent)
@@ -58,7 +60,6 @@ async def create_agent(name: str, desc: str, sliders: Dict):
 
 async def delete_agent_by_name(name: str):
     async with AsyncSessionLocal() as session:
-        # unsafe but quick for prototype
         stmt = delete(AgentProfileModel).where(AgentProfileModel.name == name)
         await session.execute(stmt)
         await session.commit()
@@ -69,14 +70,12 @@ st.sidebar.title("🧠 Cortex Controls")
 # --- Agent Selector ---
 st.sidebar.subheader("🤖 Bot Identity")
 
-# Load agents
 try:
     available_agents = run_async(get_all_agents())
     agent_names = [a.name for a in available_agents]
 except Exception:
     agent_names = []
 
-# Select or Create New
 selected_agent_name = st.sidebar.selectbox(
     "Select Persona", 
     ["Default"] + agent_names
@@ -84,11 +83,10 @@ selected_agent_name = st.sidebar.selectbox(
 
 if selected_agent_name != "Default":
     st.session_state.bot_name = selected_agent_name
-    # Find agent data and load sliders
     agent_data = next((a for a in available_agents if a.name == selected_agent_name), None)
     if agent_data:
-        st.sidebar.caption(f"📝 {agent_data.description}")
-        # Update sliders state from preset
+        st.session_state.bot_gender = agent_data.gender or "Neutral"
+        st.sidebar.caption(f"📝 {agent_data.description} | {st.session_state.bot_gender}")
         preset = agent_data.sliders_preset
         st.session_state.sliders = PersonalitySliders(
             empathy_bias=preset.get("empathy_bias", 0.5),
@@ -99,6 +97,7 @@ if selected_agent_name != "Default":
         )
 else:
     st.session_state.bot_name = "R-Bot"
+    st.session_state.bot_gender = "Neutral"
 
 # --- Sliders Control ---
 st.sidebar.markdown("### Fine-tune Personality")
@@ -107,7 +106,6 @@ risk = st.sidebar.slider("Risk", 0.0, 1.0, st.session_state.sliders.risk_toleran
 dominance = st.sidebar.slider("Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
 pace = st.sidebar.slider("Pace", 0.0, 1.0, st.session_state.sliders.pace_setting)
 
-# Update current session sliders
 st.session_state.sliders = PersonalitySliders(
     empathy_bias=empathy,
     risk_tolerance=risk,
@@ -121,6 +119,8 @@ with st.sidebar.expander("💾 Save as New Agent"):
     with st.form("new_agent_form"):
         new_name = st.text_input("Name (e.g. Jarvis)")
         new_desc = st.text_input("Description (e.g. Polite Butler)")
+        new_gender = st.selectbox("Gender", ["Neutral", "Male", "Female"])
+        
         if st.form_submit_button("Create"):
             if new_name:
                 sliders_dict = {
@@ -130,7 +130,7 @@ with st.sidebar.expander("💾 Save as New Agent"):
                     "pace_setting": pace,
                     "neuroticism": 0.1
                 }
-                run_async(create_agent(new_name, new_desc, sliders_dict))
+                run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))
                 st.success(f"Agent {new_name} saved!")
                 st.rerun()
 
@@ -192,7 +192,7 @@ if st.sidebar.button("Clear Memory & Chat"):
 # --- Main Chat Area ---
 
 st.title("R-Bot: Cognitive Architecture Debugger")
-st.markdown(f"Current Agent: **{st.session_state.bot_name}**")
+st.markdown(f"Current Agent: **{st.session_state.bot_name}** ({st.session_state.bot_gender})")
 
 # Display history
 for msg in st.session_state.messages:
@@ -231,12 +231,16 @@ if user_input:
         st.write(user_input)
 
     with st.spinner(f"{st.session_state.bot_name} is thinking..."):
+        # Dynamic Hack: Inject Gender into Config on the fly
         config = BotConfig(
             character_id="streamlit_user", 
-            name=st.session_state.bot_name, # Dynamic Name
+            name=st.session_state.bot_name, 
             sliders=st.session_state.sliders, 
             core_values=[]
         )
+        # Manually patch gender since Config schema update is skipped for speed
+        config.gender = st.session_state.bot_gender 
+        
         kernel = RCoreKernel(config)
         
         incoming = IncomingMessage(
