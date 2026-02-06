@@ -1,5 +1,5 @@
 import uuid
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 import math
 from pydantic import BaseModel
@@ -17,7 +17,8 @@ from src.r_core.infrastructure.db import (
     SemanticModel, 
     EpisodicModel, 
     VolitionalModel,
-    ChatHistoryModel
+    ChatHistoryModel,
+    UserProfileModel
 )
 from src.r_core.infrastructure.llm import LLMService
 
@@ -48,6 +49,12 @@ class AbstractMemoryStore:
         raise NotImplementedError
     
     async def get_recent_history(self, user_id: int, session_id: str, limit: int = 10) -> List[Dict]:
+        raise NotImplementedError
+
+    async def get_user_profile(self, user_id: int) -> Optional[Dict]:
+        raise NotImplementedError
+
+    async def update_user_profile(self, user_id: int, data: Dict):
         raise NotImplementedError
 
 # --- Postgres Implementation ---
@@ -185,6 +192,38 @@ class PostgresMemoryStore(AbstractMemoryStore):
             history = [{"role": r.role, "content": r.content} for r in reversed(rows)]
             return history
 
+    async def get_user_profile(self, user_id: int) -> Optional[Dict]:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(UserProfileModel).where(UserProfileModel.user_id == user_id))
+            profile = result.scalar_one_or_none()
+            if not profile:
+                return None
+            return {
+                "name": profile.name,
+                "gender": profile.gender,
+                "preferred_mode": profile.preferred_mode,
+                "attributes": profile.attributes
+            }
+
+    async def update_user_profile(self, user_id: int, data: Dict):
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(UserProfileModel).where(UserProfileModel.user_id == user_id))
+            profile = result.scalar_one_or_none()
+            
+            if not profile:
+                profile = UserProfileModel(user_id=user_id)
+                session.add(profile)
+            
+            if "name" in data: profile.name = data["name"]
+            if "gender" in data: profile.gender = data["gender"]
+            if "preferred_mode" in data: profile.preferred_mode = data["preferred_mode"]
+            if "attributes" in data: 
+                current = dict(profile.attributes) if profile.attributes else {}
+                current.update(data["attributes"])
+                profile.attributes = current
+                
+            await session.commit()
+
 # --- Service Layer ---
 
 class MemorySystem:
@@ -207,7 +246,6 @@ class MemorySystem:
         for anchor_data in extraction_result.get("anchors", []):
             anchor = EpisodicAnchor(**anchor_data)
             try:
-                # OPTIMIZATION: Use precomputed embedding if text matches, otherwise fetch new
                 if precomputed_embedding and anchor.raw_text == message.text:
                     embedding = precomputed_embedding
                 else:
@@ -227,7 +265,6 @@ class MemorySystem:
     async def recall_context(self, user_id: int, current_text: str, session_id: str = "default", precomputed_embedding: Optional[List[float]] = None) -> dict:
         # 1. Episodes (RAG)
         try:
-            # OPTIMIZATION: Use precomputed embedding if available
             if precomputed_embedding:
                 query_vec = precomputed_embedding
             else:
@@ -247,9 +284,17 @@ class MemorySystem:
         # 4. Short Term History
         history = await self.store.get_recent_history(user_id, session_id, limit=6)
 
+        # 5. User Profile (NEW)
+        profile = await self.store.get_user_profile(user_id)
+
         return {
             "episodic_memory": [e.dict() for e in episodic],
             "semantic_facts": [s.dict() for s in semantic],
             "known_patterns": [p.dict() for p in patterns],
-            "chat_history": history 
+            "chat_history": history,
+            "user_profile": profile 
         }
+
+    async def update_user_profile(self, user_id: int, updates: Dict):
+        """Service method to update profile"""
+        await self.store.update_user_profile(user_id, updates)
