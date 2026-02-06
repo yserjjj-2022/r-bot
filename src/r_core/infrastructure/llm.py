@@ -47,9 +47,17 @@ class LLMService:
             "- Focus: Curiosity, playfulness, game mechanics, opportunities for fun/goals.\n"
             "- Score 8-10: Exciting/Gamified. Score 0-2: Boring/Routine.\n\n"
             
+            "### 5. PROFILE EXTRACTOR (Passive Sensing)\n"
+            "Detect if the user explicitly states or clearly implies core identity facts.\n"
+            "- 'name': If user says 'My name is X' or 'Call me X'.\n"
+            "- 'gender': If user says 'I am a woman' OR uses gendered grammar (e.g. Russian verbs 'сделала', 'устала' -> Female; 'сделал' -> Male).\n"
+            "- 'preferred_mode': If user asks to be addressed formally (Вы) or informally (Ты).\n"
+            "Return null if no info detected.\n\n"
+
             "### OUTPUT FORMAT\n"
-            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum'.\n"
-            "Value schema: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'profile_update'.\n"
+            "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
+            "Value schema for 'profile_update': { 'name': 'str or null', 'gender': 'Male/Female/Neutral or null', 'preferred_mode': 'formal/informal or null' } OR null if empty."
         )
         
         return await self._safe_chat_completion(
