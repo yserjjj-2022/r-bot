@@ -44,25 +44,20 @@ class RCoreKernel:
         # 2. Retrieval
         context = await self.memory.recall_context(message.user_id, message.text)
         
-        # Save memory (fire and forget or wait)
+        # Save memory
         extraction_result = await perception_task
         await self.memory.memorize_event(message, extraction_result)
 
         # 3. Parliament Debate (Single Batch Request)
-        
-        # Prepare context string for LLM
         context_str = self._format_context_for_llm(context)
-        
-        # SINGLE CALL to LLM for Council
         council_report = await self.llm.generate_council_report(message.text, context_str)
         
-        # Distribute results to agents
-        # Intuition still runs separately (System 1)
+        # Distribute results
+        # Intuition still runs separately
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
         
         signals = [intuition_signal]
         
-        # Map JSON report to other agents
         agent_map = {
             "amygdala": self.agents[1],
             "prefrontal": self.agents[2],
@@ -79,8 +74,10 @@ class RCoreKernel:
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
         
-        # 5. Response Generation (Real LLM call now)
-        # Use context and winner's rationale
+        # Collect all scores for visualization
+        all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
+        
+        # 5. Response Generation
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
@@ -99,17 +96,17 @@ class RCoreKernel:
             internal_stats={
                 "latency_ms": int(latency),
                 "winner_score": winner.score,
-                "winner_reason": winner.rationale_short
+                "winner_reason": winner.rationale_short,
+                "all_scores": all_scores # NEW: Pass all scores to frontend
             }
         )
 
     def _format_context_for_llm(self, context: Dict) -> str:
-        """Helper to pretty-print context for the prompt"""
         lines = []
         if context.get("episodic_memory"):
             lines.append("Past Episodes:")
             for ep in context["episodic_memory"]:
-                lines.append(f"- {ep.get('raw_text', '')} (Time: {ep.get('created_at', '?')})")
+                lines.append(f"- {ep.get('raw_text', '')}")
         
         if context.get("semantic_facts"):
             lines.append("Known Facts:")
