@@ -4,6 +4,7 @@ import pandas as pd
 import altair as alt
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
+from src.r_core.memory import MemorySystem # Added import
 from src.r_core.infrastructure.db import init_models
 from src.r_core.config import settings
 
@@ -53,6 +54,53 @@ st.session_state.sliders = PersonalitySliders(
 
 st.sidebar.divider()
 st.sidebar.info(f"Model: {settings.LLM_MODEL_NAME}")
+
+# --- User Profile Section (NEW) ---
+st.sidebar.subheader("👤 User Identity (Hard Facts)")
+
+async def get_profile_data():
+    mem = MemorySystem()
+    return await mem.store.get_user_profile(999) # User 999
+
+async def update_profile_data(data):
+    mem = MemorySystem()
+    await mem.update_user_profile(999, data)
+
+# Load profile on first run
+if "profile_loaded" not in st.session_state:
+    try:
+        data = run_async(get_profile_data())
+        st.session_state.user_profile_data = data or {}
+        st.session_state.profile_loaded = True
+    except Exception:
+        st.session_state.user_profile_data = {}
+
+with st.sidebar.expander("Edit User Profile", expanded=False):
+    with st.form("profile_form"):
+        p_name = st.text_input("Name", st.session_state.user_profile_data.get("name", ""))
+        
+        # Gender Select
+        g_opts = ["", "Male", "Female", "Neutral"]
+        curr_g = st.session_state.user_profile_data.get("gender", "")
+        g_idx = g_opts.index(curr_g) if curr_g in g_opts else 0
+        p_gender = st.selectbox("Gender", g_opts, index=g_idx)
+        
+        # Mode Select
+        m_opts = ["formal", "informal"]
+        curr_m = st.session_state.user_profile_data.get("preferred_mode", "formal")
+        m_idx = m_opts.index(curr_m) if curr_m in m_opts else 0
+        p_mode = st.selectbox("Address Style", m_opts, index=m_idx)
+        
+        if st.form_submit_button("Save Identity"):
+            new_data = {"name": p_name, "gender": p_gender, "preferred_mode": p_mode}
+            try:
+                run_async(update_profile_data(new_data))
+                st.session_state.user_profile_data = new_data
+                st.success("Saved!")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+st.sidebar.divider()
 
 if st.sidebar.button("Initialize DB"):
     with st.spinner("Creating tables..."):
