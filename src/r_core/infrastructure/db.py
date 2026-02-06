@@ -8,11 +8,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
 from src.r_core.config import settings
 from sqlalchemy.pool import NullPool
+from sqlalchemy import select, desc
 
 # --- Setup ---
-
-# Use NullPool for Streamlit dev mode to avoid "InterfaceError: another operation is in progress"
-# This forces a fresh connection for every session, slightly slower but thread-safe for prototyping.
 engine = create_async_engine(
     settings.database_url, 
     echo=False,
@@ -28,7 +26,6 @@ class Base(DeclarativeBase):
 
 class SemanticModel(Base):
     __tablename__ = "semantic_memory"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     subject: Mapped[str] = mapped_column(String(255))
@@ -40,22 +37,17 @@ class SemanticModel(Base):
 
 class EpisodicModel(Base):
     __tablename__ = "episodic_memory"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     raw_text: Mapped[str] = mapped_column(Text)
-    
-    # Vector column. Note: Dimension must match settings.EMBEDDING_DIM (1536)
     embedding = mapped_column(Vector(settings.EMBEDDING_DIM))
-    
     emotion_score: Mapped[float] = mapped_column(Float, default=0.0)
-    tags: Mapped[List[str]] = mapped_column(JSONB, default=[]) # Tags as JSONB array
+    tags: Mapped[List[str]] = mapped_column(JSONB, default=[])
     ttl_days: Mapped[int] = mapped_column(Integer, default=30)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class VolitionalModel(Base):
     __tablename__ = "volitional_patterns"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     trigger: Mapped[str] = mapped_column(String(255))
@@ -68,7 +60,6 @@ class VolitionalModel(Base):
 
 class MetricsModel(Base):
     __tablename__ = "rcore_metrics"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     event_type: Mapped[str] = mapped_column(String(50)) 
@@ -76,6 +67,17 @@ class MetricsModel(Base):
     user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
+
+# --- NEW: Short Term Memory Model ---
+class ChatHistoryModel(Base):
+    __tablename__ = "chat_history"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    role: Mapped[str] = mapped_column(String(20)) # 'user' or 'assistant'
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 # --- Init DB Helper ---
 
