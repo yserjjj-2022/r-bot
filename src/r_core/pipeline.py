@@ -38,23 +38,22 @@ class RCoreKernel:
     async def process_message(self, message: IncomingMessage) -> CoreResponse:
         start_time = datetime.now()
         
-        # 0. Precompute Embedding (Optimization)
-        # We do this ONCE to avoid double-spending API tokens for Retrieval and Storage.
+        # 0. Precompute Embedding
         current_embedding = None
         try:
             current_embedding = await self.llm.get_embedding(message.text)
         except Exception as e:
             print(f"[Pipeline] Embedding failed early: {e}")
         
-        # 1. Perception (Mock for now, Parallel)
+        # 1. Perception
         perception_task = self._mock_perception(message)
         
-        # 2. Retrieval (Includes Short-Term Memory now)
+        # 2. Retrieval
         context = await self.memory.recall_context(
             message.user_id, 
             message.text, 
             session_id=message.session_id,
-            precomputed_embedding=current_embedding # Pass cached vector
+            precomputed_embedding=current_embedding
         )
         
         # Save memory
@@ -62,7 +61,7 @@ class RCoreKernel:
         await self.memory.memorize_event(
             message, 
             extraction_result,
-            precomputed_embedding=current_embedding # Reuse cached vector
+            precomputed_embedding=current_embedding
         )
 
         # 3. Parliament Debate
@@ -127,6 +126,16 @@ class RCoreKernel:
     def _format_context_for_llm(self, context: Dict) -> str:
         lines = []
         
+        # 0. User Profile (Crucial Identity Data)
+        profile = context.get("user_profile")
+        if profile:
+            lines.append("USER PROFILE (Core Identity):")
+            # Only show fields that are set
+            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
+            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
+            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
+            lines.append("")
+
         # 1. Chat History
         if context.get("chat_history"):
             lines.append("RECENT DIALOGUE:")
