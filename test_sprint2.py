@@ -1,15 +1,21 @@
 import asyncio
+import os
+from dotenv import load_dotenv
+
+# 1. Загружаем .env перед всем остальным
+load_dotenv()
+
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
 from src.r_core.infrastructure.db import init_models
-import os
+from src.r_core.config import settings
 
 async def test_bot(name: str, sliders: PersonalitySliders, text: str):
     print(f"\n{'='*20} TESTING BOT: {name} {'='*20}")
     print(f"Input: '{text}'")
     print(f"Profile: Empathy={sliders.empathy_bias}, Dominance={sliders.dominance_level}")
 
-    # 1. Init Config
+    # Init Config
     config = BotConfig(
         character_id="test_v1",
         name=name,
@@ -17,25 +23,24 @@ async def test_bot(name: str, sliders: PersonalitySliders, text: str):
         core_values=["test"]
     )
 
-    # 2. Init Kernel (Database connection happens inside)
+    # Init Kernel
     kernel = RCoreKernel(config)
 
-    # 3. Process
+    # Process
     msg = IncomingMessage(user_id=1, session_id="test_session", text=text)
     
     print(">>> Processing message... (Calling LLM + DB)")
     response = await kernel.process_message(msg)
 
-    # 4. Result
+    # Result
     print(f"\n[Winner]: {response.winning_agent.value} (Score: {response.internal_stats['winner_score']:.2f})")
     print(f"[Reason]: {response.internal_stats['winner_reason']}")
     print(f"[Latency]: {response.internal_stats['latency_ms']}ms")
     print(f"\n>>> FINAL RESPONSE: {response.actions[0].payload['text']}")
 
 async def main():
-    # 0. Check ENV
-    if not (os.getenv("OPENAI_API_KEY") or os.getenv("VSEGPT_API_KEY")):
-        print("WARNING: Neither OPENAI_API_KEY nor VSEGPT_API_KEY is set.")
+    # 0. Check ENV via Pydantic Settings (Source of Truth)
+    print(f">>> Using API Key: {settings.OPENAI_API_KEY[:5]}...***")
     
     print(">>> Initializing Database Tables...")
     try:
@@ -44,6 +49,7 @@ async def main():
     except Exception as e:
         print(f"CRITICAL DB ERROR: {e}")
         print("Did you run 'docker-compose up -d'?")
+        print("HINT: Try 'pip install greenlet'")
         return
 
     text = "Я устал, ненавижу всё это."
