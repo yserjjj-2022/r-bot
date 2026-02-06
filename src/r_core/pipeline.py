@@ -38,6 +38,14 @@ class RCoreKernel:
     async def process_message(self, message: IncomingMessage) -> CoreResponse:
         start_time = datetime.now()
         
+        # 0. Precompute Embedding (Optimization)
+        # We do this ONCE to avoid double-spending API tokens for Retrieval and Storage.
+        current_embedding = None
+        try:
+            current_embedding = await self.llm.get_embedding(message.text)
+        except Exception as e:
+            print(f"[Pipeline] Embedding failed early: {e}")
+        
         # 1. Perception (Mock for now, Parallel)
         perception_task = self._mock_perception(message)
         
@@ -45,12 +53,17 @@ class RCoreKernel:
         context = await self.memory.recall_context(
             message.user_id, 
             message.text, 
-            session_id=message.session_id
+            session_id=message.session_id,
+            precomputed_embedding=current_embedding # Pass cached vector
         )
         
         # Save memory
         extraction_result = await perception_task
-        await self.memory.memorize_event(message, extraction_result)
+        await self.memory.memorize_event(
+            message, 
+            extraction_result,
+            precomputed_embedding=current_embedding # Reuse cached vector
+        )
 
         # 3. Parliament Debate
         context_str = self._format_context_for_llm(context)
@@ -88,7 +101,7 @@ class RCoreKernel:
             rationale=winner.rationale_short
         )
         
-        # NEW: Save Assistant Reply to History
+        # Save Assistant Reply to History
         await self.memory.memorize_bot_response(
             message.user_id, 
             message.session_id, 
@@ -114,13 +127,13 @@ class RCoreKernel:
     def _format_context_for_llm(self, context: Dict) -> str:
         lines = []
         
-        # 1. Chat History (Critical for Dialogue)
+        # 1. Chat History
         if context.get("chat_history"):
             lines.append("RECENT DIALOGUE:")
             for msg in context["chat_history"]:
                 role = "User" if msg["role"] == "user" else "Assistant"
                 lines.append(f"{role}: {msg['content']}")
-            lines.append("") # Spacer
+            lines.append("") 
             
         # 2. Episodes (RAG)
         if context.get("episodic_memory"):
