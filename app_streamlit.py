@@ -2,10 +2,12 @@ import asyncio
 import streamlit as st
 import pandas as pd
 import altair as alt
+from typing import Dict, Any
+from sqlalchemy import select, delete
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
-from src.r_core.memory import MemorySystem # Added import
-from src.r_core.infrastructure.db import init_models
+from src.r_core.memory import MemorySystem
+from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel
 from src.r_core.config import settings
 
 # --- Setup Page ---
@@ -28,6 +30,9 @@ if "sliders" not in st.session_state:
         neuroticism=0.1
     )
 
+if "bot_name" not in st.session_state:
+    st.session_state.bot_name = "R-Bot"
+
 def run_async(coro):
     try:
         return asyncio.run(coro)
@@ -35,15 +40,74 @@ def run_async(coro):
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(coro)
 
+# --- DB Operations for Agents ---
+async def get_all_agents():
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(AgentProfileModel))
+        return result.scalars().all()
+
+async def create_agent(name: str, desc: str, sliders: Dict):
+    async with AsyncSessionLocal() as session:
+        new_agent = AgentProfileModel(
+            name=name, 
+            description=desc, 
+            sliders_preset=sliders
+        )
+        session.add(new_agent)
+        await session.commit()
+
+async def delete_agent_by_name(name: str):
+    async with AsyncSessionLocal() as session:
+        # unsafe but quick for prototype
+        stmt = delete(AgentProfileModel).where(AgentProfileModel.name == name)
+        await session.execute(stmt)
+        await session.commit()
+
 # --- Sidebar ---
 st.sidebar.title("🧠 Cortex Controls")
-st.sidebar.markdown("Adjust the bot's personality live.")
 
-empathy = st.sidebar.slider("Empathy Bias (Social vs Logic)", 0.0, 1.0, st.session_state.sliders.empathy_bias)
-risk = st.sidebar.slider("Risk Tolerance (Striatum vs Amygdala)", 0.0, 1.0, st.session_state.sliders.risk_tolerance)
+# --- Agent Selector ---
+st.sidebar.subheader("🤖 Bot Identity")
+
+# Load agents
+try:
+    available_agents = run_async(get_all_agents())
+    agent_names = [a.name for a in available_agents]
+except Exception:
+    agent_names = []
+
+# Select or Create New
+selected_agent_name = st.sidebar.selectbox(
+    "Select Persona", 
+    ["Default"] + agent_names
+)
+
+if selected_agent_name != "Default":
+    st.session_state.bot_name = selected_agent_name
+    # Find agent data and load sliders
+    agent_data = next((a for a in available_agents if a.name == selected_agent_name), None)
+    if agent_data:
+        st.sidebar.caption(f"📝 {agent_data.description}")
+        # Update sliders state from preset
+        preset = agent_data.sliders_preset
+        st.session_state.sliders = PersonalitySliders(
+            empathy_bias=preset.get("empathy_bias", 0.5),
+            risk_tolerance=preset.get("risk_tolerance", 0.5),
+            dominance_level=preset.get("dominance_level", 0.5),
+            pace_setting=preset.get("pace_setting", 0.5),
+            neuroticism=preset.get("neuroticism", 0.1)
+        )
+else:
+    st.session_state.bot_name = "R-Bot"
+
+# --- Sliders Control ---
+st.sidebar.markdown("### Fine-tune Personality")
+empathy = st.sidebar.slider("Empathy", 0.0, 1.0, st.session_state.sliders.empathy_bias)
+risk = st.sidebar.slider("Risk", 0.0, 1.0, st.session_state.sliders.risk_tolerance)
 dominance = st.sidebar.slider("Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
-pace = st.sidebar.slider("Pace (Intuition Speed)", 0.0, 1.0, st.session_state.sliders.pace_setting)
+pace = st.sidebar.slider("Pace", 0.0, 1.0, st.session_state.sliders.pace_setting)
 
+# Update current session sliders
 st.session_state.sliders = PersonalitySliders(
     empathy_bias=empathy,
     risk_tolerance=risk,
@@ -52,21 +116,37 @@ st.session_state.sliders = PersonalitySliders(
     neuroticism=0.1
 )
 
-st.sidebar.divider()
-st.sidebar.info(f"Model: {settings.LLM_MODEL_NAME}")
+# --- Save New Agent Form ---
+with st.sidebar.expander("💾 Save as New Agent"):
+    with st.form("new_agent_form"):
+        new_name = st.text_input("Name (e.g. Jarvis)")
+        new_desc = st.text_input("Description (e.g. Polite Butler)")
+        if st.form_submit_button("Create"):
+            if new_name:
+                sliders_dict = {
+                    "empathy_bias": empathy,
+                    "risk_tolerance": risk,
+                    "dominance_level": dominance,
+                    "pace_setting": pace,
+                    "neuroticism": 0.1
+                }
+                run_async(create_agent(new_name, new_desc, sliders_dict))
+                st.success(f"Agent {new_name} saved!")
+                st.rerun()
 
-# --- User Profile Section (NEW) ---
-st.sidebar.subheader("👤 User Identity (Hard Facts)")
+st.sidebar.divider()
+
+# --- User Profile Section ---
+st.sidebar.subheader("👤 User Identity")
 
 async def get_profile_data():
     mem = MemorySystem()
-    return await mem.store.get_user_profile(999) # User 999
+    return await mem.store.get_user_profile(999) 
 
 async def update_profile_data(data):
     mem = MemorySystem()
     await mem.update_user_profile(999, data)
 
-# Load profile on first run
 if "profile_loaded" not in st.session_state:
     try:
         data = run_async(get_profile_data())
@@ -79,13 +159,11 @@ with st.sidebar.expander("Edit User Profile", expanded=False):
     with st.form("profile_form"):
         p_name = st.text_input("Name", st.session_state.user_profile_data.get("name", ""))
         
-        # Gender Select
         g_opts = ["", "Male", "Female", "Neutral"]
         curr_g = st.session_state.user_profile_data.get("gender", "")
         g_idx = g_opts.index(curr_g) if curr_g in g_opts else 0
         p_gender = st.selectbox("Gender", g_opts, index=g_idx)
         
-        # Mode Select
         m_opts = ["formal", "informal"]
         curr_m = st.session_state.user_profile_data.get("preferred_mode", "formal")
         m_idx = m_opts.index(curr_m) if curr_m in m_opts else 0
@@ -93,12 +171,9 @@ with st.sidebar.expander("Edit User Profile", expanded=False):
         
         if st.form_submit_button("Save Identity"):
             new_data = {"name": p_name, "gender": p_gender, "preferred_mode": p_mode}
-            try:
-                run_async(update_profile_data(new_data))
-                st.session_state.user_profile_data = new_data
-                st.success("Saved!")
-            except Exception as e:
-                st.error(f"Error: {e}")
+            run_async(update_profile_data(new_data))
+            st.session_state.user_profile_data = new_data
+            st.success("Saved!")
 
 st.sidebar.divider()
 
@@ -117,38 +192,31 @@ if st.sidebar.button("Clear Memory & Chat"):
 # --- Main Chat Area ---
 
 st.title("R-Bot: Cognitive Architecture Debugger")
-st.markdown("Chat with the bot and see which brain module wins.")
+st.markdown(f"Current Agent: **{st.session_state.bot_name}**")
 
 # Display history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
         
-        # Display small stats under assistant messages
         if msg["role"] == "assistant" and "meta" in msg:
             stats = msg["meta"]
-            
-            # Winner Badge
             st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)")
             
-            # Tiny chart for all scores
             if "all_scores" in stats:
                 scores_df = pd.DataFrame([
                     {"Agent": k, "Score": v} 
                     for k, v in stats["all_scores"].items()
                 ])
-                
                 chart = alt.Chart(scores_df).mark_bar(size=15).encode(
                     x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                     y=alt.Y('Agent', sort='-x'),
                     color=alt.condition(
                         alt.datum.Agent == msg['winner'],
-                        alt.value('orange'),  # Winner color
-                        alt.value('lightgray')   # Others color
-                    ),
-                    tooltip=['Agent', 'Score']
-                ).properties(height=150) # Compact height
-                
+                        alt.value('orange'),
+                        alt.value('lightgray')
+                    )
+                ).properties(height=150)
                 st.altair_chart(chart, use_container_width=True)
             
             with st.expander("Details"):
@@ -162,10 +230,10 @@ if user_input:
     with st.chat_message("user"):
         st.write(user_input)
 
-    with st.spinner("Thinking..."):
+    with st.spinner(f"{st.session_state.bot_name} is thinking..."):
         config = BotConfig(
             character_id="streamlit_user", 
-            name="R-Bot", 
+            name=st.session_state.bot_name, # Dynamic Name
             sliders=st.session_state.sliders, 
             core_values=[]
         )
@@ -187,15 +255,12 @@ if user_input:
             with st.chat_message("assistant"):
                 st.write(bot_text)
                 
-                # Live Chart
                 st.caption(f"🏆 Winner: **{winner_name}**")
-                
                 if "all_scores" in stats:
                     scores_df = pd.DataFrame([
                         {"Agent": k, "Score": v} 
                         for k, v in stats["all_scores"].items()
                     ])
-                    
                     chart = alt.Chart(scores_df).mark_bar(size=15).encode(
                         x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                         y=alt.Y('Agent', sort='-x'),
