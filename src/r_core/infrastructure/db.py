@@ -77,17 +77,25 @@ class ChatHistoryModel(Base):
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-# --- NEW: User Profile Model ---
 class UserProfileModel(Base):
     __tablename__ = "user_profiles"
-    
-    user_id: Mapped[int] = mapped_column(primary_key=True) # One profile per user
+    user_id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True) # 'M', 'F', 'N'
-    preferred_mode: Mapped[str] = mapped_column(String(20), default="formal") # 'formal' (Вы), 'informal' (Ты)
+    gender: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    preferred_mode: Mapped[str] = mapped_column(String(20), default="formal") 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    attributes: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) # Flexible storage
+    attributes: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
+
+# --- NEW: Agent Profile Model ---
+class AgentProfileModel(Base):
+    __tablename__ = "agent_profiles"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) # Stores empathy, risk, etc.
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 # --- Init DB Helper ---
 
