@@ -93,6 +93,7 @@ class AgentProfileModel(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    gender: Mapped[Optional[str]] = mapped_column(String(20), default="Neutral") # Added Gender
     sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -101,7 +102,5 @@ class AgentProfileModel(Base):
 async def init_models():
     """Idempotent initialization"""
     async with engine.begin() as conn:
-        # Enable pgvector extension if not exists
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        # Create all tables
         await conn.run_sync(Base.metadata.create_all)
