@@ -6,12 +6,19 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Integer, Float, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
-# FIX: Absolute import instead of relative
 from src.r_core.config import settings
+from sqlalchemy.pool import NullPool
 
 # --- Setup ---
 
-engine = create_async_engine(settings.database_url, echo=False)
+# Use NullPool for Streamlit dev mode to avoid "InterfaceError: another operation is in progress"
+# This forces a fresh connection for every session, slightly slower but thread-safe for prototyping.
+engine = create_async_engine(
+    settings.database_url, 
+    echo=False,
+    poolclass=NullPool 
+)
+
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 class Base(DeclarativeBase):
@@ -60,22 +67,18 @@ class VolitionalModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class MetricsModel(Base):
-    """
-    Таблица для логирования телеметрии (замена внешней базе метрик)
-    """
     __tablename__ = "rcore_metrics"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    event_type: Mapped[str] = mapped_column(String(50)) # llm_call, memory_write, user_message
+    event_type: Mapped[str] = mapped_column(String(50)) 
     session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) # Flexible payload
+    payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
 
 # --- Init DB Helper ---
 
 async def init_models():
     async with engine.begin() as conn:
-        # await conn.run_sync(Base.metadata.drop_all) # Uncomment to reset
         await conn.run_sync(Base.metadata.create_all)
