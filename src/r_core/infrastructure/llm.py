@@ -2,8 +2,10 @@ import json
 import time
 from typing import List, Optional, Any
 from openai import AsyncOpenAI
-from ..config import settings
-from ..schemas import AgentSignal, AgentType
+# FIX: Absolute import instead of relative
+from src.r_core.config import settings
+# FIX: Absolute import
+from src.r_core.schemas import AgentSignal, AgentType
 
 class LLMService:
     """
