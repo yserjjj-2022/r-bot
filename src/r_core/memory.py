@@ -13,14 +13,14 @@ from .schemas import (
     IncomingMessage
 )
 
-# Импортируем инфраструктуру
-from .infrastructure.db import (
+# Импортируем инфраструктуру (FIXED absolute imports)
+from src.r_core.infrastructure.db import (
     AsyncSessionLocal, 
     SemanticModel, 
     EpisodicModel, 
     VolitionalModel
 )
-from .infrastructure.llm import LLMService
+from src.r_core.infrastructure.llm import LLMService
 
 # --- Interfaces (Abstractions) ---\n
 class VectorStoreParams(BaseModel):
