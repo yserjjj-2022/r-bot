@@ -69,7 +69,7 @@ class LLMService:
             json_mode=True
         )
 
-    async def generate_response(self, agent_name: str, user_text: str, context_str: str, rationale: str) -> str:
+    async def generate_response(self, agent_name: str, user_text: str, context_str: str, rationale: str, bot_name: str = "R-Bot") -> str:
         # Detect language hack: Add 'Detect Language' instruction
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
@@ -82,6 +82,7 @@ class LLMService:
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
         system_prompt = (
+            f"IDENTITY: Your name is {bot_name}.\n"
             f"ROLE: {system_persona}\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
             "STYLE: Speak naturally. Do not include role-play actions like *smiles* or *pauses*.\n"
