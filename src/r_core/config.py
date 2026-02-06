@@ -1,5 +1,6 @@
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, AliasChoices
 
 class Settings(BaseSettings):
     # App
@@ -14,7 +15,8 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = "rbot_password"
     
     # LLM (VseGPT / DeepSeek / OpenAI)
-    OPENAI_API_KEY: str
+    # Support both OPENAI_API_KEY and VSEGPT_API_KEY
+    OPENAI_API_KEY: str = Field(validation_alias=AliasChoices('OPENAI_API_KEY', 'VSEGPT_API_KEY'))
     OPENAI_BASE_URL: str = "https://api.vsegpt.ru/v1" # VseGPT default
     
     # Embeddings
