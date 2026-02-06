@@ -68,6 +68,15 @@ class RCoreKernel:
         context_str = self._format_context_for_llm(context)
         council_report = await self.llm.generate_council_report(message.text, context_str)
         
+        # --- NEW: Passive Profiling Update ---
+        profile_update = council_report.get("profile_update")
+        if profile_update:
+            # Clean empty values
+            cleaned_update = {k: v for k, v in profile_update.items() if v is not None}
+            if cleaned_update:
+                print(f"[Profiling] Detected user identity update: {cleaned_update}")
+                await self.memory.update_user_profile(message.user_id, cleaned_update)
+        
         # Distribute results
         # Intuition still runs separately
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
@@ -93,6 +102,15 @@ class RCoreKernel:
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
         
         # 5. Response Generation
+        # Refetch context to include NEW profile update immediately in the answer?
+        # For speed, we just rely on the next turn, BUT we can patch the context_str slightly if needed.
+        # Actually, let's trust the LLM to use the "profile_update" it just generated in its own mind for the response?
+        # No, generate_response is a separate call. 
+        # Ideally, we should update context_str if we want immediate reflection.
+        # Let's do a quick patch for the current response:
+        if profile_update:
+             context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
+
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
@@ -130,7 +148,6 @@ class RCoreKernel:
         profile = context.get("user_profile")
         if profile:
             lines.append("USER PROFILE (Core Identity):")
-            # Only show fields that are set
             if profile.get("name"): lines.append(f"- Name: {profile['name']}")
             if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
             if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
