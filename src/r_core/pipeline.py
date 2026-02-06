@@ -26,7 +26,7 @@ class RCoreKernel:
         self.llm = LLMService() 
         self.memory = MemorySystem(store=None)
         
-        # Init agents (now they don't need direct LLM calls usually, but we keep structure)
+        # Init agents
         self.agents = [
             IntuitionAgent(self.llm),
             AmygdalaAgent(self.llm),
@@ -48,17 +48,16 @@ class RCoreKernel:
         extraction_result = await perception_task
         await self.memory.memorize_event(message, extraction_result)
 
-        # 3. Parliament Debate (OPTIMIZED: Single Batch Request)
-        # Instead of 4 separate calls, we ask LLM once for all agents.
+        # 3. Parliament Debate (Single Batch Request)
         
         # Prepare context string for LLM
-        context_str = f"Found {len(context['episodic_memory'])} past episodes."
+        context_str = self._format_context_for_llm(context)
         
-        # SINGLE CALL to LLM
+        # SINGLE CALL to LLM for Council
         council_report = await self.llm.generate_council_report(message.text, context_str)
         
         # Distribute results to agents
-        # Intuition still runs separately because it doesn't use LLM (System 1)
+        # Intuition still runs separately (System 1)
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
         
         signals = [intuition_signal]
@@ -73,8 +72,6 @@ class RCoreKernel:
         
         for key, agent in agent_map.items():
             report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
-            # We inject the pre-calculated signal into the agent (or let agent verify it)
-            # For now, we update the agent to accept 'external_signal_data'
             signal = agent.process_from_report(report_data, self.config.sliders)
             signals.append(signal)
 
@@ -82,8 +79,14 @@ class RCoreKernel:
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
         
-        # 5. Response
-        response_text = await self._generate_response(winner.agent_name, message.text)
+        # 5. Response Generation (Real LLM call now)
+        # Use context and winner's rationale
+        response_text = await self.llm.generate_response(
+            agent_name=winner.agent_name.value,
+            user_text=message.text,
+            context_str=context_str,
+            rationale=winner.rationale_short
+        )
         
         latency = (datetime.now() - start_time).total_seconds() * 1000
         
@@ -100,6 +103,21 @@ class RCoreKernel:
             }
         )
 
+    def _format_context_for_llm(self, context: Dict) -> str:
+        """Helper to pretty-print context for the prompt"""
+        lines = []
+        if context.get("episodic_memory"):
+            lines.append("Past Episodes:")
+            for ep in context["episodic_memory"]:
+                lines.append(f"- {ep.get('raw_text', '')} (Time: {ep.get('created_at', '?')})")
+        
+        if context.get("semantic_facts"):
+            lines.append("Known Facts:")
+            for fact in context["semantic_facts"]:
+                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+                
+        return "\n".join(lines) if lines else "No prior context."
+
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         await asyncio.sleep(0.05)
         return {
@@ -107,13 +125,3 @@ class RCoreKernel:
             "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}],
             "volitional_pattern": None
         }
-
-    async def _generate_response(self, agent_name: AgentType, user_text: str) -> str:
-        styles = {
-            AgentType.AMYGDALA: f"⚠️ [Amygdala] ОСТОРОЖНО! Я чувствую напряжение: '{user_text}'.",
-            AgentType.SOCIAL: f"❤️ [Social] Ох, я понимаю... '{user_text}' звучит важно. Я с тобой!",
-            AgentType.PREFRONTAL: f"🧠 [Logic] Принято. Анализирую: '{user_text}'.",
-            AgentType.STRIATUM: f"🔥 [Striatum] Ого! '{user_text}'?! Звучит хайпово!",
-            AgentType.INTUITION: f"🔮 [Intuition] Хм... '{user_text}'... дежавю."
-        }
-        return styles.get(agent_name, "Я здесь.")
