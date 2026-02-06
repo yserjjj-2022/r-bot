@@ -16,10 +16,7 @@ st.set_page_config(
 
 # --- Init State ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [] # Format: {"role": "user/assistant", "content": str, "meta": dict}
-
-# We do NOT store kernel in session_state anymore to avoid Event Loop conflicts.
-# We store only config/sliders.
+    st.session_state.messages = [] 
 
 if "sliders" not in st.session_state:
     st.session_state.sliders = PersonalitySliders(
@@ -30,16 +27,14 @@ if "sliders" not in st.session_state:
         neuroticism=0.1
     )
 
-# --- Helper to run async safely ---
 def run_async(coro):
     try:
         return asyncio.run(coro)
     except RuntimeError:
-        # If loop is already running (rare in clean Streamlit but happens)
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(coro)
 
-# --- Sidebar: Cortex Controls ---
+# --- Sidebar ---
 st.sidebar.title("🧠 Cortex Controls")
 st.sidebar.markdown("Adjust the bot's personality live.")
 
@@ -48,7 +43,6 @@ risk = st.sidebar.slider("Risk Tolerance (Striatum vs Amygdala)", 0.0, 1.0, st.s
 dominance = st.sidebar.slider("Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
 pace = st.sidebar.slider("Pace (Intuition Speed)", 0.0, 1.0, st.session_state.sliders.pace_setting)
 
-# Update state
 st.session_state.sliders = PersonalitySliders(
     empathy_bias=empathy,
     risk_tolerance=risk,
@@ -81,22 +75,46 @@ st.markdown("Chat with the bot and see which brain module wins.")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
-        if "meta" in msg and msg["meta"]:
-            with st.expander("See Brain Activity"):
-                st.json(msg["meta"])
+        
+        # Display small stats under assistant messages
+        if msg["role"] == "assistant" and "meta" in msg:
+            stats = msg["meta"]
+            
+            # Winner Badge
+            st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)")
+            
+            # Tiny chart for all scores
+            if "all_scores" in stats:
+                scores_df = pd.DataFrame([
+                    {"Agent": k, "Score": v} 
+                    for k, v in stats["all_scores"].items()
+                ])
+                
+                chart = alt.Chart(scores_df).mark_bar(size=15).encode(
+                    x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                    y=alt.Y('Agent', sort='-x'),
+                    color=alt.condition(
+                        alt.datum.Agent == msg['winner'],
+                        alt.value('orange'),  # Winner color
+                        alt.value('lightgray')   # Others color
+                    ),
+                    tooltip=['Agent', 'Score']
+                ).properties(height=150) # Compact height
+                
+                st.altair_chart(chart, use_container_width=True)
+            
+            with st.expander("Details"):
+                st.json(stats)
 
 # Input
 user_input = st.chat_input("Say something...")
 
 if user_input:
-    # 1. User Message
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.write(user_input)
 
-    # 2. Process
-    with st.spinner("Thinking (Retrieving + Council Debate)..."):
-        # Create fresh Kernel for this request to ensure fresh Async Session
+    with st.spinner("Thinking..."):
         config = BotConfig(
             character_id="streamlit_user", 
             name="R-Bot", 
@@ -106,32 +124,46 @@ if user_input:
         kernel = RCoreKernel(config)
         
         incoming = IncomingMessage(
-            user_id=999, # Streamlit User
+            user_id=999, 
             session_id="streamlit_session",
             text=user_input
         )
         
-        # Run!
         try:
             response = run_async(kernel.process_message(incoming))
             
             bot_text = response.actions[0].payload['text']
             stats = response.internal_stats
+            winner_name = response.winning_agent.value
 
-            # 3. Bot Response
             with st.chat_message("assistant"):
                 st.write(bot_text)
                 
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    st.metric("Winner", response.winning_agent.value, f"{stats['winner_score']} / 10")
-                    st.caption(f"Reason: {stats['winner_reason']}")
-                    st.caption(f"Latency: {stats['latency_ms']}ms")
+                # Live Chart
+                st.caption(f"🏆 Winner: **{winner_name}**")
+                
+                if "all_scores" in stats:
+                    scores_df = pd.DataFrame([
+                        {"Agent": k, "Score": v} 
+                        for k, v in stats["all_scores"].items()
+                    ])
+                    
+                    chart = alt.Chart(scores_df).mark_bar(size=15).encode(
+                        x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                        y=alt.Y('Agent', sort='-x'),
+                        color=alt.condition(
+                            alt.datum.Agent == winner_name,
+                            alt.value('orange'),
+                            alt.value('lightgray')
+                        )
+                    ).properties(height=150)
+                    st.altair_chart(chart, use_container_width=True)
 
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": bot_text, 
-                "meta": stats
+                "meta": stats,
+                "winner": winner_name
             })
             
         except Exception as e:
