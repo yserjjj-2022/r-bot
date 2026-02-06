@@ -15,10 +15,14 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = "rbot_password"
     
     # LLM (VseGPT / DeepSeek / OpenAI)
-    # Support both OPENAI_API_KEY and VSEGPT_API_KEY
     OPENAI_API_KEY: str = Field(validation_alias=AliasChoices('OPENAI_API_KEY', 'VSEGPT_API_KEY'))
-    OPENAI_BASE_URL: str = "https://api.vsegpt.ru/v1" # VseGPT default
+    OPENAI_BASE_URL: str = "https://api.vsegpt.ru/v1" 
     
+    # Model Selection
+    # Was: "deepseek/deepseek-chat" or "gpt-4-turbo"
+    # Now: "anthropic/claude-3-haiku" for speed/cost
+    LLM_MODEL_NAME: str = "anthropic/claude-3-haiku"
+
     # Embeddings
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_DIM: int = 1536
