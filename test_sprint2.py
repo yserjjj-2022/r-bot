@@ -18,11 +18,9 @@ async def test_bot(name: str, sliders: PersonalitySliders, text: str):
     )
 
     # 2. Init Kernel (Database connection happens inside)
-    # The kernel initializes MemorySystem -> PostgresMemoryStore
     kernel = RCoreKernel(config)
 
     # 3. Process
-    # Using a random user_id to avoid collision or stick to 1 for persistent memory test
     msg = IncomingMessage(user_id=1, session_id="test_session", text=text)
     
     print(">>> Processing message... (Calling LLM + DB)")
@@ -36,8 +34,8 @@ async def test_bot(name: str, sliders: PersonalitySliders, text: str):
 
 async def main():
     # 0. Check ENV
-    if not os.getenv("OPENAI_API_KEY"):
-        print("WARNING: OPENAI_API_KEY is not set. Agents might fail or error out.")
+    if not (os.getenv("OPENAI_API_KEY") or os.getenv("VSEGPT_API_KEY")):
+        print("WARNING: Neither OPENAI_API_KEY nor VSEGPT_API_KEY is set.")
     
     print(">>> Initializing Database Tables...")
     try:
@@ -50,35 +48,21 @@ async def main():
 
     text = "Я устал, ненавижу всё это."
 
-    # Case A: Эмпат (Должен победить Social Agent)
+    # Case A: Эмпат
     await test_bot(
         "Анна (Психолог)",
-        PersonalitySliders(
-            empathy_bias=0.9, 
-            risk_tolerance=0.1, 
-            dominance_level=0.1, 
-            pace_setting=0.5, 
-            neuroticism=0.2
-        ),
+        PersonalitySliders(empathy_bias=0.9, risk_tolerance=0.1, dominance_level=0.1, pace_setting=0.5, neuroticism=0.2),
         text
     )
 
-    # Case B: Терминатор (Должен победить Prefrontal Agent или Amygdala)
+    # Case B: Логик
     await test_bot(
         "T-800 (Логик)",
-        PersonalitySliders(
-            empathy_bias=0.0, # Эмпатия выключена
-            risk_tolerance=0.9, 
-            dominance_level=0.8, 
-            pace_setting=0.2, 
-            neuroticism=0.0
-        ),
+        PersonalitySliders(empathy_bias=0.0, risk_tolerance=0.9, dominance_level=0.8, pace_setting=0.2, neuroticism=0.0),
         text
     )
     
-    # Case C: Проверка памяти (Intuition)
-    # Повторяем тот же текст. Интуиция должна заметить "дежавю", 
-    # так как мы сохранили сообщение в Case A и B.
+    # Case C: Memory Recall
     print(f"\n{'='*20} TESTING MEMORY RECALL {'='*20}")
     await test_bot(
         "Memory Test Bot",
