@@ -6,7 +6,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Integer, Float, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
-from .config import settings
+# FIX: Absolute import instead of relative
+from src.r_core.config import settings
 
 # --- Setup ---
 
