@@ -41,14 +41,18 @@ class RCoreKernel:
         # 1. Perception (Mock for now, Parallel)
         perception_task = self._mock_perception(message)
         
-        # 2. Retrieval
-        context = await self.memory.recall_context(message.user_id, message.text)
+        # 2. Retrieval (Includes Short-Term Memory now)
+        context = await self.memory.recall_context(
+            message.user_id, 
+            message.text, 
+            session_id=message.session_id
+        )
         
         # Save memory
         extraction_result = await perception_task
         await self.memory.memorize_event(message, extraction_result)
 
-        # 3. Parliament Debate (Single Batch Request)
+        # 3. Parliament Debate
         context_str = self._format_context_for_llm(context)
         council_report = await self.llm.generate_council_report(message.text, context_str)
         
@@ -74,7 +78,6 @@ class RCoreKernel:
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
         
-        # Collect all scores for visualization
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
         
         # 5. Response Generation
@@ -83,6 +86,13 @@ class RCoreKernel:
             user_text=message.text,
             context_str=context_str,
             rationale=winner.rationale_short
+        )
+        
+        # NEW: Save Assistant Reply to History
+        await self.memory.memorize_bot_response(
+            message.user_id, 
+            message.session_id, 
+            response_text
         )
         
         latency = (datetime.now() - start_time).total_seconds() * 1000
@@ -97,19 +107,30 @@ class RCoreKernel:
                 "latency_ms": int(latency),
                 "winner_score": winner.score,
                 "winner_reason": winner.rationale_short,
-                "all_scores": all_scores # NEW: Pass all scores to frontend
+                "all_scores": all_scores
             }
         )
 
     def _format_context_for_llm(self, context: Dict) -> str:
         lines = []
+        
+        # 1. Chat History (Critical for Dialogue)
+        if context.get("chat_history"):
+            lines.append("RECENT DIALOGUE:")
+            for msg in context["chat_history"]:
+                role = "User" if msg["role"] == "user" else "Assistant"
+                lines.append(f"{role}: {msg['content']}")
+            lines.append("") # Spacer
+            
+        # 2. Episodes (RAG)
         if context.get("episodic_memory"):
-            lines.append("Past Episodes:")
+            lines.append("PAST EPISODES (Long-term memory):")
             for ep in context["episodic_memory"]:
                 lines.append(f"- {ep.get('raw_text', '')}")
         
+        # 3. Facts
         if context.get("semantic_facts"):
-            lines.append("Known Facts:")
+            lines.append("KNOWN FACTS:")
             for fact in context["semantic_facts"]:
                 lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
                 
