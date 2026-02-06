@@ -93,14 +93,21 @@ class AgentProfileModel(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    gender: Mapped[Optional[str]] = mapped_column(String(20), default="Neutral") # Added Gender
+    gender: Mapped[Optional[str]] = mapped_column(String(20), default="Neutral")
     sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 # --- Init DB Helper ---
 
 async def init_models():
-    """Idempotent initialization"""
+    """Idempotent initialization + Auto-Migration for missing columns"""
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        
+        # --- Migration Hack: Add gender column if it's missing ---
+        # SQLAlchemy create_all does NOT alter existing tables. We must do it manually.
+        try:
+            await conn.execute(text("ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(20) DEFAULT 'Neutral'"))
+        except Exception as e:
+            print(f"[DB Init] Schema update warning: {e}")
