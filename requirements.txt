@@ -5,7 +5,7 @@ python-dotenv
 psycopg2-binary
 gigachat
 Flask
-sqlalchemy
+sqlalchemy>=2.0
 python-decouple
 boto3
 gunicorn
@@ -13,3 +13,6 @@ openai
 asyncpg
 pgvector
 pydantic-settings
+streamlit
+altair
+greenlet
