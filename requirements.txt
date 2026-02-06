@@ -10,3 +10,6 @@ python-decouple
 boto3
 gunicorn
 openai
+asyncpg
+pgvector
+pydantic-settings
