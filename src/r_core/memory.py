@@ -2,6 +2,7 @@ import uuid
 from typing import List, Optional, Dict
 from datetime import datetime
 import math
+from pydantic import BaseModel
 
 # Импортируем наши контракты
 from .schemas import (
@@ -13,7 +14,7 @@ from .schemas import (
 
 # --- Interfaces (Abstractions) ---
 
-class VectorStoreParams:
+class VectorStoreParams(BaseModel):
     """Параметры для поиска в памяти"""
     limit: int = 5
     min_similarity: float = 0.7
