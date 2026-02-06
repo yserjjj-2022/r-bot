@@ -34,7 +34,6 @@ class LLMService:
         Single Batch Request to evaluate all agents at once.
         Returns a dict: { "amygdala": {...}, "prefrontal": {...}, ... }
         """
-        start_ts = time.time()
         
         system_prompt = (
             "You are the Cognitive Core of R-Bot. Analyze the user's input through 4 functional lenses.\n"
@@ -61,36 +60,53 @@ class LLMService:
             "Value schema: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }"
         )
         
-        model_name = "deepseek/deepseek-chat" if "vsegpt" in settings.OPENAI_BASE_URL else "gpt-4-turbo-preview"
+        # Use model from settings (Claude 3 Haiku / GPT-4o-mini)
+        model_name = settings.LLM_MODEL_NAME
+        
+        max_retries = 3
+        base_delay = 1.5
 
-        try:
-            response = await self.client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text}
-                ],
-                temperature=0.7,
-                response_format={"type": "json_object"}
-            )
-            
-            content = response.choices[0].message.content
-            latency = int((time.time() - start_ts) * 1000)
-            
-            # Debug log
-            # print(f"[LLM] Raw response ({latency}ms): {content}")
+        for attempt in range(max_retries):
+            start_ts = time.time()
+            try:
+                response = await self.client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_text}
+                    ],
+                    temperature=0.7,
+                    response_format={"type": "json_object"}
+                )
+                
+                content = response.choices[0].message.content
+                latency = int((time.time() - start_ts) * 1000)
+                
+                data = json.loads(content)
+                
+                # Validate keys exist
+                required_keys = ["amygdala", "prefrontal", "social", "striatum"]
+                for key in required_keys:
+                    if key not in data:
+                        data[key] = {"score": 0.0, "rationale": "Missing in LLM response", "confidence": 0.0}
+                
+                return data
 
-            data = json.loads(content)
+            except RateLimitError:
+                if attempt < max_retries - 1:
+                    wait_time = (base_delay * (attempt + 1)) + random.uniform(0.1, 0.5)
+                    print(f"[LLMService] Rate Limit (429) for Council. Retrying in {wait_time:.1f}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    print(f"[LLMService] Max retries reached for Council.")
+                    return {}
             
-            # Validate keys exist
-            required_keys = ["amygdala", "prefrontal", "social", "striatum"]
-            for key in required_keys:
-                if key not in data:
-                    data[key] = {"score": 0.0, "rationale": "Missing in LLM response", "confidence": 0.0}
-            
-            return data
-
-        except Exception as e:
-            print(f"[LLMService] Council Generation Error: {e}")
-            # Fallback: return empty dict, agents will handle it as 0.0
-            return {}
+            except Exception as e:
+                print(f"[LLMService] Council Generation Error: {e}")
+                if attempt < max_retries - 1:
+                     await asyncio.sleep(2.0)
+                     continue
+                return {}
+        
+        return {}
