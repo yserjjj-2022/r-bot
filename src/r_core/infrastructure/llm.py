@@ -8,9 +8,6 @@ from src.r_core.config import settings
 from src.r_core.schemas import AgentSignal, AgentType
 
 class LLMService:
-    """
-    Central service for LLM interactions.
-    """
     def __init__(self):
         self.client = AsyncOpenAI(
             api_key=settings.OPENAI_API_KEY,
@@ -30,9 +27,6 @@ class LLMService:
             raise e
 
     async def generate_council_report(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
-        """
-        Single Batch Request to evaluate all agents at once.
-        """
         system_prompt = (
             "You are the Cognitive Core of R-Bot. Analyze the user's input through 4 functional lenses.\n"
             f"Context: {context_summary}\n\n"
@@ -68,27 +62,25 @@ class LLMService:
         )
 
     async def generate_response(self, agent_name: str, user_text: str, context_str: str, rationale: str) -> str:
-        """
-        Generates the final text response from the perspective of the winning agent.
-        """
+        # Detect language hack: Add 'Detect Language' instruction
         personas = {
-            "amygdala_safety": "You are the AMYGDALA (Protector). You are cautious, alert, and protective. If the user is aggressive, de-escalate firmly. If the user is distressed, warn them or set boundaries. Keep it brief and safe.",
-            "prefrontal_logic": "You are the PREFRONTAL CORTEX (Logic). You are analytical, precise, and helpful. Focus on facts, plans, and solutions. Ignore emotional fluff if it's irrelevant to the task.",
-            "social_cortex": "You are the SOCIAL CORTEX (Empathy). You are warm, polite, and emotionally intelligent. Validate the user's feelings. Use emoji if appropriate. Focus on connection.",
-            "striatum_reward": "You are the STRIATUM (Drive). You are energetic, curious, and playful. You want to have fun, achieve goals, or get rewards. Be hype!",
-            "intuition_system1": "You are INTUITION (System 1). You speak in short, insightful bursts. You noticed a pattern (deja vu). Be mysterious but helpful."
+            "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
+            "prefrontal_logic": "You are LOGIC (Analyst). Precise, factual, helpful.",
+            "social_cortex": "You are SOCIAL (Empath). Warm, polite, supportive.",
+            "striatum_reward": "You are REWARD (Drive). Energetic, playful, curious.",
+            "intuition_system1": "You are INTUITION (Mystic). Short, insightful bursts."
         }
         
-        system_persona = personas.get(agent_name, "You are a helpful AI assistant.")
+        system_persona = personas.get(agent_name, "You are a helpful AI.")
         
         system_prompt = (
-            f"{system_persona}\n"
-            f"Context from memory: {context_str}\n"
-            f"Your internal rationale for speaking: {rationale}\n"
-            "Respond naturally to the user. Do NOT start with '[AgentName]'. Just speak."
+            f"ROLE: {system_persona}\n"
+            "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
+            "STYLE: Speak naturally. Do not include role-play actions like *smiles* or *pauses*.\n"
+            f"CONTEXT: {context_str}\n"
+            f"MOTIVATION: {rationale}\n"
         )
 
-        # No JSON mode here, just text
         response_data = await self._safe_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -101,16 +93,11 @@ class LLMService:
         return response_data if isinstance(response_data, str) else ""
 
     async def _safe_chat_completion(self, messages: List[Dict], response_format: Optional[Dict], json_mode: bool) -> Any:
-        """
-        Helper with Retry Logic for any chat completion
-        """
         max_retries = 3
         base_delay = 1.5
 
         for attempt in range(max_retries):
-            start_ts = time.time()
             try:
-                # Prepare args
                 kwargs = {
                     "model": self.model_name,
                     "messages": messages,
@@ -124,7 +111,6 @@ class LLMService:
                 
                 if json_mode:
                     data = json.loads(content)
-                    # Validate keys for council report if needed, but generic here
                     return data
                 else:
                     return content
@@ -132,15 +118,11 @@ class LLMService:
             except RateLimitError:
                 if attempt < max_retries - 1:
                     wait_time = (base_delay * (attempt + 1)) + random.uniform(0.1, 0.5)
-                    print(f"[LLMService] Rate Limit (429). Retrying in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
                     continue
                 else:
-                    print(f"[LLMService] Max retries reached.")
                     return {} if json_mode else "System Error: Rate Limit"
-            
             except Exception as e:
-                print(f"[LLMService] Error: {e}")
                 if attempt < max_retries - 1:
                      await asyncio.sleep(2.0)
                      continue
