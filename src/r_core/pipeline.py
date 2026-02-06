@@ -68,10 +68,9 @@ class RCoreKernel:
         context_str = self._format_context_for_llm(context)
         council_report = await self.llm.generate_council_report(message.text, context_str)
         
-        # --- NEW: Passive Profiling Update ---
+        # --- Passive Profiling Update ---
         profile_update = council_report.get("profile_update")
         if profile_update:
-            # Clean empty values
             cleaned_update = {k: v for k, v in profile_update.items() if v is not None}
             if cleaned_update:
                 print(f"[Profiling] Detected user identity update: {cleaned_update}")
@@ -102,12 +101,7 @@ class RCoreKernel:
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
         
         # 5. Response Generation
-        # Refetch context to include NEW profile update immediately in the answer?
-        # For speed, we just rely on the next turn, BUT we can patch the context_str slightly if needed.
-        # Actually, let's trust the LLM to use the "profile_update" it just generated in its own mind for the response?
-        # No, generate_response is a separate call. 
-        # Ideally, we should update context_str if we want immediate reflection.
-        # Let's do a quick patch for the current response:
+        # Context patch if profile updated
         if profile_update:
              context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
 
@@ -115,7 +109,8 @@ class RCoreKernel:
             agent_name=winner.agent_name.value,
             user_text=message.text,
             context_str=context_str,
-            rationale=winner.rationale_short
+            rationale=winner.rationale_short,
+            bot_name=self.config.name # Pass Bot Name from Config
         )
         
         # Save Assistant Reply to History
