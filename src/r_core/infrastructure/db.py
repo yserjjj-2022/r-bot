@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
 from src.r_core.config import settings
 from sqlalchemy.pool import NullPool
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, text
 
 # --- Setup ---
 engine = create_async_engine(
@@ -87,18 +87,21 @@ class UserProfileModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     attributes: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
 
-# --- NEW: Agent Profile Model ---
 class AgentProfileModel(Base):
     __tablename__ = "agent_profiles"
     
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) # Stores empathy, risk, etc.
+    sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 # --- Init DB Helper ---
 
 async def init_models():
+    """Idempotent initialization"""
     async with engine.begin() as conn:
+        # Enable pgvector extension if not exists
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        # Create all tables
         await conn.run_sync(Base.metadata.create_all)
