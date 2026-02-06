@@ -56,6 +56,10 @@ class RCoreKernel:
             precomputed_embedding=current_embedding
         )
         
+        # Extract preferred mode from context BEFORE memory update (which might change it eventually)
+        user_profile = context.get("user_profile", {})
+        preferred_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
+
         # Save memory
         extraction_result = await perception_task
         await self.memory.memorize_event(
@@ -104,11 +108,6 @@ class RCoreKernel:
         if profile_update:
              context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
 
-        # Pass Config Name AND Gender (Hack: Gender not in Config yet, pass Default or implement later)
-        # Assuming config will be updated to hold gender, for now defaulting "Neutral" or passing via extra arg
-        # Wait, BotConfig is Pydantic. We need to update BotConfig too or pass it loosely.
-        # Let's assume Config has extra fields or we hack it here.
-        
         bot_gender = getattr(self.config, "gender", "Neutral")
 
         response_text = await self.llm.generate_response(
@@ -117,7 +116,8 @@ class RCoreKernel:
             context_str=context_str,
             rationale=winner.rationale_short,
             bot_name=self.config.name,
-            bot_gender=bot_gender
+            bot_gender=bot_gender,
+            user_mode=preferred_mode # Explicitly pass the mode
         )
         
         # Save Assistant Reply to History
