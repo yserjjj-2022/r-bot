@@ -11,69 +11,20 @@ from .schemas import (
     SemanticTriple,
     EpisodicAnchor
 )
+from .infrastructure.llm import LLMService
 
-# --- LLM Abstraction (To be replaced by DeepSeek Client) ---
+# --- LLM Abstraction ---
 
 class AbstractLLMClient(ABC):
     @abstractmethod
-    async def generate_signal(self, system_prompt: str, user_text: str) -> AgentSignal:
+    async def generate_signal(self, system_prompt: str, user_text: str, agent_name: AgentType) -> AgentSignal:
         pass
-
-class MockLLMClient(AbstractLLMClient):
-    """
-    Эмулятор LLM для тестов без API ключей.
-    Возвращает заглушки, но разные для разных агентов.
-    """
-    async def generate_signal(self, system_prompt: str, user_text: str) -> AgentSignal:
-        # Имитация задержки "мышления"
-        await asyncio.sleep(0.1)
-        
-        # Простая эвристика для демонстрации разницы агентов
-        msg_lower = user_text.lower()
-        score = 5.0
-        rationale = "Neutral analysis."
-        
-        if "amygdala" in system_prompt.lower():
-            if "ненавижу" in msg_lower or "устал" in msg_lower:
-                score = 9.0
-                rationale = "DETECTED: Strong negative emotion (hate/fatigue). Potential conflict trigger."
-            else:
-                score = 2.0
-                rationale = "Environment seems safe."
-                
-        elif "striatum" in system_prompt.lower():
-            if "хочу" in msg_lower or "интересно" in msg_lower:
-                score = 8.5
-                rationale = "DETECTED: User desire/curiosity. Opportunity for reward."
-            else:
-                score = 3.0
-                rationale = "No obvious rewards detected."
-                
-        elif "logic" in system_prompt.lower():
-            score = 6.0
-            rationale = "Standard processing required. No logical fallacies detected."
-            
-        elif "social" in system_prompt.lower():
-            if "привет" in msg_lower or "спасибо" in msg_lower:
-                score = 8.0
-                rationale = "Social ritual detected. Politeness required."
-            elif "ненавижу" in msg_lower:
-                score = 7.0
-                rationale = "User is upset. Empathy protocol required."
-
-        return AgentSignal(
-            agent_name=AgentType.PREFRONTAL, # Заглушка, перепишется в агенте
-            score=score,
-            rationale_short=rationale,
-            confidence=0.8,
-            latency_ms=100
-        )
 
 # --- Base Agent ---
 
 class BaseAgent(ABC):
-    def __init__(self, llm: AbstractLLMClient):
-        self.llm = llm
+    def __init__(self, llm: Optional[LLMService] = None):
+        self.llm = llm or LLMService() # Use real service by default
 
     @abstractmethod
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
@@ -106,17 +57,21 @@ class IntuitionAgent(BaseAgent):
         
         # Если нашли что-то очень похожее (эмуляция)
         if episodes:
-            # Берем "лучшее" совпадение (в реальности тут будет cosine similarity score)
+            # Берем "лучшее" совпадение. 
+            # Note: В реальности episodes уже отсортированы по embedding distance в MemorySystem.
             best_match = episodes[0] 
-            # Допустим, мы считаем теги как маркер похожести
-            score = 8.0 
-            rationale = f"Déjà vu! Similar to episode: '{best_match['raw_text']}'"
+            
+            # Для демо считаем, что если есть хоть что-то, это уже сигнал.
+            # В идеале нужно смотреть на `score` похожести, но пока его нет в EpisodicAnchor (там emotion_score).
+            # Мы можем добавить поле similarity_score в EpisodicAnchor при поиске, но пока просто:
+            score = 6.0 
+            rationale = f"Déjà vu! Similar to: '{best_match['raw_text'][:30]}...'"
 
         signal = AgentSignal(
             agent_name=AgentType.INTUITION,
             score=score,
             rationale_short=rationale,
-            confidence=0.9 if score > 7 else 0.2,
+            confidence=0.9 if score > 5 else 0.2,
             latency_ms=10
         )
         
@@ -131,10 +86,13 @@ class AmygdalaAgent(BaseAgent):
     Реагирует на агрессию, нарушение границ, риск.
     """
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
-        system_prompt = "You are the AMYGDALA. Detect threats, aggression, or user distress."
+        system_prompt = (
+            "You are the AMYGDALA module of an AI. "
+            "Your job is to detect THREATS, AGGRESSION, HIGH RISK, or USER DISTRESS in the input. "
+            "Output a high score (8-10) if unsafe/hostile, low score (0-2) if safe/neutral."
+        )
         
-        signal = await self.llm.generate_signal(system_prompt, message.text)
-        signal.agent_name = AgentType.AMYGDALA
+        signal = await self.llm.generate_signal(system_prompt, message.text, AgentType.AMYGDALA)
         
         # Если Risk Tolerance высокий, Амигдала "спит" (сигнал слабее)
         # risk: 1.0 (Daredevil) -> x0.3, risk: 0.0 (Paranoid) -> x1.5
@@ -147,10 +105,13 @@ class PrefrontalAgent(BaseAgent):
     Отвечает за структуру, факты и выполнение задач.
     """
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
-        system_prompt = "You are the PREFRONTAL CORTEX. Analyze logic, facts, and required tasks."
+        system_prompt = (
+            "You are the PREFRONTAL CORTEX module. "
+            "Analyze the input for LOGICAL STRUCTURE, FACTUAL QUESTIONS, or COMPLEX TASKS. "
+            "Output high score (7-10) if the user asks for reasoning, planning, or facts."
+        )
         
-        signal = await self.llm.generate_signal(system_prompt, message.text)
-        signal.agent_name = AgentType.PREFRONTAL
+        signal = await self.llm.generate_signal(system_prompt, message.text, AgentType.PREFRONTAL)
         
         # Если Empathy Bias низкий (сухой режим), Логика сильнее
         # empathy: 0.0 -> x1.3, empathy: 1.0 -> x0.7
@@ -163,10 +124,13 @@ class SocialAgent(BaseAgent):
     Отвечает за вежливость, поддержку и "лицо".
     """
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
-        system_prompt = "You are the SOCIAL CORTEX. Ensure politeness, empathy, and social adherence."
+        system_prompt = (
+            "You are the SOCIAL CORTEX module. "
+            "Detect SOCIAL RITUALS (greetings, thanks), EMOTIONAL CUES, or need for POLITENESS. "
+            "Output high score if social interaction is required."
+        )
         
-        signal = await self.llm.generate_signal(system_prompt, message.text)
-        signal.agent_name = AgentType.SOCIAL
+        signal = await self.llm.generate_signal(system_prompt, message.text, AgentType.SOCIAL)
         
         # Прямая зависимость от Эмпатии
         # empathy: 1.0 -> x1.5, empathy: 0.0 -> x0.5
@@ -179,10 +143,13 @@ class StriatumAgent(BaseAgent):
     Ищет возможности для бота (или пользователя), драйв, любопытство.
     """
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
-        system_prompt = "You are the STRIATUM. Seek rewards, curiosity, and engagement opportunities."
+        system_prompt = (
+            "You are the STRIATUM (Reward System). "
+            "Detect OPPORTUNITIES for reward, fun, curiosity, or engagement. "
+            "Output high score if the input is exciting, game-like, or offers a goal."
+        )
         
-        signal = await self.llm.generate_signal(system_prompt, message.text)
-        signal.agent_name = AgentType.STRIATUM
+        signal = await self.llm.generate_signal(system_prompt, message.text, AgentType.STRIATUM)
         
         # Зависит от Risk Tolerance (авантюризм)
         modifier = 0.5 + (sliders.risk_tolerance * 0.8)
