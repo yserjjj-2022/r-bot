@@ -5,7 +5,6 @@ import math
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 
-# Import contracts
 from .schemas import (
     SemanticTriple, 
     EpisodicAnchor, 
@@ -13,7 +12,6 @@ from .schemas import (
     IncomingMessage
 )
 
-# Import infrastructure
 from src.r_core.infrastructure.db import (
     AsyncSessionLocal, 
     SemanticModel, 
@@ -28,7 +26,24 @@ class VectorStoreParams(BaseModel):
     min_similarity: float = 0.7
 
 class AbstractMemoryStore:
-    # ... existing abstract methods ...
+    async def save_semantic(self, user_id: int, triple: SemanticTriple):
+        raise NotImplementedError
+    
+    async def save_episodic(self, user_id: int, anchor: EpisodicAnchor, embedding: Optional[List[float]] = None):
+        raise NotImplementedError
+        
+    async def save_pattern(self, user_id: int, pattern: VolitionalPattern):
+        raise NotImplementedError
+
+    async def search_episodic(self, user_id: int, query_vector: List[float], params: VectorStoreParams) -> List[EpisodicAnchor]:
+        raise NotImplementedError
+        
+    async def search_semantic(self, user_id: int, query_text: str) -> List[SemanticTriple]:
+        raise NotImplementedError
+        
+    async def get_volitional_patterns(self, user_id: int) -> List[VolitionalPattern]:
+        raise NotImplementedError
+
     async def save_chat_message(self, user_id: int, session_id: str, role: str, content: str):
         raise NotImplementedError
     
@@ -38,8 +53,6 @@ class AbstractMemoryStore:
 # --- Postgres Implementation ---
 
 class PostgresMemoryStore(AbstractMemoryStore):
-    # ... existing save/search methods for semantic/episodic ...
-    
     async def save_semantic(self, user_id: int, triple: SemanticTriple):
         async with AsyncSessionLocal() as session:
             stmt = select(SemanticModel).where(
@@ -148,7 +161,6 @@ class PostgresMemoryStore(AbstractMemoryStore):
                 ) for r in rows
             ]
 
-    # --- NEW: STM Methods ---
     async def save_chat_message(self, user_id: int, session_id: str, role: str, content: str):
         async with AsyncSessionLocal() as session:
             msg = ChatHistoryModel(
@@ -170,7 +182,6 @@ class PostgresMemoryStore(AbstractMemoryStore):
             result = await session.execute(stmt)
             rows = result.scalars().all()
             
-            # Reverse back to chronological order
             history = [{"role": r.role, "content": r.content} for r in reversed(rows)]
             return history
 
@@ -181,7 +192,7 @@ class MemorySystem:
         self.store = store or PostgresMemoryStore() 
         self.llm_service = LLMService()
 
-    async def memorize_event(self, message: IncomingMessage, extraction_result: dict):
+    async def memorize_event(self, message: IncomingMessage, extraction_result: dict, precomputed_embedding: Optional[List[float]] = None):
         # 1. Save Raw User Message to History (STM)
         await self.store.save_chat_message(
             message.user_id, message.session_id, "user", message.text
@@ -196,7 +207,12 @@ class MemorySystem:
         for anchor_data in extraction_result.get("anchors", []):
             anchor = EpisodicAnchor(**anchor_data)
             try:
-                embedding = await self.llm_service.get_embedding(anchor.raw_text)
+                # OPTIMIZATION: Use precomputed embedding if text matches, otherwise fetch new
+                if precomputed_embedding and anchor.raw_text == message.text:
+                    embedding = precomputed_embedding
+                else:
+                    embedding = await self.llm_service.get_embedding(anchor.raw_text)
+                
                 await self.store.save_episodic(user_id, anchor, embedding=embedding)
             except Exception as e:
                 print(f"[MemorySystem] Embedding failed: {e}")
@@ -206,13 +222,17 @@ class MemorySystem:
             await self.store.save_pattern(user_id, pattern)
 
     async def memorize_bot_response(self, user_id: int, session_id: str, text: str):
-        """Helper to save bot's reply to history"""
         await self.store.save_chat_message(user_id, session_id, "assistant", text)
 
-    async def recall_context(self, user_id: int, current_text: str, session_id: str = "default") -> dict:
+    async def recall_context(self, user_id: int, current_text: str, session_id: str = "default", precomputed_embedding: Optional[List[float]] = None) -> dict:
         # 1. Episodes (RAG)
         try:
-            query_vec = await self.llm_service.get_embedding(current_text)
+            # OPTIMIZATION: Use precomputed embedding if available
+            if precomputed_embedding:
+                query_vec = precomputed_embedding
+            else:
+                query_vec = await self.llm_service.get_embedding(current_text)
+                
             episodic = await self.store.search_episodic(user_id, query_vec, VectorStoreParams(limit=3))
         except Exception as e:
             print(f"[MemorySystem] Recall Embedding failed: {e}")
@@ -224,7 +244,7 @@ class MemorySystem:
         # 3. Patterns
         patterns = await self.store.get_volitional_patterns(user_id)
         
-        # 4. Short Term History (NEW)
+        # 4. Short Term History
         history = await self.store.get_recent_history(user_id, session_id, limit=6)
 
         return {
