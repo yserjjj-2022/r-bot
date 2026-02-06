@@ -69,7 +69,16 @@ class LLMService:
             json_mode=True
         )
 
-    async def generate_response(self, agent_name: str, user_text: str, context_str: str, rationale: str, bot_name: str = "R-Bot", bot_gender: str = "Neutral") -> str:
+    async def generate_response(
+        self, 
+        agent_name: str, 
+        user_text: str, 
+        context_str: str, 
+        rationale: str, 
+        bot_name: str = "R-Bot", 
+        bot_gender: str = "Neutral",
+        user_mode: str = "formal"
+    ) -> str:
         # Detect language hack: Add 'Detect Language' instruction
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
@@ -81,12 +90,20 @@ class LLMService:
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
+        # Mapping mode to Russian/English rules
+        address_instruction = ""
+        if user_mode == "informal":
+            address_instruction = "ADDRESS RULE: You MUST address the user informally (use 'Ты' in Russian, 'First Name'). Do NOT use 'Вы'."
+        else:
+            address_instruction = "ADDRESS RULE: Address the user formally (use 'Вы' in Russian, 'Mr./Ms.' if applicable). Be polite."
+
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
             f"ROLE: {system_persona}\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
             "STYLE: Speak naturally. Do not include role-play actions like *smiles* or *pauses*.\n"
             "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n"
+            f"{address_instruction}\n"
             f"CONTEXT: {context_str}\n"
             f"MOTIVATION: {rationale}\n"
         )
