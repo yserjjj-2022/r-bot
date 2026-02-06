@@ -19,8 +19,6 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = "https://api.vsegpt.ru/v1" 
     
     # Model Selection
-    # Was: "deepseek/deepseek-chat" or "gpt-4-turbo"
-    # Now: "anthropic/claude-3-haiku" for speed/cost
     LLM_MODEL_NAME: str = "anthropic/claude-3-haiku"
 
     # Embeddings
@@ -29,9 +27,14 @@ class Settings(BaseSettings):
     
     # Personality Defaults
     DEFAULT_CHARACTER_ID: str = "default_rbot"
+    
+    # Pool Settings (Crucial for Async)
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
 
     @property
     def database_url(self) -> str:
+        # Use asyncpg driver
         return f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
