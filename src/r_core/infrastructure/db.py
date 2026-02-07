@@ -33,6 +33,8 @@ class SemanticModel(Base):
     object: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     source_message_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # ✨ NEW: Affective ToM - эмоциональное отношение пользователя к объекту
+    sentiment: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class EpisodicModel(Base):
@@ -66,6 +68,9 @@ class MetricsModel(Base):
     session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # ✨ NEW: Метрики для Affective ToM
+    affective_triggers_detected: Mapped[int] = mapped_column(Integer, default=0)
+    sentiment_context_used: Mapped[bool] = mapped_column(default=False)
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
 
 class ChatHistoryModel(Base):
@@ -105,9 +110,40 @@ async def init_models():
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         
-        # --- Migration Hack: Add gender column if it's missing ---
-        # SQLAlchemy create_all does NOT alter existing tables. We must do it manually.
+        # ✨ Migration: Add sentiment column to semantic_memory
         try:
-            await conn.execute(text("ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(20) DEFAULT 'Neutral'"))
+            await conn.execute(text(
+                "ALTER TABLE semantic_memory ADD COLUMN IF NOT EXISTS sentiment JSONB DEFAULT NULL"
+            ))
+            print("[DB Init] ✅ sentiment column added to semantic_memory")
         except Exception as e:
-            print(f"[DB Init] Schema update warning: {e}")
+            print(f"[DB Init] Schema update (sentiment): {e}")
+        
+        # ✨ Migration: Add affective metrics columns to rcore_metrics
+        try:
+            await conn.execute(text(
+                "ALTER TABLE rcore_metrics ADD COLUMN IF NOT EXISTS affective_triggers_detected INTEGER DEFAULT 0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE rcore_metrics ADD COLUMN IF NOT EXISTS sentiment_context_used BOOLEAN DEFAULT FALSE"
+            ))
+            print("[DB Init] ✅ Affective metrics columns added to rcore_metrics")
+        except Exception as e:
+            print(f"[DB Init] Schema update (metrics): {e}")
+        
+        # ✨ Migration: Create GIN index for fast sentiment queries
+        try:
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_semantic_sentiment ON semantic_memory USING GIN (sentiment)"
+            ))
+            print("[DB Init] ✅ GIN index created for sentiment column")
+        except Exception as e:
+            print(f"[DB Init] Index creation (sentiment): {e}")
+        
+        # --- Previous migration: gender column ---
+        try:
+            await conn.execute(text(
+                "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(20) DEFAULT 'Neutral'"
+            ))
+        except Exception as e:
+            print(f"[DB Init] Schema update (gender): {e}")
