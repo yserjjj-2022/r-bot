@@ -54,10 +54,21 @@ class LLMService:
             "- 'preferred_mode': If user asks to be addressed formally (Вы) or informally (Ты).\n"
             "Return null if no info detected.\n\n"
 
+            "### 6. AFFECTIVE EXTRACTION (Emotional Relations)\n"
+            "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
+            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand, passionate about, disgusted by.\n"
+            "- Output format: Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES), 'object' (entity name), 'intensity' (0.0-1.0).\n"
+            "- Examples:\n"
+            "  * 'Ненавижу Java' → {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
+            "  * 'Обожаю Python' → {'subject': 'User', 'predicate': 'LOVES', 'object': 'Python', 'intensity': 0.85}\n"
+            "  * 'Боюсь пауков' → {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
+            "- Return empty array [] if no affective content detected.\n\n"
+
             "### OUTPUT FORMAT\n"
-            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'profile_update'.\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'profile_update', 'affective_extraction'.\n"
             "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
-            "Value schema for 'profile_update': { 'name': 'str or null', 'gender': 'Male/Female/Neutral or null', 'preferred_mode': 'formal/informal or null' } OR null if empty."
+            "Value schema for 'profile_update': { 'name': 'str or null', 'gender': 'Male/Female/Neutral or null', 'preferred_mode': 'formal/informal or null' } OR null if empty.\n"
+            "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
         return await self._safe_chat_completion(
@@ -78,7 +89,8 @@ class LLMService:
         bot_name: str = "R-Bot", 
         bot_gender: str = "Neutral",
         user_mode: str = "formal",
-        style_instructions: str = ""  # NEW: Separate parameter to prevent leakage
+        style_instructions: str = "",  # NEW: Separate parameter to prevent leakage
+        affective_context: str = ""  # ✨ NEW: Affective warnings from memory
     ) -> str:
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
@@ -107,6 +119,16 @@ class LLMService:
             f"{address_instruction}\n\n"
             "--- CONVERSATION MEMORY ---\n"
             f"{context_str}\n\n"
+        )
+
+        # ✨ NEW: Add affective context warnings
+        if affective_context:
+            system_prompt += (
+                "--- AFFECTIVE CONTEXT (User's Emotional Relations) ---\n"
+                f"{affective_context}\n\n"
+            )
+
+        system_prompt += (
             "--- INTERNAL DIRECTIVES (Hidden from User) ---\n"
             f"{style_instructions}\n"
             f"MOTIVATION: {rationale}\n"
@@ -134,6 +156,7 @@ class LLMService:
                 "STYLE INSTRUCTIONS:",
                 "PAST EPISODES",
                 "--- INTERNAL DIRECTIVES",
+                "--- AFFECTIVE CONTEXT",
                 "MOTIVATION:"
             ]
             for marker in leak_markers:
