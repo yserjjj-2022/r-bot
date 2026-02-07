@@ -90,7 +90,6 @@ class LLMService:
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
-        # Mapping mode to Russian/English rules
         address_instruction = ""
         if user_mode == "informal":
             address_instruction = "ADDRESS RULE: You MUST address the user informally (use 'Ты' in Russian, 'First Name'). Do NOT use 'Вы'."
@@ -116,6 +115,13 @@ class LLMService:
             response_format=None,
             json_mode=False
         )
+        
+        # --- CLEANUP ARTIFACTS ---
+        # Stop leakage of Human/User simulated turns
+        if isinstance(response_data, str):
+            for stop_token in ["Human:", "User:", "\nHuman", "\nUser"]:
+                if stop_token in response_data:
+                    response_data = response_data.split(stop_token)[0].strip()
         
         return response_data if isinstance(response_data, str) else ""
 
