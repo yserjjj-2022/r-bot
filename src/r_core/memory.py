@@ -3,7 +3,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import math
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 
 from .schemas import (
     SemanticTriple, 
@@ -57,6 +57,10 @@ class AbstractMemoryStore:
     async def update_user_profile(self, user_id: int, data: Dict):
         raise NotImplementedError
 
+    async def get_sentiment_for_entity(self, user_id: int, entity: str) -> Optional[Dict]:
+        """Получить эмоциональное отношение пользователя к сущности"""
+        raise NotImplementedError
+
 # --- Postgres Implementation ---
 
 class PostgresMemoryStore(AbstractMemoryStore):
@@ -73,6 +77,9 @@ class PostgresMemoryStore(AbstractMemoryStore):
             
             if existing:
                 existing.confidence = max(existing.confidence, triple.confidence)
+                # ✨ Update sentiment if provided
+                if triple.sentiment:
+                    existing.sentiment = triple.sentiment
             else:
                 new_triple = SemanticModel(
                     user_id=user_id,
@@ -80,7 +87,8 @@ class PostgresMemoryStore(AbstractMemoryStore):
                     predicate=triple.predicate,
                     object=triple.object,
                     confidence=triple.confidence,
-                    source_message_id=triple.source_message_id
+                    source_message_id=triple.source_message_id,
+                    sentiment=triple.sentiment  # ✨ NEW: Save sentiment
                 )
                 session.add(new_triple)
             await session.commit()
@@ -148,9 +156,38 @@ class PostgresMemoryStore(AbstractMemoryStore):
                     predicate=r.predicate,
                     object=r.object,
                     confidence=r.confidence,
-                    source_message_id=r.source_message_id
+                    source_message_id=r.source_message_id,
+                    sentiment=r.sentiment  # ✨ NEW: Include sentiment
                 ) for r in rows
             ]
+
+    async def get_sentiment_for_entity(self, user_id: int, entity: str) -> Optional[Dict]:
+        """
+        ✨ NEW: Получить эмоциональное отношение пользователя к сущности.
+        Возвращает sentiment-словарь или None, если нет данных.
+        """
+        async with AsyncSessionLocal() as session:
+            # Ищем записи, где object содержит entity И есть sentiment
+            stmt = select(SemanticModel).where(
+                SemanticModel.user_id == user_id,
+                SemanticModel.object.ilike(f"%{entity}%"),
+                SemanticModel.sentiment.isnot(None)
+            ).order_by(
+                # Сортируем по силе эмоции (abs(valence))
+                desc(SemanticModel.created_at)  # Берём самую свежую запись
+            ).limit(1)
+            
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
+            
+            if row and row.sentiment:
+                return {
+                    "entity": row.object,
+                    "predicate": row.predicate,
+                    "sentiment": row.sentiment,
+                    "intensity": abs(row.sentiment.get("valence", 0.0))
+                }
+            return None
 
     async def get_volitional_patterns(self, user_id: int) -> List[VolitionalPattern]:
         async with AsyncSessionLocal() as session:
@@ -284,16 +321,44 @@ class MemorySystem:
         # 4. Short Term History
         history = await self.store.get_recent_history(user_id, session_id, limit=6)
 
-        # 5. User Profile (NEW)
+        # 5. User Profile
         profile = await self.store.get_user_profile(user_id)
+
+        # ✨ 6. NEW: Affective Context — сканирование на эмоционально заряженные объекты
+        affective_warnings = await self._extract_affective_context(user_id, current_text)
 
         return {
             "episodic_memory": [e.dict() for e in episodic],
             "semantic_facts": [s.dict() for s in semantic],
             "known_patterns": [p.dict() for p in patterns],
             "chat_history": history,
-            "user_profile": profile 
+            "user_profile": profile,
+            "affective_context": affective_warnings  # ✨ NEW
         }
+
+    async def _extract_affective_context(self, user_id: int, text: str) -> List[Dict]:
+        """
+        ✨ NEW: Извлекает сущности из текста и проверяет их на эмоциональную окраску.
+        Возвращает список warnings для инъекции в промпт.
+        """
+        # Простая эвристика: извлекаем существительные в верхнем регистре или ключевые слова
+        # В production можно использовать NER или LLM-извлечение
+        words = text.split()
+        entities = [w.strip(".,!?") for w in words if len(w) > 3]  # Упрощённый вариант
+        
+        warnings = []
+        for entity in entities:
+            sentiment_data = await self.store.get_sentiment_for_entity(user_id, entity)
+            if sentiment_data and sentiment_data["intensity"] > 0.6:
+                valence = sentiment_data["sentiment"].get("valence", 0.0)
+                warnings.append({
+                    "entity": sentiment_data["entity"],
+                    "predicate": sentiment_data["predicate"],
+                    "user_feeling": "NEGATIVE" if valence < 0 else "POSITIVE",
+                    "intensity": sentiment_data["intensity"]
+                })
+        
+        return warnings
 
     async def update_user_profile(self, user_id: int, updates: Dict):
         """Service method to update profile"""
