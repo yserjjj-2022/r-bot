@@ -66,14 +66,24 @@ class IntuitionAgent(BaseAgent):
         rationale = "No signal"
         
         if episodes:
-            score = 6.0 
-            rationale = f"Déjà vu: '{episodes[0]['raw_text'][:20]}...'"
+            # FIX: Более консервативный подход к Déjà vu
+            # Проверяем, что эпизод не слишком короткий (избегаем ложных совпадений)
+            episode_text = episodes[0].get('raw_text', '')
+            
+            if len(episode_text) > 10:  # Минимум 10 символов для валидного совпадения
+                score = 5.0  # Снижено с 6.0 до 5.0 (более консервативно)
+                # Показываем до 30 символов для лучшей читаемости
+                rationale = f"Déjà vu: '{episode_text[:30]}...'" if len(episode_text) > 30 else f"Déjà vu: '{episode_text}'"
+            else:
+                # Слишком короткий эпизод — снижаем уверенность
+                score = 3.0
+                rationale = "Weak pattern match"
 
         signal = AgentSignal(
             agent_name=self.agent_type,
             score=score,
             rationale_short=rationale,
-            confidence=0.9 if score > 5 else 0.2,
+            confidence=0.85 if score >= 5 else 0.3,  # Более строгий порог для высокой уверенности
             latency_ms=10
         )
         return self._apply_modulation(signal, self._calculate_modifier(sliders))
