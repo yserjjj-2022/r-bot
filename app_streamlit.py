@@ -35,8 +35,6 @@ if "bot_name" not in st.session_state:
     st.session_state.bot_gender = "Neutral"
 
 # --- PERSISTENT KERNEL HACK ---
-# Streamlit reloads the script on every interaction.
-# To test "Hormonal Inertia", the Kernel object (and its mood state) must survive re-runs.
 if "kernel_instance" not in st.session_state:
     st.session_state.kernel_instance = None
 
@@ -115,10 +113,30 @@ else:
 
 # --- Sliders Control ---
 st.sidebar.markdown("### Fine-tune Personality")
-empathy = st.sidebar.slider("Empathy", 0.0, 1.0, st.session_state.sliders.empathy_bias)
-risk = st.sidebar.slider("Risk", 0.0, 1.0, st.session_state.sliders.risk_tolerance)
-dominance = st.sidebar.slider("Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
-pace = st.sidebar.slider("Pace", 0.0, 1.0, st.session_state.sliders.pace_setting)
+
+empathy = st.sidebar.slider(
+    "❤️ Empathy (Social Cortex)", 
+    0.0, 1.0, st.session_state.sliders.empathy_bias,
+    help="High: Prioritizes feelings, politeness, and relationships.\nLow: Prioritizes facts and dry efficiency."
+)
+
+risk = st.sidebar.slider(
+    "🎲 Risk / Curiosity (Striatum)", 
+    0.0, 1.0, st.session_state.sliders.risk_tolerance,
+    help="High: Seeks novelty, fun, gamification. Playful.\nLow: Cautious, safe, predictable (Amygdala dominance)."
+)
+
+dominance = st.sidebar.slider(
+    "👑 Dominance (PFC/Amygdala)", 
+    0.0, 1.0, st.session_state.sliders.dominance_level,
+    help="High: Leader, assertive, directive.\nLow: Assistant, submissive, helpful."
+)
+
+pace = st.sidebar.slider(
+    "⚡ Pace (Intuition vs Logic)", 
+    0.0, 1.0, st.session_state.sliders.pace_setting,
+    help="High (1.0): Logic heavy (System 2). Thoughtful, slow.\nLow (0.0): Intuition heavy (System 1). Fast, heuristic."
+)
 
 st.session_state.sliders = PersonalitySliders(
     empathy_bias=empathy,
@@ -215,11 +233,11 @@ if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Valence (Joy)", f"{m.valence:.2f}", delta_color="normal")
+        st.metric("Valence (Joy)", f"{m.valence:.2f}", delta_color="normal", help="Pos: Happy/Warm\nNeg: Sad/Cold")
     with col2:
-        st.metric("Arousal (Energy)", f"{m.arousal:.2f}", delta_color="normal")
+        st.metric("Arousal (Energy)", f"{m.arousal:.2f}", delta_color="normal", help="High: Excited/Angry\nLow: Calm/Bored")
     with col3:
-        st.metric("Dominance (Control)", f"{m.dominance:.2f}", delta_color="normal")
+        st.metric("Dominance (Control)", f"{m.dominance:.2f}", delta_color="normal", help="High: Leader\nLow: Follower")
     st.divider()
 
 # Display history
@@ -229,7 +247,14 @@ for msg in st.session_state.messages:
         
         if msg["role"] == "assistant" and "meta" in msg:
             stats = msg["meta"]
-            st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10) | Mood: {stats.get('mood_state', 'N/A')}")
+            
+            # Show active style if available
+            active_style = stats.get("active_style", "")
+            tooltip_text = f"Winner: {msg['winner']}"
+            if active_style:
+                tooltip_text += f"\n\nStyle Instructions:\n{active_style}"
+
+            st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)", help=tooltip_text)
             
             if "all_scores" in stats:
                 scores_df = pd.DataFrame([
@@ -243,11 +268,12 @@ for msg in st.session_state.messages:
                         alt.datum.Agent == msg['winner'],
                         alt.value('orange'),
                         alt.value('lightgray')
-                    )
+                    ),
+                    tooltip=['Agent', 'Score']
                 ).properties(height=150)
                 st.altair_chart(chart, use_container_width=True)
             
-            with st.expander("Details"):
+            with st.expander("Technical Details"):
                 st.json(stats)
 
 # Input
@@ -294,7 +320,7 @@ if user_input:
             with st.chat_message("assistant"):
                 st.write(bot_text)
                 st.caption(f"🏆 Winner: **{winner_name}**")
-
+                
                 # Show Chart
                 if "all_scores" in stats:
                     scores_df = pd.DataFrame([
