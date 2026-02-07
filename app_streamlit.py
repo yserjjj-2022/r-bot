@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
 from src.r_core.memory import MemorySystem
-from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel
+from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel
 from src.r_core.config import settings
 
 # --- Setup Page ---
@@ -67,6 +67,29 @@ async def delete_agent_by_name(name: str):
         stmt = delete(AgentProfileModel).where(AgentProfileModel.name == name)
         await session.execute(stmt)
         await session.commit()
+
+# ✨ NEW: Get Affective Memory (User's Emotional Preferences)
+async def get_affective_memory(user_id: int = 999):
+    """Получить список эмоционально окрашенных объектов из памяти"""
+    async with AsyncSessionLocal() as session:
+        stmt = select(SemanticModel).where(
+            SemanticModel.user_id == user_id,
+            SemanticModel.sentiment.isnot(None)
+        ).order_by(SemanticModel.created_at.desc()).limit(20)
+        
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+        
+        return [
+            {
+                "subject": r.subject,
+                "predicate": r.predicate,
+                "object": r.object,
+                "sentiment": r.sentiment,
+                "created_at": r.created_at
+            }
+            for r in rows
+        ]
 
 # --- Sidebar ---
 st.sidebar.title("🧠 Cortex Controls")
@@ -209,6 +232,37 @@ with st.sidebar.expander("Edit User Profile", expanded=False):
 
 st.sidebar.divider()
 
+# ✨ NEW: Affective Memory Display in Sidebar
+st.sidebar.subheader("💚 Emotional Memory")
+with st.sidebar.expander("View User Preferences", expanded=False):
+    try:
+        affective_data = run_async(get_affective_memory(999))
+        
+        if affective_data:
+            for item in affective_data:
+                sentiment = item["sentiment"]
+                valence = sentiment.get("valence", 0.0)
+                
+                # Эмодзи на основе predicate и valence
+                if item["predicate"] in ["HATES", "DESPISES"]:
+                    emoji = "🔴"
+                elif item["predicate"] == "FEARS":
+                    emoji = "😨"
+                elif item["predicate"] in ["LOVES", "ADORES"]:
+                    emoji = "💚"
+                elif item["predicate"] == "ENJOYS":
+                    emoji = "😊"
+                else:
+                    emoji = "⚪"
+                
+                st.caption(f"{emoji} **{item['predicate']}** {item['object']} (V: {valence:.2f})")
+        else:
+            st.info("No emotional preferences stored yet.\nTry saying 'I hate X' or 'I love Y'")
+    except Exception as e:
+        st.error(f"Error loading affective memory: {e}")
+
+st.sidebar.divider()
+
 if st.sidebar.button("Initialize DB"):
     with st.spinner("Creating tables..."):
         try:
@@ -248,13 +302,22 @@ for msg in st.session_state.messages:
         if msg["role"] == "assistant" and "meta" in msg:
             stats = msg["meta"]
             
+            # ✨ NEW: Highlight affective context usage
+            affective_triggers = stats.get("affective_triggers_detected", 0)
+            sentiment_used = stats.get("sentiment_context_used", False)
+            
+            winner_caption = f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)"
+            
+            if sentiment_used:
+                winner_caption += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
+            
             # Show active style if available
             active_style = stats.get("active_style", "")
             tooltip_text = f"Winner: {msg['winner']}"
             if active_style:
                 tooltip_text += f"\n\nStyle Instructions:\n{active_style}"
 
-            st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)", help=tooltip_text)
+            st.caption(winner_caption, help=tooltip_text)
             
             if "all_scores" in stats:
                 scores_df = pd.DataFrame([
@@ -319,7 +382,16 @@ if user_input:
 
             with st.chat_message("assistant"):
                 st.write(bot_text)
-                st.caption(f"🏆 Winner: **{winner_name}**")
+                
+                # ✨ NEW: Show affective context indicator
+                affective_triggers = stats.get("affective_triggers_detected", 0)
+                sentiment_used = stats.get("sentiment_context_used", False)
+                
+                caption_text = f"🏆 Winner: **{winner_name}**"
+                if sentiment_used:
+                    caption_text += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
+                
+                st.caption(caption_text)
                 
                 # Show Chart
                 if "all_scores" in stats:
