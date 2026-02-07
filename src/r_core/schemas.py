@@ -42,6 +42,20 @@ class BotConfig(BaseModel):
     sliders: PersonalitySliders
     core_values: List[str]
 
+# --- Hormonal / Mood System ---
+
+class MoodVector(BaseModel):
+    """
+    Модель VAD (Valence, Arousal, Dominance)
+    Диапазон: от -1.0 до +1.0
+    """
+    valence: float = Field(0.0, ge=-1.0, le=1.0, description="Негатив (-1) <-> Позитив (+1)")
+    arousal: float = Field(0.0, ge=-1.0, le=1.0, description="Спокойствие (-1) <-> Возбуждение (+1)")
+    dominance: float = Field(0.0, ge=-1.0, le=1.0, description="Покорность (-1) <-> Контроль (+1)")
+
+    def __str__(self):
+        return f"V:{self.valence:.2f} A:{self.arousal:.2f} D:{self.dominance:.2f}"
+
 # --- Inputs ---
 
 class IncomingMessage(BaseModel):
@@ -67,16 +81,18 @@ class SemanticTriple(BaseModel):
     object: str
     confidence: float = 1.0
     source_message_id: Optional[str] = None
+    # Affective extension placeholder
+    sentiment: Optional[Dict[str, float]] = None 
 
 class EpisodicAnchor(BaseModel):
     """
     Единица эпизодической памяти (Цитата-Якорь)
     """
     raw_text: str
-    embedding_ref: Optional[str] = None # Ссылка на вектор в VectorDB
+    embedding_ref: Optional[str] = None 
     emotion_score: float # 0.0 - 1.0
     tags: List[str]
-    ttl_days: int = 30 # Time To Live
+    ttl_days: int = 30 
 
 class VolitionalPattern(BaseModel):
     """
@@ -100,6 +116,8 @@ class AgentSignal(BaseModel):
     rationale_short: str
     confidence: float = Field(..., ge=0, le=1.0)
     latency_ms: int
+    # Agent's influence on mood
+    mood_impact: Optional[MoodVector] = None
 
 # --- Output ---
 
@@ -120,5 +138,6 @@ class CoreResponse(BaseModel):
     # Meta for debugging & logging
     internal_stats: Dict[str, Any] = Field(default_factory=dict) 
     winning_agent: Optional[AgentType] = None
+    current_mood: Optional[MoodVector] = None # <-- Added Mood State
     processing_mode: ProcessingMode
-    memory_updates: Dict[str, int] = Field(default_factory=dict) # {"triples": 2, "anchors": 0}
+    memory_updates: Dict[str, int] = Field(default_factory=dict) 
