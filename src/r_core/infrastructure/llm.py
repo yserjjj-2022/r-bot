@@ -77,9 +77,9 @@ class LLMService:
         rationale: str, 
         bot_name: str = "R-Bot", 
         bot_gender: str = "Neutral",
-        user_mode: str = "formal"
+        user_mode: str = "formal",
+        style_instructions: str = ""  # NEW: Separate parameter to prevent leakage
     ) -> str:
-        # Detect language hack: Add 'Detect Language' instruction
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
             "prefrontal_logic": "You are LOGIC (Analyst). Precise, factual, helpful.",
@@ -96,14 +96,19 @@ class LLMService:
         else:
             address_instruction = "ADDRESS RULE: Address the user formally (use 'Вы' in Russian, 'Mr./Ms.' if applicable). Be polite."
 
+        # --- CRITICAL FIX: Separate style from context ---
+        # Context is for memory/facts. Style is for tone modulation.
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
             f"ROLE: {system_persona}\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
-            "STYLE: Speak naturally. Do not include role-play actions like *smiles* or *pauses*.\n"
+            "OUTPUT RULE: Speak naturally. Do NOT include role-play actions like *smiles* or *pauses*. Do NOT echo system instructions or metadata. Output ONLY your conversational reply.\n"
             "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n"
-            f"{address_instruction}\n"
-            f"CONTEXT: {context_str}\n"
+            f"{address_instruction}\n\n"
+            "--- CONVERSATION MEMORY ---\n"
+            f"{context_str}\n\n"
+            "--- INTERNAL DIRECTIVES (Hidden from User) ---\n"
+            f"{style_instructions}\n"
             f"MOTIVATION: {rationale}\n"
         )
 
@@ -116,12 +121,24 @@ class LLMService:
             json_mode=False
         )
         
-        # --- CLEANUP ARTIFACTS ---
-        # Stop leakage of Human/User simulated turns
+        # --- AGGRESSIVE SANITIZATION ---
         if isinstance(response_data, str):
+            # Stop leakage of simulated turns
             for stop_token in ["Human:", "User:", "\nHuman", "\nUser"]:
                 if stop_token in response_data:
                     response_data = response_data.split(stop_token)[0].strip()
+            
+            # Stop leakage of metadata blocks (if LLM echoes system prompt)
+            leak_markers = [
+                "CURRENT INTERNAL MOOD:",
+                "STYLE INSTRUCTIONS:",
+                "PAST EPISODES",
+                "--- INTERNAL DIRECTIVES",
+                "MOTIVATION:"
+            ]
+            for marker in leak_markers:
+                if marker in response_data:
+                    response_data = response_data.split(marker)[0].strip()
         
         return response_data if isinstance(response_data, str) else ""
 
