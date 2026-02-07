@@ -34,6 +34,12 @@ if "bot_name" not in st.session_state:
     st.session_state.bot_name = "R-Bot"
     st.session_state.bot_gender = "Neutral"
 
+# --- PERSISTENT KERNEL HACK ---
+# Streamlit reloads the script on every interaction.
+# To test "Hormonal Inertia", the Kernel object (and its mood state) must survive re-runs.
+if "kernel_instance" not in st.session_state:
+    st.session_state.kernel_instance = None
+
 def run_async(coro):
     try:
         return asyncio.run(coro)
@@ -80,6 +86,14 @@ selected_agent_name = st.sidebar.selectbox(
     "Select Persona", 
     ["Default"] + agent_names
 )
+
+# Reset kernel if persona changes
+if "last_agent_name" not in st.session_state:
+    st.session_state.last_agent_name = selected_agent_name
+
+if st.session_state.last_agent_name != selected_agent_name:
+    st.session_state.kernel_instance = None # Force reset to clear mood
+    st.session_state.last_agent_name = selected_agent_name
 
 if selected_agent_name != "Default":
     st.session_state.bot_name = selected_agent_name
@@ -187,12 +201,26 @@ if st.sidebar.button("Initialize DB"):
 
 if st.sidebar.button("Clear Memory & Chat"):
     st.session_state.messages = []
+    st.session_state.kernel_instance = None # RESET KERNEL MOOD
     st.rerun()
 
 # --- Main Chat Area ---
 
 st.title("R-Bot: Cognitive Architecture Debugger")
 st.markdown(f"Current Agent: **{st.session_state.bot_name}** ({st.session_state.bot_gender})")
+
+# --- Mood Dashboard (Top) ---
+if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
+    m = st.session_state.kernel_instance.current_mood
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Valence (Joy)", f"{m.valence:.2f}", delta_color="normal")
+    with col2:
+        st.metric("Arousal (Energy)", f"{m.arousal:.2f}", delta_color="normal")
+    with col3:
+        st.metric("Dominance (Control)", f"{m.dominance:.2f}", delta_color="normal")
+    st.divider()
 
 # Display history
 for msg in st.session_state.messages:
@@ -201,7 +229,7 @@ for msg in st.session_state.messages:
         
         if msg["role"] == "assistant" and "meta" in msg:
             stats = msg["meta"]
-            st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)")
+            st.caption(f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10) | Mood: {stats.get('mood_state', 'N/A')}")
             
             if "all_scores" in stats:
                 scores_df = pd.DataFrame([
@@ -231,17 +259,24 @@ if user_input:
         st.write(user_input)
 
     with st.spinner(f"{st.session_state.bot_name} is thinking..."):
-        # Dynamic Hack: Inject Gender into Config on the fly
-        config = BotConfig(
-            character_id="streamlit_user", 
-            name=st.session_state.bot_name, 
-            sliders=st.session_state.sliders, 
-            core_values=[]
-        )
-        # Manually patch gender since Config schema update is skipped for speed
-        config.gender = st.session_state.bot_gender 
         
-        kernel = RCoreKernel(config)
+        # Initialize or Get Kernel (Persist state!)
+        if st.session_state.kernel_instance is None:
+             config = BotConfig(
+                character_id="streamlit_user", 
+                name=st.session_state.bot_name, 
+                sliders=st.session_state.sliders, 
+                core_values=[]
+            )
+             config.gender = st.session_state.bot_gender
+             st.session_state.kernel_instance = RCoreKernel(config)
+        else:
+             # Just update config if sliders changed, but keep mood state
+             st.session_state.kernel_instance.config.name = st.session_state.bot_name
+             st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
+             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
+
+        kernel = st.session_state.kernel_instance
         
         incoming = IncomingMessage(
             user_id=999, 
@@ -258,8 +293,9 @@ if user_input:
 
             with st.chat_message("assistant"):
                 st.write(bot_text)
-                
                 st.caption(f"🏆 Winner: **{winner_name}**")
+
+                # Show Chart
                 if "all_scores" in stats:
                     scores_df = pd.DataFrame([
                         {"Agent": k, "Score": v} 
@@ -282,6 +318,9 @@ if user_input:
                 "meta": stats,
                 "winner": winner_name
             })
+            
+            # Force UI update to show new mood metrics at top
+            st.rerun() 
             
         except Exception as e:
             st.error(f"Kernel Panic: {e}")
