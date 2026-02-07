@@ -116,17 +116,18 @@ class RCoreKernel:
 
         bot_gender = getattr(self.config, "gender", "Neutral")
         
-        # --- EHS: Generate Dynamic Style Instructions ---
+        # --- EHS: Generate Dynamic Style Instructions (SEPARATE from context) ---
         mood_style_prompt = self._generate_style_from_mood(self.current_mood)
         
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
-            context_str=context_str + f"\n{mood_style_prompt}", # Inject specific style rules
+            context_str=context_str,  # Clean context (no metadata)
             rationale=winner.rationale_short,
             bot_name=self.config.name,
             bot_gender=bot_gender,
-            user_mode=preferred_mode
+            user_mode=preferred_mode,
+            style_instructions=mood_style_prompt  # Pass separately
         )
         
         await self.memory.memorize_bot_response(
