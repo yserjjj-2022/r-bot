@@ -9,7 +9,8 @@ from .schemas import (
     BotConfig, 
     ProcessingMode,
     AgentType,
-    MoodVector
+    MoodVector,
+    SemanticTriple
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
@@ -85,6 +86,45 @@ class RCoreKernel:
                 print(f"[Profiling] Detected user identity update: {cleaned_update}")
                 await self.memory.update_user_profile(message.user_id, cleaned_update)
         
+        # ✨ NEW: Affective Extraction Processing
+        affective_extracts = council_report.get("affective_extraction", [])
+        affective_triggers_count = 0
+        
+        if affective_extracts:
+            print(f"[Affective ToM] Detected {len(affective_extracts)} emotional relations")
+            for item in affective_extracts:
+                # Преобразуем intensity в VAD-формат
+                intensity = item.get("intensity", 0.5)
+                predicate = item.get("predicate", "UNKNOWN")
+                
+                # Рассчитываем valence на основе predicate
+                if predicate in ["HATES", "DESPISES", "FEARS"]:
+                    valence = -intensity
+                elif predicate in ["LOVES", "ENJOYS", "ADORES"]:
+                    valence = intensity
+                else:
+                    valence = 0.0
+                
+                sentiment_vad = {
+                    "valence": valence,
+                    "arousal": 0.5 if predicate == "FEARS" else 0.3,  # Страх вызывает больше arousal
+                    "dominance": -0.2 if predicate == "FEARS" else 0.0
+                }
+                
+                # Сохраняем в граф знаний
+                triple = SemanticTriple(
+                    subject=item.get("subject", "User"),
+                    predicate=predicate,
+                    object=item.get("object", ""),
+                    confidence=intensity,
+                    source_message_id=message.message_id,
+                    sentiment=sentiment_vad
+                )
+                
+                await self.memory.store.save_semantic(message.user_id, triple)
+                affective_triggers_count += 1
+                print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object} (valence={valence:.2f})")
+        
         # Distribute results
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
         
@@ -119,6 +159,23 @@ class RCoreKernel:
         # --- EHS: Generate Dynamic Style Instructions (SEPARATE from context) ---
         mood_style_prompt = self._generate_style_from_mood(self.current_mood)
         
+        # ✨ NEW: Формируем affective_context_str из context["affective_context"]
+        affective_warnings = context.get("affective_context", [])
+        affective_context_str = ""
+        
+        if affective_warnings:
+            affective_context_str = "\u26a0️ EMOTIONAL RELATIONS (User's Preferences):\n"
+            for warn in affective_warnings:
+                entity = warn["entity"]
+                predicate = warn["predicate"]
+                feeling = warn["user_feeling"]
+                intensity = warn["intensity"]
+                
+                if feeling == "NEGATIVE":
+                    affective_context_str += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}). Do not use it as an example.\n"
+                else:
+                    affective_context_str += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}). You may reference it positively.\n"
+        
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
@@ -127,7 +184,8 @@ class RCoreKernel:
             bot_name=self.config.name,
             bot_gender=bot_gender,
             user_mode=preferred_mode,
-            style_instructions=mood_style_prompt  # Pass separately
+            style_instructions=mood_style_prompt,  # Pass separately
+            affective_context=affective_context_str  # ✨ NEW: Pass affective warnings
         )
         
         await self.memory.memorize_bot_response(
@@ -151,7 +209,9 @@ class RCoreKernel:
                 "winner_reason": winner.rationale_short,
                 "all_scores": all_scores,
                 "mood_state": str(self.current_mood),
-                "active_style": mood_style_prompt # Debug: show what instructions were sent
+                "active_style": mood_style_prompt,  # Debug: show what instructions were sent
+                "affective_triggers_detected": affective_triggers_count,  # ✨ NEW: Metrics
+                "sentiment_context_used": bool(affective_warnings)  # ✨ NEW: Metrics
             }
         )
 
