@@ -50,24 +50,27 @@ class LLMService:
             "### 5. PROFILE EXTRACTOR (Passive Sensing)\n"
             "Detect if the user explicitly states or clearly implies core identity facts.\n"
             "- 'name': If user says 'My name is X' or 'Call me X'.\n"
-            "- 'gender': If user says 'I am a woman' OR uses gendered grammar (e.g. Russian verbs 'сделала', 'устала' -> Female; 'сделал' -> Male).\n"
+            "- 'gender': If user says 'I am a woman' OR uses gendered grammar (e.g. Russian verbs 'сделала' -> Female).\n"
             "- 'preferred_mode': If user asks to be addressed formally (Вы) or informally (Ты).\n"
+            "- 'attributes': Extract explicit personality traits or self-descriptions.\n"
+            "  * Examples: 'I am skeptical' -> {'personality_traits': [{'name': 'Skeptic', 'weight': 0.6}]}\n"
+            "  * 'I am loyal' ('Я верный') -> {'personality_traits': [{'name': 'Loyal', 'weight': 0.7}]}\n"
             "Return null if no info detected.\n\n"
 
             "### 6. AFFECTIVE EXTRACTION (Emotional Relations)\n"
             "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
-            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand, passionate about, disgusted by.\n"
+            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\n"
             "- Output format: Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES), 'object' (entity name), 'intensity' (0.0-1.0).\n"
+            "- NOTE: If user says 'I am loyal', this is a TRAIT (Profile), NOT an emotional relation to 'loyalty'. Use Profile Extractor for self-descriptions.\n"
             "- Examples:\n"
-            "  * 'Ненавижу Java' → {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
-            "  * 'Обожаю Python' → {'subject': 'User', 'predicate': 'LOVES', 'object': 'Python', 'intensity': 0.85}\n"
-            "  * 'Боюсь пауков' → {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
+            "  * 'Ненавижу Java' -> {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
+            "  * 'Боюсь пауков' -> {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
             "- Return empty array [] if no affective content detected.\n\n"
 
             "### OUTPUT FORMAT\n"
             "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'profile_update', 'affective_extraction'.\n"
             "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
-            "Value schema for 'profile_update': { 'name': 'str or null', 'gender': 'Male/Female/Neutral or null', 'preferred_mode': 'formal/informal or null' } OR null if empty.\n"
+            "Value schema for 'profile_update': { 'name': 'str/null', 'gender': 'str/null', 'preferred_mode': 'str/null', 'attributes': {'personality_traits': [{'name': str, 'weight': float}]} or null } OR null if empty.\n"
             "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
@@ -89,8 +92,8 @@ class LLMService:
         bot_name: str = "R-Bot", 
         bot_gender: str = "Neutral",
         user_mode: str = "formal",
-        style_instructions: str = "",  # NEW: Separate parameter to prevent leakage
-        affective_context: str = ""  # ✨ NEW: Affective warnings from memory
+        style_instructions: str = "", 
+        affective_context: str = ""
     ) -> str:
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
@@ -108,8 +111,6 @@ class LLMService:
         else:
             address_instruction = "ADDRESS RULE: Address the user formally (use 'Вы' in Russian, 'Mr./Ms.' if applicable). Be polite."
 
-        # --- CRITICAL FIX: Separate style from context ---
-        # Context is for memory/facts. Style is for tone modulation.
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
             f"ROLE: {system_persona}\n"
@@ -121,7 +122,6 @@ class LLMService:
             f"{context_str}\n\n"
         )
 
-        # ✨ NEW: Add affective context warnings
         if affective_context:
             system_prompt += (
                 "--- AFFECTIVE CONTEXT (User's Emotional Relations) ---\n"
@@ -145,16 +145,14 @@ class LLMService:
         
         # --- AGGRESSIVE SANITIZATION ---
         if isinstance(response_data, str):
-            # Stop leakage of simulated turns
             for stop_token in ["Human:", "User:", "\nHuman", "\nUser"]:
                 if stop_token in response_data:
                     response_data = response_data.split(stop_token)[0].strip()
             
-            # Stop leakage of metadata blocks (if LLM echoes system prompt)
             leak_markers = [
                 "CURRENT INTERNAL MOOD:",
                 "STYLE INSTRUCTIONS:",
-                "SECONDARY STYLE MODIFIERS", # NEW: Caught you!
+                "SECONDARY STYLE MODIFIERS",
                 "PAST EPISODES",
                 "--- INTERNAL DIRECTIVES",
                 "--- AFFECTIVE CONTEXT",
