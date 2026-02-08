@@ -26,6 +26,12 @@ class BaseAgent(ABC):
     @abstractmethod
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         pass
+    
+    @property
+    @abstractmethod
+    def style_instruction(self) -> str:
+        """Return the specific adverbial style instruction for this agent."""
+        pass
 
     def process_from_report(self, report_data: Dict, sliders: PersonalitySliders) -> AgentSignal:
         """
@@ -40,7 +46,8 @@ class BaseAgent(ABC):
             score=float(report_data.get("score", 0.0)),
             rationale_short=report_data.get("rationale", "No rationale"),
             confidence=float(report_data.get("confidence", 0.0)),
-            latency_ms=0 # already accounted for in batch
+            latency_ms=0, # already accounted for in batch
+            style_instruction=self.style_instruction # NEW: Populate style instruction
         )
         return self._apply_modulation(signal, self._calculate_modifier(sliders))
 
@@ -59,6 +66,10 @@ class BaseAgent(ABC):
 
 class IntuitionAgent(BaseAgent):
     agent_type = AgentType.INTUITION
+    
+    @property
+    def style_instruction(self) -> str:
+        return "...but trust your gut feeling and be concise."
 
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         episodes: List[Dict] = context.get("episodic_memory", [])
@@ -84,7 +95,8 @@ class IntuitionAgent(BaseAgent):
             score=score,
             rationale_short=rationale,
             confidence=0.85 if score >= 5 else 0.3,  # Более строгий порог для высокой уверенности
-            latency_ms=10
+            latency_ms=10,
+            style_instruction=self.style_instruction # NEW
         )
         return self._apply_modulation(signal, self._calculate_modifier(sliders))
 
@@ -94,10 +106,15 @@ class IntuitionAgent(BaseAgent):
 class AmygdalaAgent(BaseAgent):
     agent_type = AgentType.AMYGDALA
     
+    @property
+    def style_instruction(self) -> str:
+        return "...but maintain firm boundaries and safety."
+    
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         # Legacy single mode (backup)
         sys = "You are AMYGDALA. Detect threats (8-10) or safety (0-2)."
         sig = await self.llm.generate_signal(sys, message.text, self.agent_type)
+        sig.style_instruction = self.style_instruction # NEW (manual set for legacy path)
         return self._apply_modulation(sig, self._calculate_modifier(sliders))
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
@@ -105,10 +122,15 @@ class AmygdalaAgent(BaseAgent):
 
 class PrefrontalAgent(BaseAgent):
     agent_type = AgentType.PREFRONTAL
+    
+    @property
+    def style_instruction(self) -> str:
+        return "...but ensure the answer is logical, structured, and fact-based."
 
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         sys = "You are LOGIC. Detect tasks/facts (8-10) or chat (0-2)."
         sig = await self.llm.generate_signal(sys, message.text, self.agent_type)
+        sig.style_instruction = self.style_instruction
         return self._apply_modulation(sig, self._calculate_modifier(sliders))
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
@@ -116,10 +138,15 @@ class PrefrontalAgent(BaseAgent):
 
 class SocialAgent(BaseAgent):
     agent_type = AgentType.SOCIAL
+    
+    @property
+    def style_instruction(self) -> str:
+        return "...but express it with warmth, politeness, and empathy."
 
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         sys = "You are SOCIAL. Detect emotions/politeness (8-10)."
         sig = await self.llm.generate_signal(sys, message.text, self.agent_type)
+        sig.style_instruction = self.style_instruction
         return self._apply_modulation(sig, self._calculate_modifier(sliders))
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
@@ -127,10 +154,15 @@ class SocialAgent(BaseAgent):
 
 class StriatumAgent(BaseAgent):
     agent_type = AgentType.STRIATUM
+    
+    @property
+    def style_instruction(self) -> str:
+        return "...but keep it playful, energetic, and engaging."
 
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         sys = "You are REWARD. Detect fun/goals (8-10)."
         sig = await self.llm.generate_signal(sys, message.text, self.agent_type)
+        sig.style_instruction = self.style_instruction
         return self._apply_modulation(sig, self._calculate_modifier(sliders))
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
