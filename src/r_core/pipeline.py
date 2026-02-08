@@ -146,6 +146,20 @@ class RCoreKernel:
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
         
+        # --- NEW: Neuro-Modulation (Adverbs) ---
+        # Strong Losers: Score > 5.0 AND not the winner
+        strong_losers = [s for s in signals if s.score > 5.0 and s.agent_name != winner.agent_name]
+        
+        adverb_instructions = []
+        for loser in strong_losers:
+            if loser.style_instruction:
+                adverb_instructions.append(f"- {loser.agent_name.name}: {loser.style_instruction}")
+        
+        adverb_context_str = ""
+        if adverb_instructions:
+            adverb_context_str = "\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\n" + "\n".join(adverb_instructions)
+            print(f"[Neuro-Modulation] Applied styles from: {[s.agent_name for s in strong_losers]}")
+        
         self._update_mood(winner)
         
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
@@ -158,6 +172,9 @@ class RCoreKernel:
         
         # --- EHS: Generate Dynamic Style Instructions (SEPARATE from context) ---
         mood_style_prompt = self._generate_style_from_mood(self.current_mood)
+        
+        # Combine Mood + Neuro-Modulation
+        final_style_instructions = mood_style_prompt + "\n" + adverb_context_str
         
         # ✨ NEW: Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
@@ -184,7 +201,7 @@ class RCoreKernel:
             bot_name=self.config.name,
             bot_gender=bot_gender,
             user_mode=preferred_mode,
-            style_instructions=mood_style_prompt,  # Pass separately
+            style_instructions=final_style_instructions,  # Pass combined styles
             affective_context=affective_context_str  # ✨ NEW: Pass affective warnings
         )
         
@@ -209,9 +226,10 @@ class RCoreKernel:
                 "winner_reason": winner.rationale_short,
                 "all_scores": all_scores,
                 "mood_state": str(self.current_mood),
-                "active_style": mood_style_prompt,  # Debug: show what instructions were sent
+                "active_style": final_style_instructions,  # Debug: show what instructions were sent
                 "affective_triggers_detected": affective_triggers_count,  # ✨ NEW: Metrics
-                "sentiment_context_used": bool(affective_warnings)  # ✨ NEW: Metrics
+                "sentiment_context_used": bool(affective_warnings),  # ✨ NEW: Metrics
+                "modulators": [s.agent_name.value for s in strong_losers] # ✨ NEW: Metrics
             }
         )
 
