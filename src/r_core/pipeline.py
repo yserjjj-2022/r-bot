@@ -41,8 +41,36 @@ class RCoreKernel:
             StriatumAgent(self.llm)
         ]
 
-    async def process_message(self, message: IncomingMessage) -> CoreResponse:
+    async def process_message(self, message: IncomingMessage, mode: str = "CORTICAL") -> CoreResponse:
+        """
+        Main pipeline entry point.
+        mode="CORTICAL" -> Full cognitive architecture (RAG, Agents, Profiling).
+        mode="ZOMBIE" -> Simple LLM pass-through (No memory, No personality).
+        """
         start_time = datetime.now()
+        
+        # --- ZOMBIE MODE (Bypass Everything) ---
+        if mode == "ZOMBIE":
+            # Just call LLM directly without system prompt engineering or memory
+            simple_response = await self.llm._safe_chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are a helpful AI assistant. Answer concisely."},
+                    {"role": "user", "content": message.text}
+                ],
+                response_format=None,
+                json_mode=False
+            )
+            latency = (datetime.now() - start_time).total_seconds() * 1000
+            
+            return CoreResponse(
+                actions=[CoreAction(type="send_text", payload={"text": str(simple_response)})],
+                winning_agent=AgentType.PREFRONTAL, # Dummy
+                current_mood=MoodVector(), # Neutral
+                processing_mode=ProcessingMode.FAST_PATH,
+                internal_stats={"latency_ms": int(latency), "mode": "ZOMBIE"}
+            )
+
+        # --- CORTICAL MODE (Full Architecture) ---
         
         # 0. Precompute Embedding
         current_embedding = None
@@ -223,7 +251,8 @@ class RCoreKernel:
             "active_style": final_style_instructions,
             "affective_triggers_detected": affective_triggers_count,
             "sentiment_context_used": bool(affective_warnings),
-            "modulators": [s.agent_name.value for s in strong_losers]
+            "modulators": [s.agent_name.value for s in strong_losers],
+            "mode": "CORTICAL"
         }
 
         # ✨ NEW: Async Logging to DB (Fire-and-forget logic could be wrapped in create_task, but here we await for safety)
