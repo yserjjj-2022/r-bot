@@ -191,6 +191,15 @@ with st.sidebar.expander("💾 Save as New Agent"):
 
 st.sidebar.divider()
 
+# ✨ NEW: Test Mode Switcher
+test_mode = st.sidebar.radio(
+    "🧪 Experiment Mode",
+    ["Standard (Cortical)", "A/B Test (Zombie vs Cortical)"],
+    help="A/B Test runs two models in parallel: Your sophisticated Cortical Brain vs a dumb Zombie LLM."
+)
+
+st.sidebar.divider()
+
 # --- User Profile Section ---
 st.sidebar.subheader("👤 User Identity")
 
@@ -281,8 +290,7 @@ if st.sidebar.button("Clear Memory & Chat"):
 st.title("R-Bot: Cognitive Architecture Debugger")
 st.markdown(f"Current Agent: **{st.session_state.bot_name}** ({st.session_state.bot_gender})")
 
-# --- Mood Dashboard (Top) ---
-if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
+# --- Mood Dashboard (Top) ---\nif st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
     m = st.session_state.kernel_instance.current_mood
     
     col1, col2, col3 = st.columns(3)
@@ -296,104 +304,47 @@ if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance
 
 # Display history
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+    if msg.get("type") == "ab_test":
+        # A/B TEST DISPLAY
+        with st.chat_message(msg["role"]):
+            st.write(f"**User:** {msg['content']}") # User input repetition
         
-        if msg["role"] == "assistant" and "meta" in msg:
-            stats = msg["meta"]
-            
-            # ✨ NEW: Highlight affective context usage
-            affective_triggers = stats.get("affective_triggers_detected", 0)
-            sentiment_used = stats.get("sentiment_context_used", False)
-            
-            winner_caption = f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)"
-            
-            if sentiment_used:
-                winner_caption += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
-            
-            # Show active style if available
-            active_style = stats.get("active_style", "")
-            tooltip_text = f"Winner: {msg['winner']}"
-            if active_style:
-                tooltip_text += f"\n\nStyle Instructions:\n{active_style}"
-
-            st.caption(winner_caption, help=tooltip_text)
-            
-            if "all_scores" in stats:
-                scores_df = pd.DataFrame([
-                    {"Agent": k, "Score": v} 
-                    for k, v in stats["all_scores"].items()
-                ])
-                chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                    x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
-                    y=alt.Y('Agent', sort='-x'),
-                    color=alt.condition(
-                        alt.datum.Agent == msg['winner'],
-                        alt.value('orange'),
-                        alt.value('lightgray')
-                    ),
-                    tooltip=['Agent', 'Score']
-                ).properties(height=150)
-                st.altair_chart(chart, use_container_width=True)
-            
-            with st.expander("Technical Details"):
-                st.json(stats)
-
-# Input
-user_input = st.chat_input("Say something...")
-
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.write(user_input)
-
-    with st.spinner(f"{st.session_state.bot_name} is thinking..."):
+        col_c, col_z = st.columns(2)
+        with col_c:
+            st.info("🧠 **Cortical (R-Bot)**")
+            st.write(msg["cortical_text"])
+            st.caption(f"Latency: {msg['cortical_latency']}ms")
+        with col_z:
+            st.warning("🧟 **Zombie Mode**")
+            st.write(msg["zombie_text"])
+            st.caption(f"Latency: {msg['zombie_latency']}ms")
+        st.divider()
         
-        # Initialize or Get Kernel (Persist state!)
-        if st.session_state.kernel_instance is None:
-             config = BotConfig(
-                character_id="streamlit_user", 
-                name=st.session_state.bot_name, 
-                sliders=st.session_state.sliders, 
-                core_values=[]
-            )
-             config.gender = st.session_state.bot_gender
-             st.session_state.kernel_instance = RCoreKernel(config)
-        else:
-             # Just update config if sliders changed, but keep mood state
-             st.session_state.kernel_instance.config.name = st.session_state.bot_name
-             st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
-             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
-
-        kernel = st.session_state.kernel_instance
-        
-        incoming = IncomingMessage(
-            user_id=999, 
-            session_id="streamlit_session",
-            text=user_input
-        )
-        
-        try:
-            response = run_async(kernel.process_message(incoming))
+    else:
+        # STANDARD DISPLAY
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
             
-            bot_text = response.actions[0].payload['text']
-            stats = response.internal_stats
-            winner_name = response.winning_agent.value
-
-            with st.chat_message("assistant"):
-                st.write(bot_text)
+            if msg["role"] == "assistant" and "meta" in msg:
+                stats = msg["meta"]
                 
-                # ✨ NEW: Show affective context indicator
+                # ✨ NEW: Highlight affective context usage
                 affective_triggers = stats.get("affective_triggers_detected", 0)
                 sentiment_used = stats.get("sentiment_context_used", False)
                 
-                caption_text = f"🏆 Winner: **{winner_name}**"
+                winner_caption = f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)"
+                
                 if sentiment_used:
-                    caption_text += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
+                    winner_caption += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
                 
-                st.caption(caption_text)
+                # Show active style if available
+                active_style = stats.get("active_style", "")
+                tooltip_text = f"Winner: {msg['winner']}"
+                if active_style:
+                    tooltip_text += f"\n\nStyle Instructions:\n{active_style}"
+
+                st.caption(winner_caption, help=tooltip_text)
                 
-                # Show Chart
                 if "all_scores" in stats:
                     scores_df = pd.DataFrame([
                         {"Agent": k, "Score": v} 
@@ -403,23 +354,130 @@ if user_input:
                         x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                         y=alt.Y('Agent', sort='-x'),
                         color=alt.condition(
-                            alt.datum.Agent == winner_name,
+                            alt.datum.Agent == msg['winner'],
                             alt.value('orange'),
                             alt.value('lightgray')
-                        )
+                        ),
+                        tooltip=['Agent', 'Score']
                     ).properties(height=150)
                     st.altair_chart(chart, use_container_width=True)
+                
+                with st.expander("Technical Details"):
+                    st.json(stats)
 
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": bot_text, 
-                "meta": stats,
-                "winner": winner_name
-            })
+# Input
+user_input = st.chat_input("Say something...")
+
+if user_input:
+    
+    # Initialize Kernel
+    if st.session_state.kernel_instance is None:
+            config = BotConfig(
+            character_id="streamlit_user", 
+            name=st.session_state.bot_name, 
+            sliders=st.session_state.sliders, 
+            core_values=[]
+        )
+            config.gender = st.session_state.bot_gender
+            st.session_state.kernel_instance = RCoreKernel(config)
+    else:
+            st.session_state.kernel_instance.config.name = st.session_state.bot_name
+            st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
+            st.session_state.kernel_instance.config.sliders = st.session_state.sliders
+
+    kernel = st.session_state.kernel_instance
+    incoming = IncomingMessage(
+        user_id=999, 
+        session_id="streamlit_session",
+        text=user_input
+    )
+
+    if test_mode == "A/B Test (Zombie vs Cortical)":
+        # --- A/B LOGIC ---
+        with st.chat_message("user"):
+            st.write(user_input)
             
-            # Force UI update to show new mood metrics at top
-            st.rerun() 
-            
-        except Exception as e:
-            st.error(f"Kernel Panic: {e}")
-            st.error("Please check console logs.")
+        col_cortical, col_zombie = st.columns(2)
+        
+        with col_cortical:
+            with st.spinner("🧠 Cortical Thinking..."):
+                resp_cortical = run_async(kernel.process_message(incoming, mode="CORTICAL"))
+                st.info("🧠 **Cortical (R-Bot)**")
+                st.write(resp_cortical.actions[0].payload['text'])
+                st.caption(f"Latency: {resp_cortical.internal_stats['latency_ms']}ms")
+        
+        with col_zombie:
+            with st.spinner("🧟 Zombie Generating..."):
+                resp_zombie = run_async(kernel.process_message(incoming, mode="ZOMBIE"))
+                st.warning("🧟 **Zombie Mode**")
+                st.write(resp_zombie.actions[0].payload['text'])
+                st.caption(f"Latency: {resp_zombie.internal_stats['latency_ms']}ms")
+        
+        # Save composite message for history display
+        st.session_state.messages.append({
+            "type": "ab_test",
+            "role": "user", # display hack
+            "content": user_input,
+            "cortical_text": resp_cortical.actions[0].payload['text'],
+            "cortical_latency": resp_cortical.internal_stats['latency_ms'],
+            "zombie_text": resp_zombie.actions[0].payload['text'],
+            "zombie_latency": resp_zombie.internal_stats['latency_ms']
+        })
+        
+    else:
+        # --- STANDARD LOGIC ---
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.write(user_input)
+
+        with st.spinner(f"{st.session_state.bot_name} is thinking..."):
+            try:
+                response = run_async(kernel.process_message(incoming, mode="CORTICAL"))
+                
+                bot_text = response.actions[0].payload['text']
+                stats = response.internal_stats
+                winner_name = response.winning_agent.value
+
+                with st.chat_message("assistant"):
+                    st.write(bot_text)
+                    
+                    # ✨ NEW: Show affective context indicator
+                    affective_triggers = stats.get("affective_triggers_detected", 0)
+                    sentiment_used = stats.get("sentiment_context_used", False)
+                    
+                    caption_text = f"🏆 Winner: **{winner_name}**"
+                    if sentiment_used:
+                        caption_text += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
+                    
+                    st.caption(caption_text)
+                    
+                    # Show Chart
+                    if "all_scores" in stats:
+                        scores_df = pd.DataFrame([
+                            {"Agent": k, "Score": v} 
+                            for k, v in stats["all_scores"].items()
+                        ])
+                        chart = alt.Chart(scores_df).mark_bar(size=15).encode(
+                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                            y=alt.Y('Agent', sort='-x'),
+                            color=alt.condition(
+                                alt.datum.Agent == winner_name,
+                                alt.value('orange'),
+                                alt.value('lightgray')
+                            )
+                        ).properties(height=150)
+                        st.altair_chart(chart, use_container_width=True)
+
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": bot_text, 
+                    "meta": stats,
+                    "winner": winner_name
+                })
+                
+                # Force UI update to show new mood metrics at top
+                st.rerun() 
+                
+            except Exception as e:
+                st.error(f"Kernel Panic: {e}")
+                st.error("Please check console logs.")
