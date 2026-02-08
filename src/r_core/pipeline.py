@@ -14,6 +14,7 @@ from .schemas import (
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
+from .infrastructure.db import log_turn_metrics
 from .agents import (
     IntuitionAgent,
     AmygdalaAgent,
@@ -213,6 +214,21 @@ class RCoreKernel:
         
         latency = (datetime.now() - start_time).total_seconds() * 1000
         
+        internal_stats = {
+            "latency_ms": int(latency),
+            "winner_score": winner.score,
+            "winner_reason": winner.rationale_short,
+            "all_scores": all_scores,
+            "mood_state": str(self.current_mood),
+            "active_style": final_style_instructions,
+            "affective_triggers_detected": affective_triggers_count,
+            "sentiment_context_used": bool(affective_warnings),
+            "modulators": [s.agent_name.value for s in strong_losers]
+        }
+
+        # ✨ NEW: Async Logging to DB (Fire-and-forget logic could be wrapped in create_task, but here we await for safety)
+        await log_turn_metrics(message.user_id, message.session_id, internal_stats)
+        
         return CoreResponse(
             actions=[
                 CoreAction(type="send_text", payload={"text": response_text})
@@ -220,17 +236,7 @@ class RCoreKernel:
             winning_agent=winner.agent_name,
             current_mood=self.current_mood, 
             processing_mode=ProcessingMode.SLOW_PATH,
-            internal_stats={
-                "latency_ms": int(latency),
-                "winner_score": winner.score,
-                "winner_reason": winner.rationale_short,
-                "all_scores": all_scores,
-                "mood_state": str(self.current_mood),
-                "active_style": final_style_instructions,  # Debug: show what instructions were sent
-                "affective_triggers_detected": affective_triggers_count,  # ✨ NEW: Metrics
-                "sentiment_context_used": bool(affective_warnings),  # ✨ NEW: Metrics
-                "modulators": [s.agent_name.value for s in strong_losers] # ✨ NEW: Metrics
-            }
+            internal_stats=internal_stats
         )
 
     def _update_mood(self, winner_signal):
