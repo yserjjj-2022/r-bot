@@ -290,7 +290,8 @@ if st.sidebar.button("Clear Memory & Chat"):
 st.title("R-Bot: Cognitive Architecture Debugger")
 st.markdown(f"Current Agent: **{st.session_state.bot_name}** ({st.session_state.bot_gender})")
 
-# --- Mood Dashboard (Top) ---\nif st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
+# --- Mood Dashboard (Top) ---
+if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
     m = st.session_state.kernel_instance.current_mood
     
     col1, col2, col3 = st.columns(3)
