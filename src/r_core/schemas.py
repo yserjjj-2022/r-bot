@@ -118,6 +118,8 @@ class AgentSignal(BaseModel):
     latency_ms: int
     # Agent's influence on mood
     mood_impact: Optional[MoodVector] = None
+    # Style modulation instruction (Adverb)
+    style_instruction: Optional[str] = None
 
 # --- Output ---
 
