@@ -147,3 +147,41 @@ async def init_models():
             ))
         except Exception as e:
             print(f"[DB Init] Schema update (gender): {e}")
+
+# --- Helper Methods ---
+
+async def log_turn_metrics(
+    user_id: int, 
+    session_id: str, 
+    metrics: Dict[str, Any]
+):
+    """
+    Log metrics for a single turn into rcore_metrics table.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            # Extract top-level columns
+            affective_triggers = metrics.get("affective_triggers_detected", 0)
+            sentiment_used = metrics.get("sentiment_context_used", False)
+            latency = metrics.get("latency_ms", 0)
+            
+            # Everything else goes to payload
+            payload_data = {
+                k: v for k, v in metrics.items() 
+                if k not in ["affective_triggers_detected", "sentiment_context_used", "latency_ms"]
+            }
+            
+            new_metric = MetricsModel(
+                event_type="core_turn",
+                user_id=user_id,
+                session_id=session_id,
+                latency_ms=latency,
+                affective_triggers_detected=affective_triggers,
+                sentiment_context_used=sentiment_used,
+                payload=payload_data
+            )
+            
+            session.add(new_metric)
+            await session.commit()
+    except Exception as e:
+        print(f"[Metrics] Failed to log turn metrics: {e}")
