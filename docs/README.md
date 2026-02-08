@@ -25,22 +25,22 @@
 
 ---
 
-### 💚 **Том 2: [Affective Theory of Mind](./affective-tom-guide.md)**
-**Эмоциональная память и предпочтения пользователя**
+### 💚 **Том 2: [Affective Theory of Mind & Profiling](./affective-tom-guide.md)**
+**Эмоциональная память и профиль личности**
 
-Подробное описание механизма запоминания эмоциональных отношений:
-- Извлечение эмоций из текста (LOVES, HATES, FEARS)
-- Хранение в Semantic Memory с sentiment (VAD)
-- Восстановление Affective Context при генерации ответа
-- Влияние на поведение бота (избегание триггеров)
+Подробное описание механизма запоминания отношений и черт характера:
+- **Affective Extraction**: Извлечение эмоций (LOVES, HATES, FEARS) и VAD-сентимент.
+- **Smart Profiling**: Механизм "Winner-Takes-Slot" для черт личности (Traits).
+- **Neuro-Modulation**: Влияние проигравших агентов на стиль ответа через наречия.
+- **Observability**: Таблица `rcore_metrics` и полные логи для дашборда.
 
 **Ключевые концепции**:
-- `affective_extraction` в Council Report
-- `sentiment` field в Semantic Memory
+- `affective_extraction` & `profile_update` в Council Report
+- `user_profiles` с весами черт (Winner-Takes-Slot)
 - `affective_context` в LLM prompt
 
 **Статус**: ✅ Реализовано (Этап 2.1)  
-**Дата завершения**: 07.02.2026
+**Дата завершения**: 08.02.2026
 
 ---
 
@@ -51,70 +51,20 @@
 - Prediction Error (PE) и Empathy Alignment (EA)
 - 4 поведенческих состояния: In Sync, Neutral, Puzzled, Lost
 - Влияние на Mood System (VAD adjustments)
-- Модификация Agent Scores
 - Uncertainty Agent (активация при PE >= 0.8)
 
-**Ключевые концепции**:
-- `prediction_history` таблица
-- `behavioral_config.py` (конфигурация через env vars)
-- Комбо-модель (Mood + Agent Modifiers + Uncertainty Agent)
-
-**Статус**: 🚧 В разработке (Этап 2.2)  
-**Прогресс**: Документация и конфигурация готовы
+**Статус**: 🚧 В разработке (Этап 2.2)
 
 ---
 
-### 🎭 **Том 4: [Strategic Protocols](./strategic-protocols.md)** *(Coming Soon)*
-**Механизмы неискренности и социальных стратегий**
+### 🧪 **Том 4: [Ablation Studies & Testing](./testing.md)** *(New)*
+**Инструменты проверки гипотез и сравнения архитектур**
 
-Планируемые возможности:
-- **Face-Saving**: "Белая ложь" для сохранения лица собеседника
-- **Deflection**: Уклонение от опасных/неудобных вопросов
-- **Omission**: Недосказанность (скрыть часть информации)
-- **Tactical Empathy**: Эмпатия как стратегия, а не эмоция
+- **Zombie Mode (A/B Test)**: Сравнение R-Core ("Cortical") с обычной LLM ("Zombie").
+- **Metrics**: Latency, Sentiment, User Engagement.
+- **Streamlit Controls**: Переключатель режимов A/B в сайдбаре.
 
-**Статус**: ⏳ Запланировано (Этап 3)  
-**Начало разработки**: После Predictive Processing
-
----
-
-## 🛠️ Технические Спецификации
-
-### 📋 **[Behavioral Configuration](./../.env.example.behavioral)**
-Пример конфигурации поведенческих коэффициентов через `.env`:
-- Пороги Prediction Error
-- Mood adjustment коэффициенты
-- Agent modifiers
-- Uncertainty Agent параметры
-
-### 🗃️ **[Database Schema](./R-Bot_Database_Documentation_v2.0.md)** *(Legacy)*
-Документация старой версии БД (для справки).
-
-**Актуальная схема БД**: см. `src/r_core/infrastructure/db.py`
-
----
-
-## 🧪 Тестирование
-
-### Affective ToM
-```bash
-# Консольный тест
-python tests/test_affective_tom_manual.py
-
-# Streamlit UI
-streamlit run app_streamlit.py
-# → Открыть sidebar → "💚 Emotional Memory"
-```
-
-### Predictive Processing
-```bash
-# После реализации
-python tests/test_predictive_processing_manual.py
-
-# Streamlit UI
-streamlit run app_streamlit.py
-# → "🔮 Empathy Alignment" панель
-```
+**Статус**: ✅ Реализовано (Февраль 2026)
 
 ---
 
@@ -122,38 +72,46 @@ streamlit run app_streamlit.py
 
 ### ✅ Завершено
 - **Этап 1**: Core Architecture (Council, Mood, Memory)
-- **Этап 2.1**: Affective Theory of Mind
+- **Этап 2.1**: Affective Theory of Mind + Smart Profiling
+  - ✅ Explicit Trait Extraction ("I am skeptical")
+  - ✅ Affective Relations ("I love Yennefer")
+  - ✅ Neuro-Modulation (Adverb Injection style)
+  - ✅ SQL-Metrics Logging (`rcore_metrics`)
+  - ✅ A/B Zombie Mode Switcher
 
 ### 🚧 В процессе
-- **Этап 2.2**: Predictive Processing (Empathy Feedback Loop)
-  - ✅ Behavioral Config
-  - ✅ Документация
-  - ⏳ Uncertainty Agent
-  - ⏳ Prediction saving/retrieval
-  - ⏳ Pipeline integration
-  - ⏳ UI visualization
+- **Этап 2.2**: Optimization & Deep Memory
+  - ⏳ **Latency Reduction**: Parallel agent execution (`asyncio.gather`)
+  - ⏳ **Vector Traits**: Fuzzy matching для профиля через эмбеддинги (не просто строки)
+  - ⏳ **Deep Episodic**: Использование эпизодической памяти для формирования мнений (Opinion Mining)
 
 ### ⏳ Запланировано
-- **Этап 2.3**: Temporal Memory Decay (забывание старых эмоций)
-- **Этап 3**: Strategic Protocols (неискренность)
-- **Этап 4**: Multi-Modal Inputs (голос, изображения)
+- **Этап 3**: Predictive Processing (Empathy Feedback Loop)
+- **Этап 4**: Strategic Protocols (неискренность, "белая ложь")
 
 ---
 
-## 🤝 Contributing
+## 🛠️ Запуск и Тестирование
 
-При добавлении новой фичи:
-1. Создайте отдельный документ в `docs/` (например, `docs/feature-name.md`)
-2. Добавьте ссылку в этот README
-3. Обновите roadmap в `docs/r-core.md`
-4. Добавьте тесты в `tests/`
+### Основной запуск
+```bash
+# Streamlit UI (с поддержкой A/B Zombie Mode)
+streamlit run app_streamlit.py
+```
+
+### Мониторинг
+В `app_streamlit.py` теперь доступны:
+1. **Mood Dashboard** (VAD метрики).
+2. **Internal Monologue** (раскрывающийся JSON).
+3. **Emotional Memory** (сайдбар).
+4. **🧪 Experiment Mode** (сравнение с "глупой" LLM).
 
 ---
 
 ## 📞 Контакты
 
 **Проект**: [github.com/yserjjj-2022/r-bot](https://github.com/yserjjj-2022/r-bot)  
-**Ветка**: `r-core-kernel-prototype`  
+**Ветка**: `develop` (Stable) / `feature/neuro-modulation-v1` (Active)  
 **Автор**: Sergey Ershov (yserjjj-2022)
 
 ---
