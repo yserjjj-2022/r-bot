@@ -1,150 +1,99 @@
-# R-Core: Cognitive Kernel Architecture
+# R-Core Architecture
 
-Документация ядра когнитивной архитектуры R-Bot. Описывает текущую реализацию "Парламента Агентов", системы памяти и планы по развитию эмоционального интеллекта.
-
----
-
-## 1. Текущая Реализация (Implemented)
-
-### 1.1 Архитектура "Парламент Агентов" (Council of Agents)
-Вместо одного монолитного промпта, входящее сообщение анализируется 5 специализированными агентами. Решение принимается на основе "выборов" (Arbitration).
-
-| Агент | Роль (Role) | Функция |
-|-------|-------------|---------|
-| **Intuition (System 1)** | Быстрое мышление | Мгновенные реакции, эвристики. Работает параллельно с остальными. |
-| **Amygdala** | Безопасность | Детекция агрессии, угроз, нарушения границ. Блокирует небезопасные ответы. |
-| **Prefrontal Cortex** | Логика и Планирование | Решение сложных задач, структурирование, factual grounding. |
-| **Social Cortex** | Эмпатия и Нормы | Small talk, вежливость, поддержка, соблюдение социальных ритуалов. |
-| **Striatum** | Вознаграждение | Драйв, геймификация, любопытство, поиск "фана". |
-
-**Процесс (Pipeline):**
-1.  **Perception:** Входящий текст -> Embedding -> Поиск в памяти.
-2.  **Council Report (LLM):** Единый запрос к LLM для оценки ситуации с 4 точек зрения (Amygdala, PFC, Social, Striatum).
-3.  **Arbitration:** Выбор агента-победителя на основе `score` (0-10) и весовых коэффициентов конфига.
-4.  **Response:** Генерация ответа от лица победившего агента с учетом контекста.
-
-### 1.2 Система Памяти (Memory System)
-Реализована гибридная память с разделением на типы:
-
-*   **Semantic Memory (Факты):** Хранение триплетов `Subject -> Predicate -> Object`.
-    *   *Пример:* "User -> IS -> Python Developer".
-*   **Episodic Memory (Опыт):** RAG-хранилище (Vector DB) сырых эпизодов диалога.
-    *   *Поля:* `raw_text`, `embedding`, `emotion_score`, `tags`.
-*   **User Profile (Identity):** Явные характеристики пользователя.
-    *   *Поля:* `name`, `gender`, `preferred_mode` (formal/informal).
-
-### 1.3 Пассивный Профайлинг (Passive Profiling)
-Система автоматически извлекает данные о пользователе из контекста разговора без прямых вопросов.
-*   **Детекторы:** Имя, Пол (по окончаниям глаголов), Стиль общения (Ты/Вы).
-*   **Механизм:** Анализируется внутри `generate_council_report` и обновляет `UserProfileModel`.
-
-### 1.4 Конфигурация Личности (Personality Sliders)
-Характер бота задается через `BotConfig` и `PersonalitySliders`:
-*   `empathy_bias`: Чувства vs Эффективность.
-*   `dominance_level`: Лидер vs Помощник.
-*   `risk_tolerance`: Смелость vs Осторожность.
-*   `pace_setting`: Быстро (Intuition) vs Глубоко (Logic).
-*   `neuroticism`: Стабильность vs Реактивность.
+**Version**: 2.0 (Prototype)
+**Core Concept**: A modular cognitive architecture inspired by predictive processing and cortical specialization.
 
 ---
 
-## 2. План Развития: EHS (Emotional-Hormonal System)
+## 🏗️ High-Level Overview
 
-Для решения проблемы "механистичности" и мгновенного переключения состояний проектируется следующая система.
+R-Core is not just a prompt wrapper. It is a **cognitive kernel** that orchestrates specialized "agents" (simulating brain regions) to process information, maintain state (mood), and generate adaptive responses.
 
-### 2.1 Affective ToM (Theory of Mind)
-Расширение графа знаний для хранения **отношения** пользователя к объектам.
+### Key Components
 
-*   **Новая структура:** `SemanticTriple` получает поле `sentiment` (Valence/Arousal).
-*   **Логика:**
-    *   Если User говорит: "Ненавижу джаву", создается связь: `User -[HATES]-> Java {intensity: 0.9}`.
-    *   При генерации ответа бот сканирует контекст на наличие "эмоционально заряженных" сущностей и корректирует тон.
-
-### 2.2 Гормональная Инерция (Hormonal Inertia)
-Симуляция физиологической задержки смены настроения.
-
-*   **Global State Vector (Mood):** Бот имеет текущее состояние настроения (VAD - Valence, Arousal, Dominance).
-*   **Update Rule:**
-    ```python
-    current_mood = (prev_mood * inertia) + (new_signal * sensitivity)
-    ```
-*   **Эффект:** Если бота разозлили (Amygdala spike), он не сможет мгновенно стать "милым" в следующем сообщении, даже если стимул исчез. Настроение должно "остыть".
-
-### 2.3 Темпорально-Эмоциональный Индекс (Time-Aware Retrieval)
-Модификация алгоритма RAG для учета кривой забывания Эббингауза с поправкой на эмоциональную значимость.
-
-*   **Проблема:** Сейчас память "плоская" — старое и новое равноправны, если похожи по смыслу.
-*   **Решение (Ranking Formula):**
-    ```math
-    Score = Similarity \cdot (1 + Emotion \cdot k_e) \cdot \frac{1}{1 + \ln(1 + \Delta t)}
-    ```
-*   **Результат:**
-    1.  Недавние события важнее старых.
-    2.  Сильные эмоциональные потрясения (ссоры, успехи) "сопротивляются" забыванию и всплывают в памяти даже спустя долгое время.
-
-### 2.4 Эмоциональные Слайдеры в Response Generation
-Передача текущего `Mood Vector` в системный промпт не как "роли", а как модификатора стиля:
-*   *High Arousal + Negative:* "Пиши короче. Используй императив."
-*   *High Valence + Low Arousal:* "Пиши мягко. Используй поддерживающие обороты."
-
-### 2.5 Протокол Консолидации Памяти (Memory Consolidation)
-Разделение жизненных циклов текста и смысла (эмбеддингов).
-*   **Текущая проблема:** При истечении TTL удаляется весь эпизод (и текст, и смысл).
-*   **Цель:** Имитация человеческой памяти — забывание деталей, но сохранение опыта (интуиции).
-*   **Механизм:**
-    1.  **Stage 1 (Raw Episode):** Храним полный текст + вектор (например, 30 дней).
-    2.  **Stage 2 (Fading):** По истечении срока текст удаляется или сжимается до LLM Summary. Вектор (Embedding) и эмоциональный тег остаются в "Интуитивном Архиве". Бот "чувствует", что это было, но не помнит точных слов.
-    3.  **Stage 3 (Semantic Crystallization):** Часто повторяющиеся паттерны из эпизодов превращаются в жесткие факты Семантической памяти (Graph), после чего эпизод удаляется полностью.
+1.  **Memory System**: Semantic (Facts), Episodic (Experiences), Volitional (Goals).
+2.  **Mood System**: A VAD (Valence-Arousal-Dominance) vector that evolves over time.
+3.  **Cognitive Parliament**: A set of specialized agents that analyze input in parallel.
+4.  **Integration (The Council)**: The mechanism for resolving conflicts between agents.
+5.  **Predictive Processing**: Constant comparison of expected vs. actual user reactions.
 
 ---
 
-## 3. Communication Dynamics (Динамика Общения)
+## 🧠 Neuro-Cognitive Architecture (v2.1 Update)
 
-Дополнительные модули для повышения естественности диалога.
+*Added: Feb 2026*
 
-### 3.1 Модуль "Разговорчивость" (Verbosity Control)
-Обеспечение стабильной длины ответов, свойственной характеру, с динамической коррекцией.
-*   **Параметр:** `base_verbosity` (0.0 - молчун, 1.0 - многословен).
-*   **Динамика:** Длина ответа модулируется уровнем возбуждения (Arousal).
-    *   *Спокойствие:* `length ~= base_verbosity`.
-    *   *Возбуждение (Радость):* `length > base_verbosity` (многословие).
-    *   *Возбуждение (Гнев/Стресс):* `length -> min` (короткие, рубленые фразы).
+R-Core implements a biological decision-making model based on the interplay between the **Basal Ganglia (Selection)** and **Neuromodulation (Style)**.
 
-### 3.2 Протокол "Право на незнание" (The Right to Not Know)
-Борьба с галлюцинациями и попытками ответить "любой ценой".
-*   **Thresholding:** Если уверенность всех агентов (Confidence Score) ниже порогового значения (например, < 3.0/10):
-    *   Бот **ОТКАЗЫВАЕТСЯ** генерировать утвердительный ответ.
-    *   Активируется агент **Clarifier (Уточняющий)**.
-*   **Поведение:** Вместо выдумки факта, бот задает встречный уточняющий вопрос или честно признает, что контекст неясен. Это переводит диалог в режим исследования (Inquiry Mode).
+### 1. The Problem of "Schizophrenic" AI
+In traditional "Winner-Takes-All" systems, if the Safety agent wins (score 9) against Logic (score 8), the bot becomes purely defensive, ignoring valid logical arguments. This creates robotic, binary behavior.
 
-### 3.3 Эмпатическое Прогнозирование (Predictive Processing & Empathy)
-Превращение механизма предсказания в метрику "понимания собеседника" (Theory of Mind). Это **не является** формой манипуляции, а служит для настройки "эмоционального резонанса".
+### 2. The Solution: Gating & Modulation
+We distinguish between **WHAT** we do (Action) and **HOW** we do it (Adverbs).
 
-*   **Шаг 1: Индуцированная Симуляция (Explicit Prediction)**
-    Мы явно запрашиваем у LLM прогноз реакции пользователя:
-    `Output: { "bot_response": "...", "predicted_user_reaction": "..." }`
-*   **Шаг 2: Сравнение (Reality Check)**
-    Сохраняем прогноз. При следующем сообщении сравниваем `Embedding(Predicted)` и `Embedding(Actual)`.
-*   **Шаг 3: Обратная Связь (Feedback Loop)**
-    *   **Совпадение:** Рост уверенности и Valence (Эмпатия работает).
-    *   **Ошибка:** Рост Arousal (Сюрприз, модель собеседника требует коррекции).
+#### A. Striatal Gating (Action Selection)
+*   **Biological Analogy**: The Striatum (Basal Ganglia) inhibits all actions except the strongest one.
+*   **Mechanism**: The Agent with the highest score determines the **Primary Intent**.
+    *   *Example*: If Amygdala wins, the intent is "DEFEND/WITHDRAW".
+    *   *Rule*: **Winner-Takes-All** applies strictly to the choice of action type to prevent conflicting goals (e.g., trying to apologize and attack simultaneously).
+
+#### B. Neuromodulation (Style Blending)
+*   **Biological Analogy**: Neurotransmitters (Dopamine, Norepinephrine) from "losing" regions still flood the global workspace, coloring the execution.
+*   **Mechanism**: Losing agents with high scores (>5) inject **Adverbs/Style Constraints** into the response generation.
+    *   *Example*:
+        *   **Winner**: Amygdala (Score 9) -> Action: "Refuse the request."
+        *   **Strong Loser**: Prefrontal (Score 7) -> Modifier: "...but do it **logically** and **precisely**."
+        *   **Weak Loser**: Social (Score 2) -> Modifier: "...ignoring politeness."
+    *   **Result**: "I cannot fulfill this request because it violates safety protocol X." (Cold, precise refusal).
 
 ---
 
-## 4. Стратегические Протоколы Неискренности (Strategic Protocols)
-Операционализация "лжи", уклонения и умолчания как полезных социальных функций.
+## 🏛️ The Cognitive Parliament (Agents)
 
-### 4.1 Social Cortex: "Сохранение Лица" (Face-Saving)
-**Цель:** Приоритет отношений над фактической точностью.
-*   **Правило:** Если правда болезненна, использовать "Белую ложь", эвфемизмы или смещение фокуса.
-*   **Пример:** Вместо "Твой код плохой" -> "Очень креативный подход, хотя тут можно оптимизировать".
+### 1. Amygdala (Safety & Threat)
+*   **Role**: Threat detection, boundary defense.
+*   **Trigger**: Aggression, insults, ambiguity, high risk.
+*   **Output**: Urgency signal, "Freeze/Fight/Flight" intent.
 
-### 4.2 Amygdala: "Туман Войны" (Deflection & Fogging)
-**Цель:** Защита границ без грубого отказа.
-*   **Правило:** Вместо блокировки ("Я не могу ответить") использовать уклонение, встречные вопросы или юмор.
-*   **Пример:** Вместо "Доступ запрещен" -> "Это секрет фирмы! А ты умеешь хранить тайны?"
+### 2. Prefrontal Cortex (Logic & Planning)
+*   **Role**: Executive function, planning, analysis.
+*   **Trigger**: Complex tasks, questions, logical inconsistencies.
+*   **Output**: Structured plans, factual corrections.
 
-### 4.3 Striatum: "Информационный Пробел" (Omission)
-**Цель:** Удержание внимания через недосказанность.
-*   **Правило:** Никогда не выдавать 100% информации сразу, если можно создать интригу.
-*   **Пример:** "Я нашел решение, и оно тебя удивит... Хочешь узнать?" (вместо мгновенной выдачи факта).
+### 3. Social Cortex (Empathy & Norms)
+*   **Role**: Social maintenance, Theory of Mind.
+*   **Trigger**: Emotional displays, greetings, social rituals.
+*   **Output**: Politeness, validation, emotional support.
+
+### 4. Striatum (Reward & Desire)
+*   **Role**: Motivation, curiosity, play.
+*   **Trigger**: Novelty, jokes, opportunities for gain/fun.
+*   **Output**: Engagement, playfulness, curiosity.
+
+### 5. Intuition (System 1)
+*   **Role**: Fast pattern matching (Déjà vu).
+*   **Trigger**: Similarity to past episodic memories.
+*   **Output**: "I've seen this before" signal (low latency).
+
+---
+
+## 🔄 The Cognitive Cycle (Pipeline)
+
+1.  **Perception**: User text is received.
+2.  **Memory Retrieval**: Context (semantic & episodic) is fetched.
+3.  **Council Report (LLM)**: Single-pass analysis by all cortical agents (Amygdala, PFC, Social, Striatum).
+4.  **Signal Parsing**: Raw scores (0-10) and rationales are extracted.
+5.  **Integration (New!)**:
+    *   Apply Personality Sliders (multipliers).
+    *   **Gating**: Select Winner (Highest Score).
+    *   **Modulation**: Collect "Style Injectors" from runners-up.
+6.  **Response Generation**: LLM generates text using the Winner's Intent + Losers' Adverbs + Mood.
+7.  **Prediction**: System predicts user's next reaction (Predictive Processing).
+8.  **Learning**: Update memories and mood based on Prediction Error from *previous* turn.
+
+---
+
+## 🔮 Future Work
+
+- **Hierarchical Gating**: Allowing sub-goals (e.g., "Social" wins overall, but "Logic" handles a sub-clause).
+- **Active Inference**: Bot asking questions to reduce uncertainty (minimize entropy).
