@@ -154,6 +154,7 @@ class LLMService:
             leak_markers = [
                 "CURRENT INTERNAL MOOD:",
                 "STYLE INSTRUCTIONS:",
+                "SECONDARY STYLE MODIFIERS", # NEW: Caught you!
                 "PAST EPISODES",
                 "--- INTERNAL DIRECTIVES",
                 "--- AFFECTIVE CONTEXT",
