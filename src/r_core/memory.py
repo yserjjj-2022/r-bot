@@ -243,6 +243,11 @@ class PostgresMemoryStore(AbstractMemoryStore):
             }
 
     async def update_user_profile(self, user_id: int, data: Dict):
+        """
+        Implementation of Smart Trait Competition (Winner-Takes-Slot).
+        Uses simple fuzzy matching (string based for MVP) to prevent duplicates,
+        and manages a limit of 7 slots.
+        """
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(UserProfileModel).where(UserProfileModel.user_id == user_id))
             profile = result.scalar_one_or_none()
@@ -251,13 +256,59 @@ class PostgresMemoryStore(AbstractMemoryStore):
                 profile = UserProfileModel(user_id=user_id)
                 session.add(profile)
             
+            # Simple fields
             if "name" in data: profile.name = data["name"]
             if "gender" in data: profile.gender = data["gender"]
             if "preferred_mode" in data: profile.preferred_mode = data["preferred_mode"]
+            
+            # --- Smart Trait Competition Logic ---
             if "attributes" in data: 
-                current = dict(profile.attributes) if profile.attributes else {}
-                current.update(data["attributes"])
-                profile.attributes = current
+                # Load existing traits
+                # Expected format in DB: {"personality_traits": [{"name": "Romantic", "weight": 0.8}, ...]}
+                current_attrs = dict(profile.attributes) if profile.attributes else {}
+                traits = current_attrs.get("personality_traits", [])
+                
+                # New candidate traits from update
+                new_traits_data = data["attributes"].get("personality_traits", [])
+                
+                # MVP: If just a dict update (legacy), fallback to merge
+                # But if structured list, run competition
+                if isinstance(new_traits_data, list):
+                    MAX_SLOTS = 7
+                    
+                    for candidate in new_traits_data:
+                        # 1. Check duplicates (Simple String Matching for MVP, Vector TODO)
+                        match_found = False
+                        for existing in traits:
+                            # Fuzzy match: "Romantic" == "romantic"
+                            if existing.get("name", "").lower() == candidate.get("name", "").lower():
+                                # Reinforce existing
+                                existing["weight"] = min(1.0, existing.get("weight", 0.5) + 0.1)
+                                existing["last_reinforced"] = datetime.utcnow().isoformat()
+                                match_found = True
+                                break
+                        
+                        if not match_found:
+                            # 2. Add new trait
+                            candidate["weight"] = candidate.get("weight", 0.5) # Default weight
+                            candidate["last_reinforced"] = datetime.utcnow().isoformat()
+                            traits.append(candidate)
+                    
+                    # 3. Competition / Eviction
+                    if len(traits) > MAX_SLOTS:
+                        # Sort by weight (descending) -> Keep top N
+                        traits.sort(key=lambda x: x.get("weight", 0.0), reverse=True)
+                        traits = traits[:MAX_SLOTS]
+                
+                else:
+                    # Legacy update behavior for non-trait attributes
+                    current_attrs.update(data["attributes"])
+                
+                # Save back
+                if isinstance(new_traits_data, list):
+                    current_attrs["personality_traits"] = traits
+                    
+                profile.attributes = current_attrs
                 
             await session.commit()
 
