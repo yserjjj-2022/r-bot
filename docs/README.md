@@ -15,7 +15,7 @@
 
 ---
 
-## 🧠 [R-Core Kernel](./r-core/architecture/README.md)
+## 🧠 [R-Core Kernel](./r-core/README.md)
 **Когнитивная архитектура для AI-агентов**
 
 Описание кортикалов, памяти, эмоций, прогнозирования.
@@ -27,7 +27,7 @@
 
 ---
 
-## 📚 [Research & Theory](./research/)
+## 📚 [Research & Theory](./research/README.md)
 **Теоретические основы и методология**
 
 - [Agentic Human Model](./research/agentic_human_model.md)
