@@ -158,7 +158,11 @@ dominance = st.sidebar.slider(
 pace = st.sidebar.slider(
     "⚡ Pace (Intuition vs Logic)", 
     0.0, 1.0, st.session_state.sliders.pace_setting,
-    help="High (1.0): Logic heavy (System 2). Thoughtful, slow.\nLow (0.0): Intuition heavy (System 1). Fast, heuristic."
+    help="⚡ BALANCE: Intuition (fast, heuristic) ↔ Logic (slow, analytical)\n\n"
+         "• Low (0.0): Intuition dominant (1.5x), Logic weak (0.7x)\n"
+         "• Mid (0.5): Balanced mix (both ~1.1x)\n"
+         "• High (1.0): Logic dominant (1.5x), Intuition weak (0.5x)\n\n"
+         "⚙️ Technical: Affects agent modifiers in Legacy mode."
 )
 
 st.sidebar.divider()
@@ -170,17 +174,19 @@ intuition_gain = st.sidebar.slider(
     max_value=2.0, 
     value=1.0, 
     step=0.1,
-    help="Multiplier for Intuition Agent score.\n"
-         "1.0 = Normal (default)\n"
-         "< 1.0 = Logic/Social dominate\n"
-         "> 1.0 = Fast intuitive responses"
+    help="Multiplier for Intuition Agent score (Unified Council mode only).\n\n"
+         "• 1.0 = Normal (default)\n"
+         "• < 1.0 = Logic/Social dominate\n"
+         "• > 1.0 = Fast intuitive responses\n\n"
+         "⚠️ Works ONLY with Unified Council enabled."
 )
 
 use_unified_council = st.sidebar.checkbox(
     "🔄 Unified Council (BETA)", 
     value=False,
-    help="All agents (including Intuition) evaluated together by LLM.\n"
-         "When OFF: Legacy mode (Intuition evaluated separately)"
+    help="All agents (including Intuition) evaluated together by LLM.\n\n"
+         "• ON: Intuition Gain multiplier active\n"
+         "• OFF: Legacy mode (Intuition evaluated separately)"
 )
 
 st.session_state.sliders = PersonalitySliders(
