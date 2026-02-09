@@ -85,21 +85,55 @@ class LLMService:
             "  * 'I am loyal' ('Я верный') -> {'personality_traits': [{'name': 'Loyal', 'weight': 0.7}]}\n"
             "Return null if no info detected.\n\n"
 
-            "### 7. AFFECTIVE EXTRACTION (Emotional Relations)\n"
-            "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
-            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\n"
-            "- Output format: Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES), 'object' (entity name), 'intensity' (0.0-1.0).\n"
-            "- NOTE: If user says 'I am loyal', this is a TRAIT (Profile), NOT an emotional relation to 'loyalty'. Use Profile Extractor for self-descriptions.\n"
-            "- Examples:\n"
-            "  * 'Ненавижу Java' -> {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
-            "  * 'Боюсь пауков' -> {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
+            "### 7. AFFECTIVE EXTRACTION (Emotional Relations & Attitudes)\n"
+            "Detect when the user expresses strong emotional attitudes toward objects, people, concepts, behaviors, or scenarios.\n\n"
+            
+            "DETECTION PATTERNS:\n"
+            "1. Direct statements (explicit keywords):\n"
+            "   - 'Ненавижу Java' → HATES Java\n"
+            "   - 'Боюсь пауков' → FEARS пауки\n"
+            "   - 'Обожаю кофе' → LOVES кофе\n\n"
+            
+            "2. Conditional reactions ('WILL BE X if Y'):\n"
+            "   - 'Будет ужасно, если ты будешь слишком сервильным' → DESPISES 'сервильное поведение'\n"
+            "   - 'Будет прекрасно, если...' → LOVES [scenario]\n"
+            "   - 'Мне не понравится, если...' → DISLIKES [action]\n\n"
+            
+            "3. Implicit statements (desires, aversions):\n"
+            "   - 'Я не хочу, чтобы ты...' → DISLIKES [action]\n"
+            "   - 'Мне бы хотелось...' → DESIRES [object]\n"
+            "   - 'Ненавижу, когда...' → HATES [situation]\n\n"
+            
+            "IMPORTANT RULES:\n"
+            "- Extract the OBJECT from context (what user is reacting to), not just the keyword.\n"
+            "- For conditional statements ('if Y'), the object is Y (the condition/behavior/scenario).\n"
+            "- If user says 'I am loyal', this is a TRAIT (Profile Extractor), NOT affective content.\n\n"
+            
+            "CONCRETE EXAMPLES:\n"
+            "  * 'Будет ужасно, если ты будешь слишком сервильным'\n"
+            "    → {subject: 'User', predicate: 'DESPISES', object: 'сервильное поведение бота', intensity: 0.8}\n\n"
+            
+            "  * 'Ненавижу Java'\n"
+            "    → {subject: 'User', predicate: 'HATES', object: 'Java', intensity: 0.9}\n\n"
+            
+            "  * 'Ненавижу, когда люди опаздывают'\n"
+            "    → {subject: 'User', predicate: 'HATES', object: 'опоздания', intensity: 0.9}\n\n"
+            
+            "  * 'Обожаю, когда всё по плану'\n"
+            "    → {subject: 'User', predicate: 'LOVES', object: 'планирование', intensity: 0.8}\n\n"
+            
+            "  * 'Боюсь пауков'\n"
+            "    → {subject: 'User', predicate: 'FEARS', object: 'пауки', intensity: 0.7}\n\n"
+            
+            "OUTPUT FORMAT:\n"
+            "- Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES/DISLIKES/DESIRES), 'object' (entity/behavior/scenario), 'intensity' (0.0-1.0).\n"
             "- Return empty array [] if no affective content detected.\n\n"
 
             "### OUTPUT FORMAT\n"
             "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'profile_update', 'affective_extraction'.\n"
             "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
             "Value schema for 'profile_update': { 'name': 'str/null', 'gender': 'str/null', 'preferred_mode': 'str/null', 'attributes': {'personality_traits': [{'name': str, 'weight': float}]} or null } OR null if empty.\n"
-            "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
+            "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES|DISLIKES|DESIRES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
         result = await self._safe_chat_completion(
