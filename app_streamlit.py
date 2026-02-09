@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 from typing import Dict, Any
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
 from src.r_core.memory import MemorySystem
@@ -68,7 +68,28 @@ async def delete_agent_by_name(name: str):
         await session.execute(stmt)
         await session.commit()
 
-# ✨ NEW: Get Affective Memory (User's Emotional Preferences)
+# ✨ NEW: Update agent settings (sliders + experimental controls)
+async def update_agent_settings(
+    name: str, 
+    sliders: Dict, 
+    intuition_gain: float, 
+    use_unified_council: bool
+):
+    """Обновить настройки существующего агента"""
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            update(AgentProfileModel)
+            .where(AgentProfileModel.name == name)
+            .values(
+                sliders_preset=sliders,
+                intuition_gain=intuition_gain,
+                use_unified_council=use_unified_council
+            )
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+# ✨ Get Affective Memory (User's Emotional Preferences)
 async def get_affective_memory(user_id: int = 999):
     """Получить список эмоционально окрашенных объектов из памяти"""
     async with AsyncSessionLocal() as session:
@@ -116,10 +137,14 @@ if st.session_state.last_agent_name != selected_agent_name:
     st.session_state.kernel_instance = None # Force reset to clear mood
     st.session_state.last_agent_name = selected_agent_name
 
+# ✨ Load agent settings (including experimental controls)
+current_agent_data = None
+
 if selected_agent_name != "Default":
     st.session_state.bot_name = selected_agent_name
     agent_data = next((a for a in available_agents if a.name == selected_agent_name), None)
     if agent_data:
+        current_agent_data = agent_data  # Save for later use
         st.session_state.bot_gender = agent_data.gender or "Neutral"
         st.sidebar.caption(f"📝 {agent_data.description} | {st.session_state.bot_gender}")
         preset = agent_data.sliders_preset
@@ -130,9 +155,17 @@ if selected_agent_name != "Default":
             pace_setting=preset.get("pace_setting", 0.5),
             neuroticism=preset.get("neuroticism", 0.1)
         )
+        
+        # ✨ Load experimental controls from DB
+        if "intuition_gain_loaded" not in st.session_state:
+            st.session_state.intuition_gain_loaded = getattr(agent_data, "intuition_gain", 1.0)
+            st.session_state.use_unified_loaded = getattr(agent_data, "use_unified_council", False)
 else:
     st.session_state.bot_name = "R-Bot"
     st.session_state.bot_gender = "Neutral"
+    if "intuition_gain_loaded" not in st.session_state:
+        st.session_state.intuition_gain_loaded = 1.0
+        st.session_state.use_unified_loaded = False
 
 # --- Sliders Control ---
 st.sidebar.markdown("### Fine-tune Personality")
@@ -168,7 +201,7 @@ intuition_gain = st.sidebar.slider(
     "🧠 Intuition Gain", 
     min_value=0.0, 
     max_value=2.0, 
-    value=1.0, 
+    value=st.session_state.intuition_gain_loaded, 
     step=0.1,
     help="Multiplier for Intuition Agent score.\n"
          "1.0 = Normal (default)\n"
@@ -178,7 +211,7 @@ intuition_gain = st.sidebar.slider(
 
 use_unified_council = st.sidebar.checkbox(
     "🔄 Unified Council (BETA)", 
-    value=False,
+    value=st.session_state.use_unified_loaded,
     help="All agents (including Intuition) evaluated together by LLM.\n"
          "When OFF: Legacy mode (Intuition evaluated separately)"
 )
@@ -190,6 +223,30 @@ st.session_state.sliders = PersonalitySliders(
     pace_setting=pace,
     neuroticism=0.1
 )
+
+# ✨ NEW: Save Changes Button
+if selected_agent_name != "Default":
+    if st.sidebar.button("💾 Update Agent Settings", use_container_width=True):
+        try:
+            sliders_dict = {
+                "empathy_bias": empathy,
+                "risk_tolerance": risk,
+                "dominance_level": dominance,
+                "pace_setting": pace,
+                "neuroticism": 0.1
+            }
+            run_async(update_agent_settings(
+                selected_agent_name, 
+                sliders_dict, 
+                intuition_gain, 
+                use_unified_council
+            ))
+            st.sidebar.success(f"✅ {selected_agent_name} settings updated!")
+            # Update loaded values
+            st.session_state.intuition_gain_loaded = intuition_gain
+            st.session_state.use_unified_loaded = use_unified_council
+        except Exception as e:
+            st.sidebar.error(f"❌ Failed to update: {e}")
 
 # --- Save New Agent Form ---
 with st.sidebar.expander("💾 Save as New Agent"):
@@ -213,7 +270,7 @@ with st.sidebar.expander("💾 Save as New Agent"):
 
 st.sidebar.divider()
 
-# ✨ NEW: Test Mode Switcher
+# ✨ Test Mode Switcher
 test_mode = st.sidebar.radio(
     "🧪 Experiment Mode",
     ["Standard (Cortical)", "A/B Test (Zombie vs Cortical)"],
@@ -263,7 +320,7 @@ with st.sidebar.expander("Edit User Profile", expanded=False):
 
 st.sidebar.divider()
 
-# ✨ NEW: Affective Memory Display in Sidebar
+# ✨ Affective Memory Display in Sidebar
 st.sidebar.subheader("💚 Emotional Memory")
 with st.sidebar.expander("View User Preferences", expanded=False):
     try:
@@ -351,7 +408,7 @@ for msg in st.session_state.messages:
             if msg["role"] == "assistant" and "meta" in msg:
                 stats = msg["meta"]
                 
-                # ✨ NEW: Highlight affective context usage
+                # ✨ Highlight affective context usage
                 affective_triggers = stats.get("affective_triggers_detected", 0)
                 sentiment_used = stats.get("sentiment_context_used", False)
                 
@@ -400,8 +457,8 @@ if user_input:
             name=st.session_state.bot_name, 
             sliders=st.session_state.sliders, 
             core_values=[],
-            use_unified_council=use_unified_council,  # ← NEW
-            intuition_gain=intuition_gain  # ← NEW
+            use_unified_council=use_unified_council,
+            intuition_gain=intuition_gain
         )
         config.gender = st.session_state.bot_gender
         st.session_state.kernel_instance = RCoreKernel(config)
@@ -409,8 +466,8 @@ if user_input:
         st.session_state.kernel_instance.config.name = st.session_state.bot_name
         st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
         st.session_state.kernel_instance.config.sliders = st.session_state.sliders
-        st.session_state.kernel_instance.config.use_unified_council = use_unified_council  # ← NEW
-        st.session_state.kernel_instance.config.intuition_gain = intuition_gain  # ← NEW
+        st.session_state.kernel_instance.config.use_unified_council = use_unified_council
+        st.session_state.kernel_instance.config.intuition_gain = intuition_gain
 
     kernel = st.session_state.kernel_instance
     incoming = IncomingMessage(
@@ -468,7 +525,7 @@ if user_input:
                 with st.chat_message("assistant"):
                     st.write(bot_text)
                     
-                    # ✨ NEW: Show affective context indicator
+                    # ✨ Show affective context indicator
                     affective_triggers = stats.get("affective_triggers_detected", 0)
                     sentiment_used = stats.get("sentiment_context_used", False)
                     
