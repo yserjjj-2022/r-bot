@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Embeddings
     EMBEDDING_MODEL: str = Field(
-        default="text-embedding-3-small",
+        default="emb-openai/text-embedding-3-small",
         validation_alias=AliasChoices('EMBEDDING_MODEL', 'LLM_MODEL_EMBEDDING')
     )
     EMBEDDING_DIM: int = Field(default=1536)
