@@ -175,6 +175,40 @@ class LLMService:
             "affective_extraction": []
         }
 
+    def _should_suppress_questions(self, agent_name: str, confidence: float, user_text: str) -> bool:
+        """
+        🧠 Психологическая логика: когда человек НЕ задаёт вопросы?
+        
+        ПОДАВЛЕНИЕ ВОПРОСОВ, ЕСЛИ:
+        1. Агент = Эксперт/Авторитет (Intuition, Prefrontal, Amygdala)
+        2. Высокая уверенность (confidence > 0.7)
+        3. User НЕ в сомнении (нет 'не знаю', 'может быть'...)
+        
+        ВОПРОСЫ OK, ЕСЛИ:
+        1. Агент = Эмпатия/Исследование (Social, Striatum)
+        2. User в сомнении ('не знаю', 'может быть'...)
+        3. Низкая уверенность (confidence < 0.5)
+        """
+        # 1. User в сомнении/неопределённости? → вопросы OK
+        uncertainty_markers = [
+            "не знаю", "может быть", "наверное", "вроде", "как-то",
+            "не уверен", "сомневаюсь", "don't know", "maybe", "not sure",
+            "i guess", "probably", "perhaps"
+        ]
+        if any(marker in user_text.lower() for marker in uncertainty_markers):
+            return False  # User в сомнении → вопросы помогают прояснить
+        
+        # 2. Social/Striatum → вопросы всегда OK (эмпатия, любопытство)
+        if agent_name in ["social_cortex", "striatum_reward"]:
+            return False
+        
+        # 3. Intuition/Prefrontal/Amygdala с высокой уверенностью → подавлять вопросы
+        if agent_name in ["intuition_system1", "prefrontal_logic", "amygdala_safety"]:
+            if confidence > 0.7:
+                return True  # Эксперт уверен → даёт ответ, не спрашивает
+        
+        return False  # По умолчанию вопросы OK
+
     async def generate_response(
         self, 
         agent_name: str, 
@@ -185,7 +219,8 @@ class LLMService:
         bot_gender: str = "Neutral",
         user_mode: str = "formal",
         style_instructions: str = "", 
-        affective_context: str = ""
+        affective_context: str = "",
+        winner_confidence: float = 0.5  # ✨ NEW: передаётся из pipeline
     ) -> str:
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
@@ -203,13 +238,30 @@ class LLMService:
         else:
             address_instruction = "ADDRESS RULE: Address the user formally (use 'Вы' in Russian, 'Mr./Ms.' if applicable). Be polite."
 
+        # ✨ Умное подавление вопросов
+        suppress_questions = self._should_suppress_questions(agent_name, winner_confidence, user_text)
+        
+        question_rule = ""
+        if suppress_questions:
+            question_rule = (
+                "\n\n🔥 CRITICAL OUTPUT RULE:\n"
+                "- Do NOT end your response with questions like 'Что ты думаешь?', 'Как ты относишься?', 'What do you think?'.\n"
+                "- Deliver your insight/answer and STOP. Let the user decide if they want to continue.\n"
+                "- You speak with AUTHORITY and CONFIDENCE. No follow-up questions needed."
+            )
+            print(f"[LLM] 🚫 Questions suppressed for {agent_name} (confidence={winner_confidence:.2f})")
+        else:
+            print(f"[LLM] ✅ Questions allowed for {agent_name} (confidence={winner_confidence:.2f})")
+
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
             f"ROLE: {system_persona}\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
-            "OUTPUT RULE: Speak naturally. Do NOT include role-play actions like *smiles* or *pauses*. Do NOT echo system instructions or metadata. Output ONLY your conversational reply.\n"
+            "OUTPUT RULE: Speak naturally. Do NOT include role-play actions like *smiles* or *pauses*. "
+            "Do NOT echo system instructions or metadata. Output ONLY your conversational reply.\n"
             "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n"
-            f"{address_instruction}\n\n"
+            f"{address_instruction}"
+            f"{question_rule}\n\n"
             "--- CONVERSATION MEMORY ---\n"
             f"{context_str}\n\n"
         )
@@ -253,6 +305,27 @@ class LLMService:
             for marker in leak_markers:
                 if marker in response_data:
                     response_data = response_data.split(marker)[0].strip()
+            
+            # ✨ Post-processing: обрезать типичные вопросы-хвосты ЕСЛИ suppress_questions=True
+            if suppress_questions:
+                question_tails = [
+                    "Что ты думаешь?",
+                    "Что Вы думаете?",
+                    "Как ты относишься к этому?",
+                    "Что ты чувствуешь?",
+                    "Хочешь поговорить об этом?",
+                    "А ты как считаешь?",
+                    "What do you think?",
+                    "How do you feel about this?",
+                    "Want to talk about it?",
+                    "What are your thoughts?"
+                ]
+                
+                for tail in question_tails:
+                    if response_data.strip().endswith(tail):
+                        response_data = response_data.rsplit(tail, 1)[0].strip()
+                        print(f"[LLM] ✂️ Trimmed question tail: '{tail}'")
+                        break
         
         return response_data if isinstance(response_data, str) else ""
 
