@@ -28,7 +28,7 @@ class LLMService:
 
     async def generate_council_report(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
         system_prompt = (
-            "You are the Cognitive Core of R-Bot. Analyze the user's input through 4 functional lenses.\n"
+            "You are the Cognitive Core of R-Bot. Analyze the user's input through 5 functional lenses.\n"
             f"Context: {context_summary}\n\n"
             
             "### 1. AMYGDALA (Safety & Threat)\n"
@@ -47,7 +47,19 @@ class LLMService:
             "- Focus: Curiosity, playfulness, game mechanics, opportunities for fun/goals.\n"
             "- Score 8-10: Exciting/Gamified. Score 0-2: Boring/Routine.\n\n"
             
-            "### 5. PROFILE EXTRACTOR (Passive Sensing)\n"
+            "### 5. INTUITION (System-1 Fast Thinking)\n"
+            "- Focus: Immediate, automatic, effortless responses. Pattern matching without deep reasoning.\n"
+            "- Activates when:\n"
+            "  * Simple greetings ('Hi', 'Hello', 'How are you?')\n"
+            "  * Obvious yes/no questions ('Is water wet?')\n"
+            "  * Familiar patterns ('What's 2+2?', 'Tell me a joke')\n"
+            "  * Quick acknowledgments ('Thanks', 'OK', 'Got it')\n"
+            "- Score 8-10: Response is immediate and obvious. No analysis needed.\n"
+            "- Score 4-7: Message is familiar but needs slight adaptation.\n"
+            "- Score 0-3: Unfamiliar territory. Requires System-2 (Prefrontal) thinking.\n"
+            "- IMPORTANT: Final score = base_score × intuition_gain (config parameter).\n\n"
+            
+            "### 6. PROFILE EXTRACTOR (Passive Sensing)\n"
             "Detect if the user explicitly states or clearly implies core identity facts.\n"
             "- 'name': If user says 'My name is X' or 'Call me X'.\n"
             "- 'gender': If user says 'I am a woman' OR uses gendered grammar (e.g. Russian verbs 'сделала' -> Female).\n"
@@ -57,7 +69,7 @@ class LLMService:
             "  * 'I am loyal' ('Я верный') -> {'personality_traits': [{'name': 'Loyal', 'weight': 0.7}]}\n"
             "Return null if no info detected.\n\n"
 
-            "### 6. AFFECTIVE EXTRACTION (Emotional Relations)\n"
+            "### 7. AFFECTIVE EXTRACTION (Emotional Relations)\n"
             "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
             "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\n"
             "- Output format: Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES), 'object' (entity name), 'intensity' (0.0-1.0).\n"
@@ -68,7 +80,7 @@ class LLMService:
             "- Return empty array [] if no affective content detected.\n\n"
 
             "### OUTPUT FORMAT\n"
-            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'profile_update', 'affective_extraction'.\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'profile_update', 'affective_extraction'.\n"
             "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
             "Value schema for 'profile_update': { 'name': 'str/null', 'gender': 'str/null', 'preferred_mode': 'str/null', 'attributes': {'personality_traits': [{'name': str, 'weight': float}]} or null } OR null if empty.\n"
             "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
