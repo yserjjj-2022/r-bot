@@ -161,6 +161,28 @@ pace = st.sidebar.slider(
     help="High (1.0): Logic heavy (System 2). Thoughtful, slow.\nLow (0.0): Intuition heavy (System 1). Fast, heuristic."
 )
 
+st.sidebar.divider()
+st.sidebar.markdown("### 🧪 Experimental Controls")
+
+intuition_gain = st.sidebar.slider(
+    "🧠 Intuition Gain", 
+    min_value=0.0, 
+    max_value=2.0, 
+    value=1.0, 
+    step=0.1,
+    help="Multiplier for Intuition Agent score.\n"
+         "1.0 = Normal (default)\n"
+         "< 1.0 = Logic/Social dominate\n"
+         "> 1.0 = Fast intuitive responses"
+)
+
+use_unified_council = st.sidebar.checkbox(
+    "🔄 Unified Council (BETA)", 
+    value=False,
+    help="All agents (including Intuition) evaluated together by LLM.\n"
+         "When OFF: Legacy mode (Intuition evaluated separately)"
+)
+
 st.session_state.sliders = PersonalitySliders(
     empathy_bias=empathy,
     risk_tolerance=risk,
@@ -373,18 +395,22 @@ if user_input:
     
     # Initialize Kernel
     if st.session_state.kernel_instance is None:
-            config = BotConfig(
+        config = BotConfig(
             character_id="streamlit_user", 
             name=st.session_state.bot_name, 
             sliders=st.session_state.sliders, 
-            core_values=[]
+            core_values=[],
+            use_unified_council=use_unified_council,  # ← NEW
+            intuition_gain=intuition_gain  # ← NEW
         )
-            config.gender = st.session_state.bot_gender
-            st.session_state.kernel_instance = RCoreKernel(config)
+        config.gender = st.session_state.bot_gender
+        st.session_state.kernel_instance = RCoreKernel(config)
     else:
-            st.session_state.kernel_instance.config.name = st.session_state.bot_name
-            st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
-            st.session_state.kernel_instance.config.sliders = st.session_state.sliders
+        st.session_state.kernel_instance.config.name = st.session_state.bot_name
+        st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
+        st.session_state.kernel_instance.config.sliders = st.session_state.sliders
+        st.session_state.kernel_instance.config.use_unified_council = use_unified_council  # ← NEW
+        st.session_state.kernel_instance.config.intuition_gain = intuition_gain  # ← NEW
 
     kernel = st.session_state.kernel_instance
     incoming = IncomingMessage(
