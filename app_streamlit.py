@@ -118,11 +118,21 @@ st.sidebar.title("🧠 Cortex Controls")
 # --- Agent Selector ---
 st.sidebar.subheader("🤖 Bot Identity")
 
+# ✅ FIX: Show DB errors to user
 try:
     available_agents = run_async(get_all_agents())
     agent_names = [a.name for a in available_agents]
-except Exception:
+    
+    # 🔍 DEBUG: Show agent count
+    if agent_names:
+        st.sidebar.caption(f"💾 {len(agent_names)} persona(s) loaded from DB")
+    else:
+        st.sidebar.info("ℹ️ No personas in DB. Create one below or run seed script.")
+        
+except Exception as e:
     agent_names = []
+    st.sidebar.error(f"❌ DB Error: {e}")
+    st.sidebar.caption("🛠️ Try clicking 'Initialize DB' button below")
 
 selected_agent_name = st.sidebar.selectbox(
     "Select Persona", 
