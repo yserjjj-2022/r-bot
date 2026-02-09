@@ -2,6 +2,7 @@ import json
 import time
 import asyncio
 import random
+import re
 from typing import List, Optional, Any, Dict
 from openai import AsyncOpenAI, RateLimitError, APIError
 from src.r_core.config import settings
@@ -215,6 +216,31 @@ class LLMService:
         
         return response_data if isinstance(response_data, str) else ""
 
+    def _strip_markdown_json(self, content: str) -> str:
+        """
+        Удаляет markdown код-блоки вокруг JSON.
+        Поддерживает форматы:
+        - ```json\n{...}\n```
+        - ```\n{...}\n```
+        - {... } (чистый JSON)
+        """
+        content = content.strip()
+        
+        # Удаляем начальные ``` или ```json
+        if content.startswith("```"):
+            # Убираем первую строку (```json или ```)
+            lines = content.split("\n", 1)
+            if len(lines) > 1:
+                content = lines[1]
+            else:
+                content = ""
+        
+        # Удаляем завершающие ```
+        if content.rstrip().endswith("```"):
+            content = content.rstrip()[:-3].rstrip()
+        
+        return content.strip()
+
     async def _safe_chat_completion(self, messages: List[Dict], response_format: Optional[Dict], json_mode: bool) -> Any:
         max_retries = 3
         base_delay = 1.5
@@ -233,7 +259,9 @@ class LLMService:
                 content = response.choices[0].message.content
                 
                 if json_mode:
-                    data = json.loads(content)
+                    # ✨ Очищаем markdown код-блоки перед парсингом
+                    clean_content = self._strip_markdown_json(content)
+                    data = json.loads(clean_content)
                     return data
                 else:
                     return content
