@@ -38,9 +38,6 @@ class BaseAgent(ABC):
         New method for Batch Processing.
         Accepts data {score, rationale, confidence} directly from the Council Report.
         """
-        # Mapping generic names to specific AgentType in subclass required? 
-        # Actually we know the agent type in subclass.
-        
         signal = AgentSignal(
             agent_name=self.agent_type, # Define in subclass
             score=float(report_data.get("score", 0.0)),
@@ -101,7 +98,12 @@ class IntuitionAgent(BaseAgent):
         return self._apply_modulation(signal, self._calculate_modifier(sliders))
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
-        return 0.5 + (sliders.pace_setting * 0.7)
+        """
+        ✨ НОВАЯ ЛОГИКА: Инвертная связь с pace_setting.
+        pace_setting 0.0 (Low Logic) → Intuition усилена (1.5x)
+        pace_setting 1.0 (High Logic) → Intuition ослаблена (0.5x)
+        """
+        return 1.5 - (sliders.pace_setting * 1.0)
 
 class AmygdalaAgent(BaseAgent):
     agent_type = AgentType.AMYGDALA
@@ -134,7 +136,15 @@ class PrefrontalAgent(BaseAgent):
         return self._apply_modulation(sig, self._calculate_modifier(sliders))
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
-        return 1.3 - (sliders.empathy_bias * 0.6)
+        """
+        ✨ НОВАЯ ЛОГИКА: Прямая связь с pace_setting.
+        pace_setting 0.0 (Low Logic) → Logic ослаблена (0.7x)
+        pace_setting 1.0 (High Logic) → Logic усилена (1.5x)
+        
+        ВАЖНО: empathy_bias больше НЕ влияет на Logic напрямую.
+        Теперь Logic контролируется только через pace_setting.
+        """
+        return 0.7 + (sliders.pace_setting * 0.8)
 
 class SocialAgent(BaseAgent):
     agent_type = AgentType.SOCIAL
