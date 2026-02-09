@@ -218,11 +218,12 @@ class LLMService:
 
     def _strip_markdown_json(self, content: str) -> str:
         """
-        Удаляет markdown код-блоки вокруг JSON.
+        Удаляет markdown код-блоки вокруг JSON и извлекает первый валидный JSON объект.
         Поддерживает форматы:
         - ```json\n{...}\n```
         - ```\n{...}\n```
-        - {... } (чистый JSON)
+        - {...} (чистый JSON)
+        - {...}\nЛишний текст (обрезает после первого объекта)
         """
         content = content.strip()
         
@@ -239,7 +240,40 @@ class LLMService:
         if content.rstrip().endswith("```"):
             content = content.rstrip()[:-3].rstrip()
         
-        return content.strip()
+        content = content.strip()
+        
+        # 🔥 НОВОЕ: Извлекаем только первый JSON объект
+        # Ищем первую открывающую { и последнюю закрывающую }
+        if not content.startswith("{"):
+            return content  # Если не JSON - возвращаем как есть
+        
+        # Подсчитываем скобки, чтобы найти конец первого объекта
+        brace_count = 0
+        in_string = False
+        escape = False
+        
+        for i, char in enumerate(content):
+            # Обработка строк (игнорируем { } внутри строк)
+            if char == '"' and not escape:
+                in_string = not in_string
+            elif char == '\\' and not escape:
+                escape = True
+                continue
+            
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    
+                    # Нашли конец первого объекта
+                    if brace_count == 0:
+                        return content[:i+1]
+            
+            escape = False
+        
+        # Если не нашли закрывающую скобку - возвращаем всё
+        return content
 
     async def _safe_chat_completion(self, messages: List[Dict], response_format: Optional[Dict], json_mode: bool) -> Any:
         max_retries = 3
@@ -259,7 +293,7 @@ class LLMService:
                 content = response.choices[0].message.content
                 
                 if json_mode:
-                    # ✨ Очищаем markdown код-блоки перед парсингом
+                    # ✨ Очищаем markdown код-блоки и извлекаем первый JSON объект
                     clean_content = self._strip_markdown_json(content)
                     data = json.loads(clean_content)
                     return data
