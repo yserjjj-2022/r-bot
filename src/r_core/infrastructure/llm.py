@@ -86,7 +86,7 @@ class LLMService:
             "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
-        return await self._safe_chat_completion(
+        result = await self._safe_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
@@ -94,6 +94,36 @@ class LLMService:
             response_format={"type": "json_object"},
             json_mode=True
         )
+        
+        # ❗ VALIDATION: Если пустой результат - вернуть fallback
+        if not result or not isinstance(result, dict):
+            print("[LLM] ⚠️ Council Report EMPTY or INVALID! Using fallback.")
+            return self._get_fallback_council_report()
+        
+        # ✅ Validate required keys
+        required_keys = ["amygdala", "prefrontal", "social", "striatum", "intuition"]
+        missing_keys = [k for k in required_keys if k not in result]
+        
+        if missing_keys:
+            print(f"[LLM] ⚠️ Council Report missing keys: {missing_keys}. Using fallback.")
+            return self._get_fallback_council_report()
+        
+        return result
+    
+    def _get_fallback_council_report(self) -> Dict[str, Dict]:
+        """
+        🔥 EMERGENCY FALLBACK: Если LLM фейлится, вернуть стандартный ответ.
+        Social Cortex побеждает по умолчанию (безопасно для всех случаев).
+        """
+        return {
+            "intuition": {"score": 3.0, "rationale": "Fallback mode", "confidence": 0.3},
+            "amygdala": {"score": 2.0, "rationale": "Fallback mode", "confidence": 0.3},
+            "prefrontal": {"score": 4.0, "rationale": "Fallback mode", "confidence": 0.3},
+            "social": {"score": 7.0, "rationale": "Fallback: polite response", "confidence": 0.5},
+            "striatum": {"score": 3.0, "rationale": "Fallback mode", "confidence": 0.3},
+            "profile_update": None,
+            "affective_extraction": []
+        }
 
     async def generate_response(
         self, 
@@ -199,17 +229,35 @@ class LLMService:
                 else:
                     return content
 
-            except RateLimitError:
+            except RateLimitError as e:
+                print(f"[LLM] Rate Limit Hit (attempt {attempt+1}/{max_retries}): {e}")
                 if attempt < max_retries - 1:
                     wait_time = (base_delay * (attempt + 1)) + random.uniform(0.1, 0.5)
+                    print(f"[LLM] Waiting {wait_time:.1f}s before retry...")
                     await asyncio.sleep(wait_time)
                     continue
                 else:
+                    print("[LLM] ❌ Max retries reached (Rate Limit). Returning empty.")
                     return {} if json_mode else "System Error: Rate Limit"
+            
+            except json.JSONDecodeError as e:
+                print(f"[LLM] ❌ JSON Parsing Failed (attempt {attempt+1}/{max_retries}): {e}")
+                print(f"[LLM] Raw content: {content[:200]}...")  # Log first 200 chars
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2.0)
+                    continue
+                else:
+                    print("[LLM] ❌ Max retries reached (JSON). Returning empty.")
+                    return {} if json_mode else "System Error: Invalid JSON"
+            
             except Exception as e:
+                print(f"[LLM] ❌ Unexpected Error (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}")
                 if attempt < max_retries - 1:
                      await asyncio.sleep(2.0)
                      continue
-                return {} if json_mode else f"System Error: {str(e)}"
+                else:
+                    print("[LLM] ❌ Max retries reached (Unknown). Returning empty.")
+                    return {} if json_mode else f"System Error: {str(e)}"
         
+        print("[LLM] ⚠️ Fallthrough: No valid response after all retries.")
         return {} if json_mode else "System Error: Unknown"
