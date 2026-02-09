@@ -214,7 +214,7 @@ return {
 
 ## 📚 Дополнительные Ресурсы
 
-- **Архитектурная документация**: [docs/r-core.md](./r-core.md)
-- **Код LLM Service**: [src/r_core/infrastructure/llm.py](../src/r_core/infrastructure/llm.py)
-- **Код Memory System**: [src/r_core/memory.py](../src/r_core/memory.py)
-- **Код Pipeline**: [src/r_core/pipeline.py](../src/r_core/pipeline.py)
+- **Архитектурная документация**: [docs/r-core/architecture.md](./architecture.md)
+- **Код LLM Service**: [src/r_core/infrastructure/llm.py](../../src/r_core/infrastructure/llm.py)
+- **Код Memory System**: [src/r_core/memory.py](../../src/r_core/memory.py)
+- **Код Pipeline**: [src/r_core/pipeline.py](../../src/r_core/pipeline.py)

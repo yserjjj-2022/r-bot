@@ -10,7 +10,8 @@ from .schemas import (
     ProcessingMode,
     AgentType,
     MoodVector,
-    SemanticTriple
+    SemanticTriple,
+    AgentSignal
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
@@ -41,8 +42,36 @@ class RCoreKernel:
             StriatumAgent(self.llm)
         ]
 
-    async def process_message(self, message: IncomingMessage) -> CoreResponse:
+    async def process_message(self, message: IncomingMessage, mode: str = "CORTICAL") -> CoreResponse:
+        """
+        Main pipeline entry point.
+        mode="CORTICAL" -> Full cognitive architecture (RAG, Agents, Profiling).
+        mode="ZOMBIE" -> Simple LLM pass-through (No memory, No personality).
+        """
         start_time = datetime.now()
+        
+        # --- ZOMBIE MODE (Bypass Everything) ---
+        if mode == "ZOMBIE":
+            # Just call LLM directly without system prompt engineering or memory
+            simple_response = await self.llm._safe_chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are a helpful AI assistant. Answer concisely."},
+                    {"role": "user", "content": message.text}
+                ],
+                response_format=None,
+                json_mode=False
+            )
+            latency = (datetime.now() - start_time).total_seconds() * 1000
+            
+            return CoreResponse(
+                actions=[CoreAction(type="send_text", payload={"text": str(simple_response)})],
+                winning_agent=AgentType.PREFRONTAL, # Dummy
+                current_mood=MoodVector(), # Neutral
+                processing_mode=ProcessingMode.FAST_PATH,
+                internal_stats={"latency_ms": int(latency), "mode": "ZOMBIE"}
+            )
+
+        # --- CORTICAL MODE (Full Architecture) ---
         
         # 0. Precompute Embedding
         current_embedding = None
@@ -126,28 +155,21 @@ class RCoreKernel:
                 affective_triggers_count += 1
                 print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object} (valence={valence:.2f})")
         
-        # Distribute results
-        intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
-        
-        signals = [intuition_signal]
-        
-        agent_map = {
-            "amygdala": self.agents[1],
-            "prefrontal": self.agents[2],
-            "social": self.agents[3],
-            "striatum": self.agents[4]
-        }
-        
-        for key, agent in agent_map.items():
-            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
-            signal = agent.process_from_report(report_data, self.config.sliders)
-            signals.append(signal)
+        # ✨ NEW: Feature Flag - Unified Council vs Legacy
+        if self.config.use_unified_council:
+            # NEW LOGIC: All agents processed through council_report (including Intuition)
+            signals = self._process_unified_council(council_report, message, context)
+            print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
+        else:
+            # OLD LOGIC: Intuition processed separately
+            signals = await self._process_legacy_council(council_report, message, context)
+            print(f"[Pipeline] Using LEGACY mode (Intuition evaluated separately)")
 
         # 4. Arbitration & Mood Update
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
         
-        # --- NEW: Neuro-Modulation (Adverbs) ---
+        # --- Neuro-Modulation (Adverbs) ---
         # Strong Losers: Score > 5.0 AND not the winner
         strong_losers = [s for s in signals if s.score > 5.0 and s.agent_name != winner.agent_name]
         
@@ -177,12 +199,12 @@ class RCoreKernel:
         # Combine Mood + Neuro-Modulation
         final_style_instructions = mood_style_prompt + "\n" + adverb_context_str
         
-        # ✨ NEW: Формируем affective_context_str из context["affective_context"]
+        # ✨ Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
         affective_context_str = ""
         
         if affective_warnings:
-            affective_context_str = "\u26a0️ EMOTIONAL RELATIONS (User's Preferences):\n"
+            affective_context_str = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\n"
             for warn in affective_warnings:
                 entity = warn["entity"]
                 predicate = warn["predicate"]
@@ -203,7 +225,7 @@ class RCoreKernel:
             bot_gender=bot_gender,
             user_mode=preferred_mode,
             style_instructions=final_style_instructions,  # Pass combined styles
-            affective_context=affective_context_str  # ✨ NEW: Pass affective warnings
+            affective_context=affective_context_str
         )
         
         await self.memory.memorize_bot_response(
@@ -223,10 +245,11 @@ class RCoreKernel:
             "active_style": final_style_instructions,
             "affective_triggers_detected": affective_triggers_count,
             "sentiment_context_used": bool(affective_warnings),
-            "modulators": [s.agent_name.value for s in strong_losers]
+            "modulators": [s.agent_name.value for s in strong_losers],
+            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
+            "intuition_gain": self.config.intuition_gain
         }
 
-        # ✨ NEW: Async Logging to DB (Fire-and-forget logic could be wrapped in create_task, but here we await for safety)
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
         
         return CoreResponse(
@@ -238,6 +261,66 @@ class RCoreKernel:
             processing_mode=ProcessingMode.SLOW_PATH,
             internal_stats=internal_stats
         )
+
+    def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
+        """
+        ✨ NEW: Unified processing - all 5 agents evaluated by LLM together.
+        Intuition score is multiplied by intuition_gain.
+        """
+        signals = []
+        
+        agent_map = {
+            "intuition": (self.agents[0], AgentType.INTUITION),
+            "amygdala": (self.agents[1], AgentType.AMYGDALA),
+            "prefrontal": (self.agents[2], AgentType.PREFRONTAL),
+            "social": (self.agents[3], AgentType.SOCIAL),
+            "striatum": (self.agents[4], AgentType.STRIATUM)
+        }
+        
+        for key, (agent, agent_type) in agent_map.items():
+            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal", "confidence": 0.5})
+            
+            # Get base score from LLM
+            base_score = report_data.get("score", 0.0)
+            
+            # ✨ Apply intuition_gain multiplier ONLY to Intuition
+            if key == "intuition":
+                final_score = base_score * self.config.intuition_gain
+                final_score = max(0.0, min(10.0, final_score))  # Clamp to [0, 10]
+                print(f"[Unified Council] Intuition: base_score={base_score:.2f} × gain={self.config.intuition_gain} = {final_score:.2f}")
+            else:
+                final_score = base_score
+            
+            # Create signal
+            signal = agent.process_from_report(report_data, self.config.sliders)
+            signal.score = final_score  # Override with adjusted score
+            signals.append(signal)
+        
+        return signals
+
+    async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
+        """
+        🔒 OLD: Legacy processing - Intuition evaluated separately, others from council_report.
+        Kept for backward compatibility and A/B testing.
+        """
+        # Intuition processed independently
+        intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
+        
+        signals = [intuition_signal]
+        
+        agent_map = {
+            "amygdala": self.agents[1],
+            "prefrontal": self.agents[2],
+            "social": self.agents[3],
+            "striatum": self.agents[4]
+        }
+        
+        for key, agent in agent_map.items():
+            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
+            signal = agent.process_from_report(report_data, self.config.sliders)
+            signals.append(signal)
+        
+        return signals
 
     def _update_mood(self, winner_signal):
         """
