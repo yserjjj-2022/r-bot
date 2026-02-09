@@ -228,7 +228,8 @@ class RCoreKernel:
             bot_gender=bot_gender,
             user_mode=preferred_mode,
             style_instructions=final_style_instructions,  # Pass combined styles
-            affective_context=affective_context_str
+            affective_context=affective_context_str,
+            winner_confidence=winner.confidence  # ✨ NEW: передаём confidence для умного подавления вопросов
         )
         
         await self.memory.memorize_bot_response(
