@@ -156,16 +156,15 @@ if selected_agent_name != "Default":
             neuroticism=preset.get("neuroticism", 0.1)
         )
         
-        # ✨ Load experimental controls from DB
-        if "intuition_gain_loaded" not in st.session_state:
-            st.session_state.intuition_gain_loaded = getattr(agent_data, "intuition_gain", 1.0)
-            st.session_state.use_unified_loaded = getattr(agent_data, "use_unified_council", False)
+        # ✅ FIX: Always reload experimental controls on agent change
+        st.session_state.intuition_gain_loaded = getattr(agent_data, "intuition_gain", 1.0)
+        st.session_state.use_unified_loaded = getattr(agent_data, "use_unified_council", False)
 else:
     st.session_state.bot_name = "R-Bot"
     st.session_state.bot_gender = "Neutral"
-    if "intuition_gain_loaded" not in st.session_state:
-        st.session_state.intuition_gain_loaded = 1.0
-        st.session_state.use_unified_loaded = False
+    # ✅ FIX: Always reset to defaults for Default persona
+    st.session_state.intuition_gain_loaded = 1.0
+    st.session_state.use_unified_loaded = False
 
 # --- Sliders Control ---
 st.sidebar.markdown("### Fine-tune Personality")
