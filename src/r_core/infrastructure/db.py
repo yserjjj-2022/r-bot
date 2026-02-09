@@ -100,12 +100,18 @@ class AgentProfileModel(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     gender: Mapped[Optional[str]] = mapped_column(String(20), default="Neutral")
     sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
+    
+    # ✨ NEW: Сохраняем experimental controls
+    intuition_gain: Mapped[float] = mapped_column(Float, default=1.0)
+    use_unified_council: Mapped[bool] = mapped_column(default=False)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 # --- Init DB Helper ---
 
 async def init_models():
-    """Idempotent initialization + Auto-Migration for missing columns"""
+    """Инициализация + автомиграция"""
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
@@ -140,13 +146,29 @@ async def init_models():
         except Exception as e:
             print(f"[DB Init] Index creation (sentiment): {e}")
         
-        # --- Previous migration: gender column ---
+        # ✨ Migration: Add gender column to agent_profiles
         try:
             await conn.execute(text(
                 "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(20) DEFAULT 'Neutral'"
             ))
+            print("[DB Init] ✅ gender column added to agent_profiles")
         except Exception as e:
             print(f"[DB Init] Schema update (gender): {e}")
+        
+        # ✨ NEW Migration: Add intuition_gain and use_unified_council to agent_profiles
+        try:
+            await conn.execute(text(
+                "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS intuition_gain FLOAT DEFAULT 1.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS use_unified_council BOOLEAN DEFAULT FALSE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ))
+            print("[DB Init] ✅ intuition_gain, use_unified_council, updated_at added to agent_profiles")
+        except Exception as e:
+            print(f"[DB Init] Schema update (agent experimental controls): {e}")
 
 # --- Helper Methods ---
 
