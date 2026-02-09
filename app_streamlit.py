@@ -156,37 +156,26 @@ dominance = st.sidebar.slider(
 )
 
 pace = st.sidebar.slider(
-    "⚡ Pace (Intuition vs Logic)", 
+    "⚡ Thinking Style (Intuition ↔ Logic)", 
     0.0, 1.0, st.session_state.sliders.pace_setting,
-    help="⚡ BALANCE: Intuition (fast, heuristic) ↔ Logic (slow, analytical)\n\n"
-         "• Low (0.0): Intuition dominant (1.5x), Logic weak (0.7x)\n"
-         "• Mid (0.5): Balanced mix (both ~1.1x)\n"
-         "• High (1.0): Logic dominant (1.5x), Intuition weak (0.5x)\n\n"
-         "⚙️ Technical: Affects agent modifiers in Legacy mode."
+    help="⚡ BALANCE: Intuition (System 1) ↔ Logic (System 2)\n\n"
+         "• Low (0.0): Intuition-heavy (1.5x), fast heuristic responses\n"
+         "• Mid (0.5): Balanced cognitive mix\n"
+         "• High (1.0): Logic-heavy (1.5x), deliberate analytical responses\n\n"
+         "📚 Based on Kahneman's dual-process theory.\n"
+         "⚙️ Works in both Legacy and Unified Council modes."
 )
 
 st.sidebar.divider()
 st.sidebar.markdown("### 🧪 Experimental Controls")
 
-intuition_gain = st.sidebar.slider(
-    "🧠 Intuition Gain", 
-    min_value=0.0, 
-    max_value=2.0, 
-    value=1.0, 
-    step=0.1,
-    help="Multiplier for Intuition Agent score (Unified Council mode only).\n\n"
-         "• 1.0 = Normal (default)\n"
-         "• < 1.0 = Logic/Social dominate\n"
-         "• > 1.0 = Fast intuitive responses\n\n"
-         "⚠️ Works ONLY with Unified Council enabled."
-)
-
 use_unified_council = st.sidebar.checkbox(
     "🔄 Unified Council (BETA)", 
     value=False,
     help="All agents (including Intuition) evaluated together by LLM.\n\n"
-         "• ON: Intuition Gain multiplier active\n"
-         "• OFF: Legacy mode (Intuition evaluated separately)"
+         "• ON: Batch LLM evaluation (faster, experimental)\n"
+         "• OFF: Legacy mode (Intuition evaluated separately, proven stable)\n\n"
+         "Both modes respect 'Thinking Style' slider above."
 )
 
 st.session_state.sliders = PersonalitySliders(
@@ -406,8 +395,7 @@ if user_input:
             name=st.session_state.bot_name, 
             sliders=st.session_state.sliders, 
             core_values=[],
-            use_unified_council=use_unified_council,  # ← NEW
-            intuition_gain=intuition_gain  # ← NEW
+            use_unified_council=use_unified_council
         )
         config.gender = st.session_state.bot_gender
         st.session_state.kernel_instance = RCoreKernel(config)
@@ -415,8 +403,7 @@ if user_input:
         st.session_state.kernel_instance.config.name = st.session_state.bot_name
         st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
         st.session_state.kernel_instance.config.sliders = st.session_state.sliders
-        st.session_state.kernel_instance.config.use_unified_council = use_unified_council  # ← NEW
-        st.session_state.kernel_instance.config.intuition_gain = intuition_gain  # ← NEW
+        st.session_state.kernel_instance.config.use_unified_council = use_unified_council
 
     kernel = st.session_state.kernel_instance
     incoming = IncomingMessage(
