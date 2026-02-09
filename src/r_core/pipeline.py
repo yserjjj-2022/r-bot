@@ -155,15 +155,18 @@ class RCoreKernel:
                 affective_triggers_count += 1
                 print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object} (valence={valence:.2f})")
         
-        # ✨ NEW: Feature Flag - Unified Council vs Legacy
+        # ✨ Feature Flag - Unified Council vs Legacy
+        # Рассчитываем intuition_gain из pace_setting (унифицированный подход)
+        intuition_gain_calculated = 1.5 - self.config.sliders.pace_setting
+        
         if self.config.use_unified_council:
             # NEW LOGIC: All agents processed through council_report (including Intuition)
-            signals = self._process_unified_council(council_report, message, context)
-            print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
+            signals = self._process_unified_council(council_report, intuition_gain_calculated)
+            print(f"[Pipeline] UNIFIED COUNCIL mode | pace={self.config.sliders.pace_setting:.2f} → intuition_gain={intuition_gain_calculated:.2f}")
         else:
-            # OLD LOGIC: Intuition processed separately
+            # OLD LOGIC: Intuition processed separately (uses modifiers from agents.py)
             signals = await self._process_legacy_council(council_report, message, context)
-            print(f"[Pipeline] Using LEGACY mode (Intuition evaluated separately)")
+            print(f"[Pipeline] LEGACY mode | pace={self.config.sliders.pace_setting:.2f} (modifiers in agents.py)")
 
         # 4. Arbitration & Mood Update
         signals.sort(key=lambda s: s.score, reverse=True)
@@ -247,7 +250,8 @@ class RCoreKernel:
             "sentiment_context_used": bool(affective_warnings),
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
-            "intuition_gain": self.config.intuition_gain
+            "pace_setting": self.config.sliders.pace_setting,
+            "calculated_intuition_gain": intuition_gain_calculated
         }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
@@ -262,10 +266,10 @@ class RCoreKernel:
             internal_stats=internal_stats
         )
 
-    def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
+    def _process_unified_council(self, council_report: Dict, intuition_gain: float) -> List[AgentSignal]:
         """
-        ✨ NEW: Unified processing - all 5 agents evaluated by LLM together.
-        Intuition score is multiplied by intuition_gain.
+        ✨ UPDATED: Unified processing - all 5 agents evaluated by LLM together.
+        Intuition score is multiplied by calculated intuition_gain from pace_setting.
         """
         signals = []
         
@@ -285,9 +289,9 @@ class RCoreKernel:
             
             # ✨ Apply intuition_gain multiplier ONLY to Intuition
             if key == "intuition":
-                final_score = base_score * self.config.intuition_gain
+                final_score = base_score * intuition_gain
                 final_score = max(0.0, min(10.0, final_score))  # Clamp to [0, 10]
-                print(f"[Unified Council] Intuition: base_score={base_score:.2f} × gain={self.config.intuition_gain} = {final_score:.2f}")
+                print(f"[Unified Council] Intuition: base_score={base_score:.2f} × gain={intuition_gain:.2f} = {final_score:.2f}")
             else:
                 final_score = base_score
             
@@ -301,9 +305,10 @@ class RCoreKernel:
     async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
         """
         🔒 OLD: Legacy processing - Intuition evaluated separately, others from council_report.
+        Intuition uses modifiers from agents.py (based on pace_setting).
         Kept for backward compatibility and A/B testing.
         """
-        # Intuition processed independently
+        # Intuition processed independently (uses _calculate_modifier in IntuitionAgent)
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
         
         signals = [intuition_signal]
