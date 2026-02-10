@@ -33,7 +33,7 @@ class PersonalitySliders(BaseModel):
     dominance_level: float = Field(0.5, description="Лидерство vs Подстройка")
     risk_tolerance: float = Field(0.5, description="Авантюризм vs Осторожность")
     pace_setting: float = Field(0.5, description="Быстрый (Intuition) vs Медленный (Logic)")
-    neuroticism: float = Field(0.1, description="Степень случайности/эмоциональности")
+    neuroticism: float = Field(0.1, description="Степень случайности/эмоциоCdальности")
 
 class BotConfig(BaseModel):
     character_id: str
@@ -42,12 +42,17 @@ class BotConfig(BaseModel):
     sliders: PersonalitySliders
     core_values: List[str]
     
-    # ✨ Experimental flag for Unified Council
+    # ✨ NEW: Experimental flags for Unified Council
     use_unified_council: bool = Field(
         default=False, 
         description="Использовать единый Council Report для всех агентов (включая Intuition)"
     )
-    # REMOVED: intuition_gain - теперь используется pace_setting для обоих режимов
+    intuition_gain: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=2.0,
+        description="Множитель для Intuition Agent score (0.0 = отключен, 1.0 = норма, 2.0 = усилен)"
+    )
 
 # --- Hormonal / Mood System ---
 
