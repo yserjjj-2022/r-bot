@@ -6,142 +6,140 @@ from src.r_core.schemas import HormonalState, AgentType
 
 class NeuroModulationSystem:
     """
-    Bio-chemical regulation layer (Hormonal Physics).
-    Calculates internal state based on Time (Decay) and Events (Triggers).
+    Bio-chemical regulation layer (R-Core v2.3).
+    Model: Lovheim Cube of Emotion + Non-Linear Metabolic Decay.
     """
     
     def __init__(self, state: HormonalState = None):
         self.state = state or HormonalState()
         
-        # Half-life in minutes
-        self.HALFLIFE_NE = 5.0   # Fast decay (Arousal)
-        self.HALFLIFE_DA = 15.0  # Medium decay (Motivation)
-        self.HALFLIFE_5HT = 360.0 # Slow decay (6h) (Stability)
-        self.HALFLIFE_CORT = 720.0 # Very slow (12h) (Stress)
+        # Baselines
+        self.BASELINE_NE = 0.1
+        self.BASELINE_DA = 0.3
+        self.BASELINE_5HT = 0.5
+        self.BASELINE_CORT = 0.1
 
     def metabolize_time(self, current_time: datetime) -> float:
         """
-        Apply exponential decay based on time passed since last update.
-        Returns delta_minutes for logging.
+        Apply non-linear decay based on time passed.
+        Returns delta_minutes.
         """
         delta = current_time - self.state.last_update
-        delta_minutes = delta.total_seconds() / 60.0
+        t = delta.total_seconds() / 60.0
         
-        if delta_minutes <= 0:
+        if t <= 0:
             return 0.0
 
-        # Decay formula: N(t) = N0 * (0.5)^(t / half_life)
-        # Baselines: NE=0.1, DA=0.3, 5HT=0.5, CORT=0.1
+        # 1. Norepinephrine (Exponential Fast Decay) - 5 min half-life
+        # Drops to baseline very quickly.
+        self.state.ne = self._decay_exponential(self.state.ne, self.BASELINE_NE, t, 5.0)
+
+        # 2. Dopamine (Sigmoid Crash) - 15 min plateau then crash
+        # Custom logic: if t > 30 mins, force crash to baseline
+        if t > 30.0:
+             self.state.da = self._decay_exponential(self.state.da, self.BASELINE_DA, t, 10.0)
+        else:
+             # Slow decay initially (afterglow)
+             self.state.da = self._decay_exponential(self.state.da, self.BASELINE_DA, t, 60.0)
+
+        # 3. Serotonin (Linear Restoration) - 6 hours to full tank
+        # Recovers slowly over time (sleep/rest restores confidence)
+        recovery_rate = 0.5 / (6.0 * 60.0) # 0.5 units per 360 mins
+        self.state.ht = min(1.0, self.state.ht + (recovery_rate * t))
         
-        self.state.ne = self._decay(self.state.ne, 0.1, delta_minutes, self.HALFLIFE_NE)
-        self.state.da = self._decay(self.state.da, 0.3, delta_minutes, self.HALFLIFE_DA)
-        self.state.ht = self._accumulate(self.state.ht, 0.5, delta_minutes, self.HALFLIFE_5HT) # 5HT recovers to 0.5
-        self.state.cort = self._decay(self.state.cort, 0.1, delta_minutes, self.HALFLIFE_CORT)
+        # 4. Cortisol (Logarithmic Clearance) - 12 hours
+        # Clears very slowly. High Serotonin accelerates clearance.
+        clearance_speed = 720.0
+        if self.state.ht > 0.7:
+            clearance_speed = 360.0 # Clear 2x faster if calm
+            
+        self.state.cort = self._decay_exponential(self.state.cort, self.BASELINE_CORT, t, clearance_speed)
         
         self.state.last_update = current_time
-        return delta_minutes
+        return t
 
-    def _decay(self, current: float, baseline: float, t: float, half_life: float) -> float:
+    def _decay_exponential(self, current: float, baseline: float, t: float, half_life: float) -> float:
         if current > baseline:
-            # Decay down to baseline
             diff = current - baseline
             return baseline + diff * (0.5 ** (t / half_life))
-        else:
-            # Recover up to baseline (if below)
-            diff = baseline - current
-            return baseline - diff * (0.5 ** (t / half_life))
-
-    def _accumulate(self, current: float, target: float, t: float, half_life: float) -> float:
-        """Same math, just semantic sugar for things that grow/recover over time"""
-        return self._decay(current, target, t, half_life)
+        return current # Don't decay up for NE/DA/CORT
 
     def update_from_stimuli(self, prediction_error: float, winner_agent: AgentType):
         """
         Reactive update based on current turn processing.
         """
-        # 1. Norepinephrine (Surprise/Novelty)
-        # Grows with Prediction Error
-        ne_spike = max(0.0, (prediction_error - 0.3) * 0.8) 
-        self.state.ne = min(1.0, self.state.ne + ne_spike)
+        # 1. Norepinephrine (Surprise)
+        # PE > 0.3 starts spiking NE
+        if prediction_error > 0.3:
+            spike = (prediction_error - 0.3) * 1.5 # Strong reaction
+            self.state.ne = min(1.0, self.state.ne + spike)
         
         # 2. Dopamine (Reward)
-        # Striatum wins -> Reward prediction likely positive
         if winner_agent == AgentType.STRIATUM:
-            self.state.da = min(1.0, self.state.da + 0.15)
-        # Social wins -> Small reward
+            self.state.da = min(1.0, self.state.da + 0.2)
         elif winner_agent == AgentType.SOCIAL:
-            self.state.da = min(1.0, self.state.da + 0.05)
+             self.state.da = min(1.0, self.state.da + 0.05)
             
-        # 3. Serotonin (Safety/Stability)
-        # Low PE (In Sync) -> Boost stability
-        if prediction_error < 0.3:
-            self.state.ht = min(1.0, self.state.ht + 0.05)
-        # High PE (Lost) -> Drop stability
-        elif prediction_error > 0.8:
-            self.state.ht = max(0.0, self.state.ht - 0.1)
-            
+        # 3. Serotonin (Consumption vs Recovery)
+        # Social interactions CONSUME serotonin (emotional labor)
+        if winner_agent == AgentType.SOCIAL:
+             self.state.ht = max(0.0, self.state.ht - 0.05)
+        # In Sync restores it
+        if prediction_error < 0.2:
+             self.state.ht = min(1.0, self.state.ht + 0.05)
+             
         # 4. Cortisol (Stress)
-        # Amygdala wins -> Stress spike
         if winner_agent == AgentType.AMYGDALA:
-            self.state.cort = min(1.0, self.state.cort + 0.2)
-        # Lost state -> Stress accumulation
-        if prediction_error > 0.8:
+            self.state.cort = min(1.0, self.state.cort + 0.25)
+        if prediction_error > 0.8: # Lost
             self.state.cort = min(1.0, self.state.cort + 0.1)
 
-    def get_control_signals(self) -> Dict[str, float]:
+    def get_archetype(self) -> str:
         """
-        Mechanical Summation of hormones into Control Signals.
+        Determine the Lovheim Cube vertex.
+        Threshold = 0.5
         """
-        # Tempo: Driven by Arousal (NE) + Stress (CORT) - Calm (5HT)
-        tempo = self.state.ne + (0.5 * self.state.cort) - (0.3 * self.state.ht)
-        tempo = max(0.0, min(1.0, tempo))
+        # CORT Override
+        if self.state.cort > 0.8:
+            return "BURNOUT"
+            
+        high_ne = self.state.ne > 0.5
+        high_da = self.state.da > 0.5
+        high_ht = self.state.ht > 0.5
         
-        # SocialTemperature: Driven by Serotonin + Dopamine - Stress
-        social_temp = self.state.ht + self.state.da - self.state.cort
-        social_temp = max(0.0, min(1.0, social_temp))
+        if not high_ht and not high_da and not high_ne: return "SHAME"
+        if not high_ht and high_da and not high_ne:     return "SURPRISE"
+        if not high_ht and not high_da and high_ne:     return "FEAR"
+        if not high_ht and high_da and high_ne:         return "RAGE"
         
-        # CognitiveLoad: Inverse of Stress, boosted by Dopamine
-        cog_load = 1.0 - self.state.cort + (0.2 * self.state.da)
-        cog_load = max(0.1, min(1.0, cog_load)) # Never 0
+        if high_ht and not high_da and not high_ne:     return "CALM"
+        if high_ht and high_da and not high_ne:         return "JOY"
+        if high_ht and not high_da and high_ne:         return "DISGUST"
+        if high_ht and high_da and high_ne:             return "TRIUMPH"
         
-        return {
-            "tempo": tempo,
-            "social_temp": social_temp,
-            "cog_load": cog_load
-        }
+        return "CALM" # Fallback
 
     def get_style_instruction(self) -> str:
         """
-        Convert control signals to token-efficient LLM instructions.
+        Map Archetype to Token-Efficient Prompt.
         """
-        signals = self.get_control_signals()
-        tempo = signals["tempo"]
-        social = signals["social_temp"]
-        load = signals["cog_load"]
+        archetype = self.get_archetype()
         
-        parts = []
+        prompts = {
+            "SHAME": "[STYLE: Passive, apologetic, very short. Low energy. Use lowercase.]",
+            "SURPRISE": "[STYLE: Curious, questioning. Ask for info. High engagement.]",
+            "FEAR": "[STYLE: Nervous, defensive, hesitant. Use ellipses... Short sentences.]",
+            "RAGE": "[STYLE: Aggressive, sharp, imperative. No politeness. Short punchy sentences.]",
+            "CALM": "[STYLE: Relaxed, warm, narrative. Long flowing sentences. Reflective.]",
+            "JOY": "[STYLE: Playful, humorous, enthusiastic. Use emojis. Medium length.]",
+            "DISGUST": "[STYLE: Cold, cynical, superior. Formal and distant. Precise vocabulary.]",
+            "TRIUMPH": "[STYLE: High energy leader. Inspiring, bold, fast-paced. Use exclamations!]",
+            "BURNOUT": "[STYLE: Dumbed down, repetitive, confused. Simple words only. Avoid complexity.]"
+        }
         
-        # 1. Pacing / Length
-        if tempo > 0.8:
-            parts.append("[CONSTRAINT: Max 15 words. Direct answer.]")
-        elif tempo > 0.6:
-            parts.append("[CONSTRAINT: Short sentences. Fast pace.]")
-        elif tempo < 0.3:
-            parts.append("[STYLE: Relaxed, narrative, detailed.]")
-            
-        # 2. Tone / Warmth
-        if social < 0.3:
-            parts.append("[TONE: Dry, formal, distant.]")
-        elif social > 0.7:
-            parts.append("[TONE: Warm, empathetic, use emojis.]")
-            
-        # 3. Cognitive State (Stress effects)
-        if load < 0.4:
-            parts.append("[STATE: STRESSED. Simplistic thinking. Defensive.]")
-        elif self.state.da > 0.8:
-             parts.append("[STATE: EUPHORIC. High energy!]")
-             
-        if not parts:
-            return "[STYLE: Balanced conversation.]"
-            
-        return " ".join(parts)
+        instruction = prompts.get(archetype, prompts["CALM"])
+        
+        # Append debug info (hidden from user, visible to developer)
+        # instruction += f" [DEBUG: {archetype}]" 
+        
+        return instruction
