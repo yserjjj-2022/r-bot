@@ -155,18 +155,15 @@ class RCoreKernel:
                 affective_triggers_count += 1
                 print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object} (valence={valence:.2f})")
         
-        # ✨ Feature Flag - Unified Council vs Legacy
-        # Рассчитываем intuition_gain из pace_setting (унифицированный подход)
-        intuition_gain_calculated = 1.5 - self.config.sliders.pace_setting
-        
+        # ✨ NEW: Feature Flag - Unified Council vs Legacy
         if self.config.use_unified_council:
             # NEW LOGIC: All agents processed through council_report (including Intuition)
-            signals = self._process_unified_council(council_report, intuition_gain_calculated)
-            print(f"[Pipeline] UNIFIED COUNCIL mode | pace={self.config.sliders.pace_setting:.2f} → intuition_gain={intuition_gain_calculated:.2f}")
+            signals = self._process_unified_council(council_report, message, context)
+            print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
         else:
-            # OLD LOGIC: Intuition processed separately (uses modifiers from agents.py)
+            # OLD LOGIC: Intuition processed separately
             signals = await self._process_legacy_council(council_report, message, context)
-            print(f"[Pipeline] LEGACY mode | pace={self.config.sliders.pace_setting:.2f} (modifiers in agents.py)")
+            print(f"[Pipeline] Using LEGACY mode (Intuition evaluated separately)")
 
         # 4. Arbitration & Mood Update
         signals.sort(key=lambda s: s.score, reverse=True)
@@ -179,11 +176,11 @@ class RCoreKernel:
         adverb_instructions = []
         for loser in strong_losers:
             if loser.style_instruction:
-                adverb_instructions.append(f"[{loser.agent_name.name}]: {loser.style_instruction}")
+                adverb_instructions.append(f"- {loser.agent_name.name}: {loser.style_instruction}")
         
         adverb_context_str = ""
         if adverb_instructions:
-            adverb_context_str = "\nADVERBS:\n" + "\n".join(adverb_instructions)
+            adverb_context_str = "\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\n" + "\n".join(adverb_instructions)
             print(f"[Neuro-Modulation] Applied styles from: {[s.agent_name for s in strong_losers]}")
         
         self._update_mood(winner)
@@ -192,7 +189,7 @@ class RCoreKernel:
         
         # 5. Response Generation (Inject Mood Styles)
         if profile_update:
-             context_str += f"\n[SYSTEM: Profile Updated: {cleaned_update}]"
+             context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
 
         bot_gender = getattr(self.config, "gender", "Neutral")
         
@@ -200,14 +197,14 @@ class RCoreKernel:
         mood_style_prompt = self._generate_style_from_mood(self.current_mood)
         
         # Combine Mood + Neuro-Modulation
-        final_style_instructions = mood_style_prompt + adverb_context_str
+        final_style_instructions = mood_style_prompt + "\n" + adverb_context_str
         
         # ✨ Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
         affective_context_str = ""
         
         if affective_warnings:
-            affective_context_str = "⚠️ EMOTIONAL CONTEXT:\n"
+            affective_context_str = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\n"
             for warn in affective_warnings:
                 entity = warn["entity"]
                 predicate = warn["predicate"]
@@ -215,9 +212,9 @@ class RCoreKernel:
                 intensity = warn["intensity"]
                 
                 if feeling == "NEGATIVE":
-                    affective_context_str += f"- AVOID '{entity}' (User {predicate}, int={intensity:.1f}).\n"
+                    affective_context_str += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}). Do not use it as an example.\n"
                 else:
-                    affective_context_str += f"- OK '{entity}' (User {predicate}, int={intensity:.1f}).\n"
+                    affective_context_str += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}). You may reference it positively.\n"
         
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
@@ -228,8 +225,7 @@ class RCoreKernel:
             bot_gender=bot_gender,
             user_mode=preferred_mode,
             style_instructions=final_style_instructions,  # Pass combined styles
-            affective_context=affective_context_str,
-            winner_confidence=winner.confidence  # ✨ NEW: передаём confidence для умного подавления вопросов
+            affective_context=affective_context_str
         )
         
         await self.memory.memorize_bot_response(
@@ -251,8 +247,7 @@ class RCoreKernel:
             "sentiment_context_used": bool(affective_warnings),
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
-            "pace_setting": self.config.sliders.pace_setting,
-            "calculated_intuition_gain": intuition_gain_calculated
+            "intuition_gain": self.config.intuition_gain
         }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
@@ -267,10 +262,10 @@ class RCoreKernel:
             internal_stats=internal_stats
         )
 
-    def _process_unified_council(self, council_report: Dict, intuition_gain: float) -> List[AgentSignal]:
+    def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
         """
-        ✨ UPDATED: Unified processing - all 5 agents evaluated by LLM together.
-        Intuition score is multiplied by calculated intuition_gain from pace_setting.
+        ✨ NEW: Unified processing - all 5 agents evaluated by LLM together.
+        Intuition score is multiplied by intuition_gain.
         """
         signals = []
         
@@ -290,9 +285,9 @@ class RCoreKernel:
             
             # ✨ Apply intuition_gain multiplier ONLY to Intuition
             if key == "intuition":
-                final_score = base_score * intuition_gain
+                final_score = base_score * self.config.intuition_gain
                 final_score = max(0.0, min(10.0, final_score))  # Clamp to [0, 10]
-                print(f"[Unified Council] Intuition: base_score={base_score:.2f} × gain={intuition_gain:.2f} = {final_score:.2f}")
+                print(f"[Unified Council] Intuition: base_score={base_score:.2f} × gain={self.config.intuition_gain} = {final_score:.2f}")
             else:
                 final_score = base_score
             
@@ -306,10 +301,9 @@ class RCoreKernel:
     async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
         """
         🔒 OLD: Legacy processing - Intuition evaluated separately, others from council_report.
-        Intuition uses modifiers from agents.py (based on pace_setting).
         Kept for backward compatibility and A/B testing.
         """
-        # Intuition processed independently (uses _calculate_modifier in IntuitionAgent)
+        # Intuition processed independently
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
         
         signals = [intuition_signal]
@@ -358,73 +352,72 @@ class RCoreKernel:
 
     def _generate_style_from_mood(self, mood: MoodVector) -> str:
         """
-        Translates VAD vectors into minimal technical tokens.
-        NO formality hints (PROFESSIONAL/FORMAL/POLITE) to avoid conflict with ADDRESS RULE.
+        Translates VAD numeric vectors into natural language style instructions for the LLM.
         """
         instructions = []
         
         # 1. Arousal (Energy/Tempo)
         if mood.arousal > 0.6:
-            instructions.append("TEMPO: FAST. Sentences: Short.")
+            instructions.append("SENTENCE STRUCTURE: Use short, punchy sentences. High tempo. Be direct.")
         elif mood.arousal < -0.4:
-            instructions.append("TEMPO: SLOW. Sentences: Flowing.")
+            instructions.append("SENTENCE STRUCTURE: Use long, flowing, relaxed sentences. Low tempo. Take your time.")
         
-        # 2. Valence (Emotional Tone)
+        # 2. Valence (Tone)
         if mood.valence > 0.6:
-            instructions.append("TONE: WARM. Emojis OK.")
+            instructions.append("TONE: Enthusiastic, warm, optimistic. You may use expressive punctuation (!) and emojis if appropriate.")
         elif mood.valence < -0.5:
-            instructions.append("TONE: COLD. Minimal punctuation.")
+            instructions.append("TONE: Cold, dry, or melancholic. Avoid exclamation marks. Be minimal.")
             
         # 3. Dominance (Assertiveness)
         if mood.dominance > 0.5:
-            instructions.append("STANCE: ASSERTIVE.")
+            instructions.append("STANCE: Confident, leading, assertive. Don't ask for permission, state facts.")
         elif mood.dominance < -0.3:
-            instructions.append("STANCE: SUPPORTIVE.")
+            instructions.append("STANCE: Soft, accommodating, supportive. Use phrases like 'I think', 'maybe', 'if you want'.")
             
-        # 4. Special States
+        # 4. Combo Special Cases (EHS "Cocktails")
+        # High Arousal + Low Valence = Anger/Stress
         if mood.arousal > 0.5 and mood.valence < -0.4:
-            instructions.append("STATE: STRESSED.")
-        elif mood.arousal > 0.5 and mood.valence > 0.5:
-            instructions.append("STATE: ENERGETIC.")
+            instructions.append("SPECIAL STATE: You are irritated or stressed. Be sharp and defensive.")
+            
+        # High Arousal + High Valence = Euphoria/Manic
+        if mood.arousal > 0.5 and mood.valence > 0.5:
+            instructions.append("SPECIAL STATE: You are excited and eager! Radiate energy.")
 
-        base = f"MOOD: V={mood.valence:.1f} A={mood.arousal:.1f} D={mood.dominance:.1f}\n"
+        base = f"CURRENT INTERNAL MOOD: {mood}\nSTYLE INSTRUCTIONS:\n"
         if not instructions:
-            return base + "STYLE: NEUTRAL."
+            return base + "- Speak in a balanced, neutral, professional manner."
         
-        return base + "STYLE: " + " | ".join(instructions)
+        return base + "- " + "\n- ".join(instructions)
 
     def _format_context_for_llm(self, context: Dict) -> str:
-        """
-        Compact context formatter.
-        """
         lines = []
         
         profile = context.get("user_profile")
         if profile:
-            lines.append("### USER IDENTITY")
-            if profile.get("name"): lines.append(f"Name: {profile['name']}")
-            if profile.get("gender"): lines.append(f"Gender: {profile['gender']}")
-            if profile.get("preferred_mode"): lines.append(f"Address: {profile['preferred_mode']}")
+            lines.append("USER PROFILE (Core Identity):")
+            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
+            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
+            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
             lines.append("")
 
         if context.get("chat_history"):
-            lines.append("### DIALOGUE")
+            lines.append("RECENT DIALOGUE:")
             for msg in context["chat_history"]:
-                role = "U" if msg["role"] == "user" else "A"
+                role = "User" if msg["role"] == "user" else "Assistant"
                 lines.append(f"{role}: {msg['content']}")
             lines.append("") 
             
         if context.get("episodic_memory"):
-            lines.append("### MEMORY")
+            lines.append("PAST EPISODES (Long-term memory):")
             for ep in context["episodic_memory"]:
-                lines.append(f"* {ep.get('raw_text', '')}")
+                lines.append(f"- {ep.get('raw_text', '')}")
         
         if context.get("semantic_facts"):
-            lines.append("### FACTS")
+            lines.append("KNOWN FACTS:")
             for fact in context["semantic_facts"]:
-                lines.append(f"* {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
                 
-        return "\n".join(lines) if lines else "No context."
+        return "\n".join(lines) if lines else "No prior context."
 
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         await asyncio.sleep(0.05)
