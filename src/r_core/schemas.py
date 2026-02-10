@@ -56,6 +56,20 @@ class BotConfig(BaseModel):
 
 # --- Hormonal / Mood System ---
 
+class HormonalState(BaseModel):
+    """
+    Биохимическое состояние ("Большая Четверка")
+    Диапазон: 0.0 - 1.0
+    """
+    ne: float = Field(0.1, ge=0.0, le=1.0, description="Norepinephrine (Arousal/Focus)")
+    da: float = Field(0.3, ge=0.0, le=1.0, description="Dopamine (Motivation/Action)")
+    ht: float = Field(0.5, ge=0.0, le=1.0, description="Serotonin (Stability/Calm)")
+    cort: float = Field(0.1, ge=0.0, le=1.0, description="Cortisol (Stress/Defense)")
+    last_update: datetime = Field(default_factory=datetime.now)
+
+    def __str__(self):
+        return f"NE:{self.ne:.2f} DA:{self.da:.2f} 5HT:{self.ht:.2f} CORT:{self.cort:.2f}"
+
 class MoodVector(BaseModel):
     """
     Модель VAD (Valence, Arousal, Dominance)
@@ -141,7 +155,7 @@ class CoreAction(BaseModel):
     """
     type: str # "send_text", "show_keyboard", "wait"
     payload: Dict[str, Any]
-    
+
 class CoreResponse(BaseModel):
     """
     Финальный ответ ядра
@@ -152,6 +166,7 @@ class CoreResponse(BaseModel):
     # Meta for debugging & logging
     internal_stats: Dict[str, Any] = Field(default_factory=dict) 
     winning_agent: Optional[AgentType] = None
-    current_mood: Optional[MoodVector] = None # <-- Added Mood State
+    current_mood: Optional[MoodVector] = None 
+    current_hormones: Optional[HormonalState] = None # <-- Added Hormones
     processing_mode: ProcessingMode
     memory_updates: Dict[str, int] = Field(default_factory=dict) 
