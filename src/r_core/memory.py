@@ -16,7 +16,7 @@ from src.r_core.infrastructure.db import (
     AsyncSessionLocal, 
     SemanticModel, 
     EpisodicModel, 
-    VolitionalModel, 
+    VolitionalModel,
     ChatHistoryModel,
     UserProfileModel
 )
@@ -216,7 +216,7 @@ class PostgresMemoryStore(AbstractMemoryStore):
             session.add(msg)
             await session.commit()
 
-    async def get_recent_history(self, user_id: int, session_id: str, limit: int = 5) -> List[Dict]:
+    async def get_recent_history(self, user_id: int, session_id: str, limit: int = 6) -> List[Dict]:
         async with AsyncSessionLocal() as session:
             stmt = select(ChatHistoryModel).where(
                 ChatHistoryModel.user_id == user_id,
@@ -259,7 +259,7 @@ class PostgresMemoryStore(AbstractMemoryStore):
             # Simple fields
             if "name" in data: profile.name = data["name"]
             if "gender" in data: profile.gender = data["gender"]
-            if "preferred_mode" in data: profile.preferred_mode = data["preferred_mode"]
+            if "preferred_mode" in data: profile.preferred_mode = data["preferred_mode"
             
             # --- Smart Trait Competition Logic ---
             if "attributes" in data: 
@@ -370,7 +370,7 @@ class MemorySystem:
         patterns = await self.store.get_volitional_patterns(user_id)
         
         # 4. Short Term History
-        history = await self.store.get_recent_history(user_id, session_id, limit=5)
+        history = await self.store.get_recent_history(user_id, session_id, limit=6)
 
         # 5. User Profile
         profile = await self.store.get_user_profile(user_id)
