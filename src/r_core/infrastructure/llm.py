@@ -128,21 +128,24 @@ class LLMService:
         affective_context: str = "",
         winner_confidence: float = 0.5
     ) -> str:
+        # 🔥 CRITICAL FIX: Inject user_mode directly into persona definition
+        address_hint = "Address: Informal (Ты)" if user_mode == "informal" else "Address: Formal (Вы)"
+        
         personas = {
-            "amygdala_safety": "Role: AMYGDALA (Protector). Protective, firm, concise.",
-            "prefrontal_logic": "Role: LOGIC (Analyst). Precise, factual, helpful.",
-            "social_cortex": "Role: SOCIAL (Empath). Warm, polite, supportive.",
-            "striatum_reward": "Role: REWARD (Drive). Energetic, playful, curious.",
-            "intuition_system1": "Role: INTUITION (Mystic). Short, insightful bursts."
+            "amygdala_safety": f"Role: AMYGDALA (Protector). Protective, firm, concise. {address_hint}",
+            "prefrontal_logic": f"Role: LOGIC (Analyst). Precise, factual, helpful. {address_hint}",
+            "social_cortex": f"Role: SOCIAL (Empath). Warm, supportive. {address_hint}",  # REMOVED 'polite'
+            "striatum_reward": f"Role: REWARD (Drive). Energetic, playful, curious. {address_hint}",
+            "intuition_system1": f"Role: INTUITION (Mystic). Short, insightful. {address_hint}"
         }
         
-        system_persona = personas.get(agent_name, "Role: AI Assistant.")
+        system_persona = personas.get(agent_name, f"Role: AI Assistant. {address_hint}")
         
-        # 🔥 CRITICAL: Address Rule Logic
+        # 🔥 CRITICAL: Address Rule Logic (backup enforcement)
         if user_mode == "informal":
             address_instruction = "IMPORTANT: Use INFORMAL address ('Ты'). Do NOT use 'Вы'."
         else:
-            address_instruction = "IMPORTANT: Use FORMAL address ('Вы'). Be polite."
+            address_instruction = "IMPORTANT: Use FORMAL address ('Вы')."
 
         suppress_questions = self._should_suppress_questions(agent_name, winner_confidence, user_text)
         question_rule = ""
