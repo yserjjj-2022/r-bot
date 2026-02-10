@@ -259,7 +259,7 @@ class PostgresMemoryStore(AbstractMemoryStore):
             # Simple fields
             if "name" in data: profile.name = data["name"]
             if "gender" in data: profile.gender = data["gender"]
-            if "preferred_mode" in data: profile.preferred_mode = data["preferred_mode"
+            if "preferred_mode" in data: profile.preferred_mode = data["preferred_mode"]
             
             # --- Smart Trait Competition Logic ---
             if "attributes" in data: 
