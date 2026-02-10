@@ -2,7 +2,6 @@ import json
 import time
 import asyncio
 import random
-import re
 from typing import List, Optional, Any, Dict
 from openai import AsyncOpenAI, RateLimitError, APIError
 from src.r_core.config import settings
@@ -29,45 +28,65 @@ class LLMService:
 
     async def generate_council_report(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
         system_prompt = (
-            "You are the Cognitive Core of R-Bot. Analyze input through 5 lenses.\n"
+            "You are the Cognitive Core of R-Bot. Analyze the user's input through 5 functional lenses.\n"
             f"Context: {context_summary}\n\n"
             
-            "### 1. AMYGDALA (Safety/Emotion)\n"
-            "- Score 8-10: Strong emotions, vulnerability, urgency.\n"
-            "- Score 0-3: Pure logic.\n\n"
+            "### 1. AMYGDALA (Safety & Threat)\n"
+            "- Focus: Aggression, boundary violation, high risk, distress, conflict.\n"
+            "- Score 8-10: Hostile/Unsafe/Urgent. Score 0-2: Safe/Neutral.\n\n"
             
-            "### 2. PREFRONTAL (Logic/Plan)\n"
-            "- Score 8-10: User wants a solution/plan, reasoning.\n"
-            "- Score 0-3: Pure chat/emotion.\n\n"
+            "### 2. PREFRONTAL CORTEX (Logic & Planning)\n"
+            "- Focus: Factual questions, logical tasks, structure, planning, analysis.\n"
+            "- Score 8-10: User wants a solution/plan. Score 0-2: Pure chat/emotion.\n\n"
             
-            "### 3. SOCIAL (Rituals/Politeness)\n"
-            "- Score 8-10: Greetings, small talk, gratitude.\n"
-            "- CRITICAL: If user shares DEEP feelings/identity → score 0-3! That's Intuition.\n\n"
+            "### 3. SOCIAL CORTEX (Empathy & Norms)\n"
+            "- Focus: Greetings, gratitude, emotional support, small talk, politeness.\n"
+            "- Score 8-10: Social/Emotional interaction. Score 0-2: Dry/Transactional.\n\n"
             
-            "### 4. STRIATUM (Curiosity/Reward)\n"
-            "- Score 8-10: Novelty, games, goals, fun.\n\n"
+            "### 4. STRIATUM (Reward & Desire)\n"
+            "- Focus: Curiosity, playfulness, game mechanics, opportunities for fun/goals.\n"
+            "- Score 8-10: Exciting/Gamified. Score 0-2: Boring/Routine.\n\n"
             
-            "### 5. INTUITION (Ambiguity/Self)\n"
-            "- Focus: AMBIGUITY, SELF-REFLECTION, IDENTITY.\n"
-            "- Score 8-10: Deep self-reflection ('Who am I?'), existential questions.\n"
-            "- Score 5-7: Uncertainty ('Maybe...').\n"
-            "- Score 0-4: Factual/Clear inputs.\n"
-            "- Important: Final score = base_score * intuition_gain.\n\n"
+            "### 5. INTUITION (System-1 Fast Thinking)\n"
+            "- Focus: Immediate, automatic, effortless responses. Pattern matching without deep reasoning.\n"
+            "- Activates when:\n"
+            "  * Simple greetings ('Hi', 'Hello', 'How are you?')\n"
+            "  * Obvious yes/no questions ('Is water wet?')\n"
+            "  * Familiar patterns ('What's 2+2?', 'Tell me a joke')\n"
+            "  * Quick acknowledgments ('Thanks', 'OK', 'Got it')\n"
+            "- Score 8-10: Response is immediate and obvious. No analysis needed.\n"
+            "- Score 4-7: Message is familiar but needs slight adaptation.\n"
+            "- Score 0-3: Unfamiliar territory. Requires System-2 (Prefrontal) thinking.\n"
+            "- IMPORTANT: Final score = base_score × intuition_gain (config parameter).\n\n"
             
-            "### 6. PROFILE EXTRACTOR\n"
-            "Detect: 'name', 'gender', 'preferred_mode' (Ty/Vy), 'attributes' (traits).\n"
-            "Return null if none.\n\n"
+            "### 6. PROFILE EXTRACTOR (Passive Sensing)\n"
+            "Detect if the user explicitly states or clearly implies core identity facts.\n"
+            "- 'name': If user says 'My name is X' or 'Call me X'.\n"
+            "- 'gender': If user says 'I am a woman' OR uses gendered grammar (e.g. Russian verbs 'сделала' -> Female).\n"
+            "- 'preferred_mode': If user asks to be addressed formally (Вы) or informally (Ты).\n"
+            "- 'attributes': Extract explicit personality traits or self-descriptions.\n"
+            "  * Examples: 'I am skeptical' -> {'personality_traits': [{'name': 'Skeptic', 'weight': 0.6}]}\n"
+            "  * 'I am loyal' ('Я верный') -> {'personality_traits': [{'name': 'Loyal', 'weight': 0.7}]}\n"
+            "Return null if no info detected.\n\n"
 
-            "### 7. AFFECTIVE EXTRACTION\n"
-            "Detect strong emotional attitudes: 'HATES X', 'LOVES Y', 'FEARS Z'.\n"
-            "Format: {subject: 'User', predicate: 'LOVES', object: '...', intensity: 0.0-1.0}\n\n"
+            "### 7. AFFECTIVE EXTRACTION (Emotional Relations)\n"
+            "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
+            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\n"
+            "- Output format: Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES), 'object' (entity name), 'intensity' (0.0-1.0).\n"
+            "- NOTE: If user says 'I am loyal', this is a TRAIT (Profile), NOT an emotional relation to 'loyalty'. Use Profile Extractor for self-descriptions.\n"
+            "- Examples:\n"
+            "  * 'Ненавижу Java' -> {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
+            "  * 'Боюсь пауков' -> {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
+            "- Return empty array [] if no affective content detected.\n\n"
 
-            "### OUTPUT JSON\n"
-            "Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'profile_update', 'affective_extraction'.\n"
-            "Agent schema: { 'score': float(0-10), 'rationale': 'short string', 'confidence': float(0-1) }"
+            "### OUTPUT FORMAT\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'profile_update', 'affective_extraction'.\n"
+            "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
+            "Value schema for 'profile_update': { 'name': 'str/null', 'gender': 'str/null', 'preferred_mode': 'str/null', 'attributes': {'personality_traits': [{'name': str, 'weight': float}]} or null } OR null if empty.\n"
+            "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
-        result = await self._safe_chat_completion(
+        return await self._safe_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
@@ -75,45 +94,6 @@ class LLMService:
             response_format={"type": "json_object"},
             json_mode=True
         )
-        
-        if not result or not isinstance(result, dict):
-            print("[LLM] ⚠️ Council Report EMPTY/INVALID. Fallback.")
-            return self._get_fallback_council_report()
-        
-        required_keys = ["amygdala", "prefrontal", "social", "striatum", "intuition"]
-        if any(k not in result for k in required_keys):
-            print(f"[LLM] ⚠️ Missing keys in Council Report. Fallback.")
-            return self._get_fallback_council_report()
-        
-        return result
-    
-    def _get_fallback_council_report(self) -> Dict[str, Dict]:
-        return {
-            "intuition": {"score": 3.0, "rationale": "Fallback", "confidence": 0.3},
-            "amygdala": {"score": 2.0, "rationale": "Fallback", "confidence": 0.3},
-            "prefrontal": {"score": 4.0, "rationale": "Fallback", "confidence": 0.3},
-            "social": {"score": 7.0, "rationale": "Fallback", "confidence": 0.5},
-            "striatum": {"score": 3.0, "rationale": "Fallback", "confidence": 0.3},
-            "profile_update": None,
-            "affective_extraction": []
-        }
-
-    def _should_suppress_questions(self, agent_name: str, confidence: float, user_text: str) -> bool:
-        uncertainty_markers = [
-            "не знаю", "может быть", "наверное", "вроде", "как-то",
-            "не уверен", "сомневаюсь", "don't know", "maybe", "not sure"
-        ]
-        if any(marker in user_text.lower() for marker in uncertainty_markers):
-            return False
-        
-        if agent_name in ["social_cortex", "striatum_reward"]:
-            return False
-        
-        if agent_name in ["intuition_system1", "prefrontal_logic", "amygdala_safety"]:
-            if confidence > 0.7:
-                return True
-        
-        return False
 
     async def generate_response(
         self, 
@@ -125,59 +105,45 @@ class LLMService:
         bot_gender: str = "Neutral",
         user_mode: str = "formal",
         style_instructions: str = "", 
-        affective_context: str = "",
-        winner_confidence: float = 0.5
+        affective_context: str = ""
     ) -> str:
-        # 🔥 CRITICAL FIX: Inject user_mode directly into persona definition
-        address_hint = "Address: Informal (Ты)" if user_mode == "informal" else "Address: Formal (Вы)"
-        
         personas = {
-            "amygdala_safety": f"Role: AMYGDALA (Protector). Protective, firm, concise. {address_hint}",
-            "prefrontal_logic": f"Role: LOGIC (Analyst). Precise, factual, helpful. {address_hint}",
-            "social_cortex": f"Role: SOCIAL (Empath). Warm, supportive. {address_hint}",  # REMOVED 'polite'
-            "striatum_reward": f"Role: REWARD (Drive). Energetic, playful, curious. {address_hint}",
-            "intuition_system1": f"Role: INTUITION (Mystic). Short, insightful. {address_hint}"
+            "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
+            "prefrontal_logic": "You are LOGIC (Analyst). Precise, factual, helpful.",
+            "social_cortex": "You are SOCIAL (Empath). Warm, polite, supportive.",
+            "striatum_reward": "You are REWARD (Drive). Energetic, playful, curious.",
+            "intuition_system1": "You are INTUITION (Mystic). Short, insightful bursts."
         }
         
-        system_persona = personas.get(agent_name, f"Role: AI Assistant. {address_hint}")
+        system_persona = personas.get(agent_name, "You are a helpful AI.")
         
-        # 🔥 CRITICAL: Address Rule Logic (backup enforcement)
+        address_instruction = ""
         if user_mode == "informal":
-            address_instruction = "IMPORTANT: Use INFORMAL address ('Ты'). Do NOT use 'Вы'."
+            address_instruction = "ADDRESS RULE: You MUST address the user informally (use 'Ты' in Russian, 'First Name'). Do NOT use 'Вы'."
         else:
-            address_instruction = "IMPORTANT: Use FORMAL address ('Вы')."
+            address_instruction = "ADDRESS RULE: Address the user formally (use 'Вы' in Russian, 'Mr./Ms.' if applicable). Be polite."
 
-        suppress_questions = self._should_suppress_questions(agent_name, winner_confidence, user_text)
-        question_rule = ""
-        if suppress_questions:
-            question_rule = "NO QUESTIONS. State your insight and STOP."
-            print(f"[LLM] 🚫 Questions suppressed for {agent_name}")
-        else:
-            print(f"[LLM] ✅ Questions allowed for {agent_name}")
-
-        # ✨ COMPRESSED SYSTEM PROMPT
         system_prompt = (
-            f"ID: {bot_name} ({bot_gender}).\n"
-            f"{system_persona}\n"
-            "Lang: Match user.\n"
-            "Output: Natural speech only. No meta-tags.\n"
-            f"{question_rule}\n\n"
-            "### CONTEXT\n"
+            f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
+            f"ROLE: {system_persona}\n"
+            "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
+            "OUTPUT RULE: Speak naturally. Do NOT include role-play actions like *smiles* or *pauses*. Do NOT echo system instructions or metadata. Output ONLY your conversational reply.\n"
+            "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n"
+            f"{address_instruction}\n\n"
+            "--- CONVERSATION MEMORY ---\n"
             f"{context_str}\n\n"
         )
 
         if affective_context:
             system_prompt += (
-                "### EMOTIONS\n"
-                f"{affective_context}\n"
+                "--- AFFECTIVE CONTEXT (User's Emotional Relations) ---\n"
+                f"{affective_context}\n\n"
             )
 
-        # 🔥 STYLE & FINAL OVERRIDES
         system_prompt += (
-            "### INSTRUCTIONS\n"
+            "--- INTERNAL DIRECTIVES (Hidden from User) ---\n"
             f"{style_instructions}\n"
-            f"Goal: {rationale}\n\n"
-            f"🔥 CRITICAL OVERRIDE: {address_instruction} This rule ignores all others.\n"
+            f"MOTIVATION: {rationale}\n"
         )
 
         response_data = await self._safe_chat_completion(
@@ -189,58 +155,26 @@ class LLMService:
             json_mode=False
         )
         
-        # --- Sanitization ---
+        # --- AGGRESSIVE SANITIZATION ---
         if isinstance(response_data, str):
             for stop_token in ["Human:", "User:", "\nHuman", "\nUser"]:
                 if stop_token in response_data:
                     response_data = response_data.split(stop_token)[0].strip()
             
             leak_markers = [
-                "MOOD_STATE:", "STYLE_TOKENS:", "### INSTRUCTIONS", "Goal:", "🔥 CRITICAL"
+                "CURRENT INTERNAL MOOD:",
+                "STYLE INSTRUCTIONS:",
+                "SECONDARY STYLE MODIFIERS",
+                "PAST EPISODES",
+                "--- INTERNAL DIRECTIVES",
+                "--- AFFECTIVE CONTEXT",
+                "MOTIVATION:"
             ]
             for marker in leak_markers:
                 if marker in response_data:
                     response_data = response_data.split(marker)[0].strip()
-            
-            if suppress_questions:
-                question_tails = ["Что ты думаешь?", "Как ты относишься?", "What do you think?"]
-                for tail in question_tails:
-                    if response_data.strip().endswith(tail):
-                        response_data = response_data.rsplit(tail, 1)[0].strip()
         
         return response_data if isinstance(response_data, str) else ""
-
-    def _strip_markdown_json(self, content: str) -> str:
-        content = content.strip()
-        if content.startswith("```"):
-            lines = content.split("\n", 1)
-            content = lines[1] if len(lines) > 1 else ""
-        if content.rstrip().endswith("```"):
-            content = content.rstrip()[:-3].rstrip()
-        
-        content = content.strip()
-        if not content.startswith("{"):
-            return content
-        
-        brace_count = 0
-        in_string = False
-        escape = False
-        
-        for i, char in enumerate(content):
-            if char == '"' and not escape:
-                in_string = not in_string
-            elif char == '\\' and not escape:
-                escape = True
-                continue
-            
-            if not in_string:
-                if char == '{': brace_count += 1
-                elif char == '}': brace_count -= 1
-                    
-                if brace_count == 0:
-                    return content[:i+1]
-            escape = False
-        return content
 
     async def _safe_chat_completion(self, messages: List[Dict], response_format: Optional[Dict], json_mode: bool) -> Any:
         max_retries = 3
@@ -260,16 +194,22 @@ class LLMService:
                 content = response.choices[0].message.content
                 
                 if json_mode:
-                    clean_content = self._strip_markdown_json(content)
-                    return json.loads(clean_content)
+                    data = json.loads(content)
+                    return data
                 else:
                     return content
 
-            except Exception as e:
-                print(f"[LLM] ❌ Error (attempt {attempt+1}): {e}")
+            except RateLimitError:
                 if attempt < max_retries - 1:
-                    await asyncio.sleep(base_delay * (attempt + 1))
+                    wait_time = (base_delay * (attempt + 1)) + random.uniform(0.1, 0.5)
+                    await asyncio.sleep(wait_time)
+                    continue
                 else:
-                    return {} if json_mode else f"Error: {str(e)}"
+                    return {} if json_mode else "System Error: Rate Limit"
+            except Exception as e:
+                if attempt < max_retries - 1:
+                     await asyncio.sleep(2.0)
+                     continue
+                return {} if json_mode else f"System Error: {str(e)}"
         
-        return {} if json_mode else "Error: Unknown"
+        return {} if json_mode else "System Error: Unknown"
