@@ -358,41 +358,40 @@ class RCoreKernel:
 
     def _generate_style_from_mood(self, mood: MoodVector) -> str:
         """
-        Translates VAD numeric vectors into concise, technical style tokens.
-        Reduced verbosity to prevent context flooding.
+        Translates VAD vectors into minimal technical tokens.
+        NO formality hints (PROFESSIONAL/FORMAL/POLITE) to avoid conflict with ADDRESS RULE.
         """
         instructions = []
         
         # 1. Arousal (Energy/Tempo)
         if mood.arousal > 0.6:
-            instructions.append("TEMPO: FAST. Sentences: Short/Punchy.")
+            instructions.append("TEMPO: FAST. Sentences: Short.")
         elif mood.arousal < -0.4:
-            instructions.append("TEMPO: SLOW. Sentences: Flowing/Relaxed.")
+            instructions.append("TEMPO: SLOW. Sentences: Flowing.")
         
-        # 2. Valence (Tone)
+        # 2. Valence (Emotional Tone)
         if mood.valence > 0.6:
-            instructions.append("TONE: WARM/OPTIMISTIC. Allow emojis.")
+            instructions.append("TONE: WARM. Emojis OK.")
         elif mood.valence < -0.5:
-            instructions.append("TONE: COLD/MINIMAL. No exclamation marks.")
+            instructions.append("TONE: COLD. Minimal punctuation.")
             
         # 3. Dominance (Assertiveness)
         if mood.dominance > 0.5:
-            instructions.append("STANCE: LEADER. Be assertive. State facts.")
+            instructions.append("STANCE: ASSERTIVE.")
         elif mood.dominance < -0.3:
-            instructions.append("STANCE: SUPPORTIVE. Be accommodating.")
+            instructions.append("STANCE: SUPPORTIVE.")
             
-        # 4. Combo Special Cases
+        # 4. Special States
         if mood.arousal > 0.5 and mood.valence < -0.4:
-            instructions.append("STATE: STRESSED/SHARP.")
-            
-        if mood.arousal > 0.5 and mood.valence > 0.5:
-            instructions.append("STATE: EUPHORIC/ENERGETIC.")
+            instructions.append("STATE: STRESSED.")
+        elif mood.arousal > 0.5 and mood.valence > 0.5:
+            instructions.append("STATE: ENERGETIC.")
 
-        base = f"MOOD_STATE: {mood}\nSTYLE_TOKENS: "
+        base = f"MOOD: V={mood.valence:.1f} A={mood.arousal:.1f} D={mood.dominance:.1f}\n"
         if not instructions:
-            return base + "NEUTRAL/PROFESSIONAL."
+            return base + "STYLE: NEUTRAL."
         
-        return base + " | ".join(instructions)
+        return base + "STYLE: " + " | ".join(instructions)
 
     def _format_context_for_llm(self, context: Dict) -> str:
         """
