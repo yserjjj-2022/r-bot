@@ -1,97 +1,73 @@
 # Neuro-Modulation System Specification (R-Core v2.2)
 
-**Status**: 💡 Concept / Research Phase  
-**Basis**: Computational Neuroscience (Friston, Dayan, Montague)
+**Status**: ✅ Engineering Spec  
+**Principle**: "Mechanical Summation before Cognitive Processing"  
+**Goal**: Reduce LLM latency/tokens by calculating state deterministically in Python.
 
 ---
 
-## 1. Концепция: "Большая Четверка" Модуляторов
-Вместо жестких констант инерции/чувствительности, мы вводим слой виртуальных нейротрансмиттеров. Они регулируют **глобальные параметры** системы (Gain, Thresholds, Precision).
+## 1. The "Big Four" Hormones
+We model internal state using 4 float values (0.0 - 1.0).
 
-### 1.1 Норадреналин (NE) — "Sensitivity / Gain"
-*   **Биологическая роль**: Реакция на новизну (Surprise) и неожиданность. Регулирует соотношение сигнал/шум.
-*   **В R-Core**: Динамический коэффициент `current_sensitivity`.
-*   **Механика**:
-    *   Растет при высоком `Prediction Error` (бот не ожидал такого ответа).
-    *   **High NE**: Чувствительность к входу -> 1.0. Инерция настроения -> 0.0. (Мгновенная реакция, "сброс" старого настроения).
-    *   **Low NE**: Чувствительность -> 0.1. Инерция -> 0.9. (Режим "автопилота", рутина).
-
-### 1.2 Дофамин (DA) — "Gating Threshold / Action"
-*   **Биологическая роль**: Ошибка предсказания награды (RPE). Регулирует "температуру" выбора действия в Базальных Ганглиях.
-*   **В R-Core**: Порог срабатывания агентов (Gating Threshold).
-*   **Механика**:
-    *   Растет при позитивных сюрпризах (Striatum wins) и предвкушении награды.
-    *   **High DA**: Снижает порог для Striatum и Social. Бот становится инициативным, игривым, рискованным.
-    *   **Low DA**: Повышает порог. "Апатия". Бот отвечает только на очень сильные стимулы, преобладает пассивность.
-
-### 1.3 Серотонин (5-HT) — "Stability / Inhibition"
-*   **Биологическая роль**: Регуляция настроения, терпение, подавление импульсивности.
-*   **В R-Core**: Коэффициент `current_inertia` и подавление негативного аффекта.
-*   **Механика**:
-    *   Растет при длительном комфортном взаимодействии (In Sync). Падает при постоянном конфликте.
-    *   **High 5-HT**: Высокая инерция (устойчивость). Бот "прощает" мелкие грубости.
-    *   **Low 5-HT**: Низкая инерция. Импульсивность. Amygdala легче перехватывает контроль.
-
-### 1.4 Кортизол (CORT) — "Stress / Resource Allocation"
-*   **Биологическая роль**: Реакция на хронический стресс. Мобилизация ресурсов (бей/беги) за счет отключения "умных" функций (регенерации, иммунитета, высшей когнитивки).
-*   **В R-Core**: Штраф к `Prefrontal Cortex` и Бонус к `Amygdala`.
-*   **Механика**:
-    *   Накапливается (кумулятивно!) при частых активациях Amygdala (Score > 7). Медленно распадается (Half-life).
-    *   **High CORT**: 
-        *   `PFC Score` умножается на 0.5 (Бот "тупеет", не может строить сложные планы).
-        *   `Amygdala Score` умножается на 1.5 (Гипер-бдительность).
-        *   Стиль ответов становится коротким и рубленым.
+| Hormone | Symbol | Semantic Role | Decay (Half-life) | Triggers (Inputs) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Norepinephrine** | `NE` | **Arousal / Attention**. Reactivity to novelty. | **Short** (5 min) | Spikes on Prediction Error. Decays rapidly to calm. |
+| **Dopamine** | `DA` | **Motivation / Reward**. Drive to act. | **Medium** (15 min) | Spikes on positive triggers (In Sync). |
+| **Serotonin** | `5HT` | **Stability / Patience**. Impulse control. | **Long** (6 hours) | Accumulates with "Time in Sync". Buffers negative inputs. |
+| **Cortisol** | `CORT` | **Stress / Defense**. Resource shutdown. | **Very Long** (12 hours) | Accumulates on "Lost" state or aggression. Blocks PFC. |
 
 ---
 
-## 2. Математическая Модель (Draft)
+## 2. Temporal Metabolism (The "Sense of Time")
 
-```python
-# Базовые параметры
-BASE_SENSITIVITY = 0.2
-BASE_INERTIA = 0.8
+Before any text processing, the system "metabolizes" the time passed since the last interaction (`delta_t` in minutes).
 
-# 1. Расчет уровней (0.0 - 1.0)
-ne_level = sigmoid(prediction_error)
-da_level = sigmoid(reward_prediction_error)
-ht_level = calculate_rolling_average(positive_interactions, window=10)
-cort_level = decay(old_cort) + (amygdala_activation * 0.1)
+### Decay Formulas
+All hormones decay towards a baseline (usually 0.0 or 0.1) using an exponential decay function:
+$$ H_{new} = H_{old} \times (0.5)^{\frac{\Delta t}{half\_life}} $$
 
-# 2. Динамическая Чувствительность (Gain Control)
-# NE повышает чувствительность, 5-HT понижает (успокаивает)
-current_sensitivity = BASE_SENSITIVITY + (0.7 * ne_level) - (0.2 * ht_level)
-current_sensitivity = clip(current_sensitivity, 0.05, 1.0)
-
-# 3. Динамическая Инерция (Stability)
-# NE сбрасывает инерцию (шок), 5-HT повышает её (дзен)
-current_inertia = BASE_INERTIA + (0.2 * ht_level) - (0.8 * ne_level)
-current_inertia = clip(current_inertia, 0.0, 0.95)
-
-# 4. Обновление Настроения
-new_mood = (old_mood * current_inertia) + (impact_vector * current_sensitivity)
-
-# 5. Модуляция Агентов (Cortisol Effect)
-if cort_level > 0.6:
-    agent_scores['prefrontal'] *= 0.5  # Shutdown logic
-    agent_scores['amygdala'] *= 1.5    # Hyper-vigilance
-```
+### Emergent Effects
+1.  **"Wake Up" Effect** (`Delta > 8 hours`):
+    *   `NE` drops to ~0 (Calm).
+    *   `CORT` drops significant (Stress release).
+    *   Result: Bot greets the user freshly, forgetting yesterday's irritation.
+2.  **"Ping-Pong" Effect** (`Delta < 30 seconds`):
+    *   `NE` has no time to decay -> Accumulates high -> High Tempo.
 
 ---
 
-## 3. Эмерджентные Эффекты
+## 3. Mechanical Summation (Python Layer)
 
-1.  **Эффект "Ты меня напугал!"**: 
-    Резкое оскорбление (Surprise) -> Всплеск NE -> Инерция падает в 0 -> Настроение мгновенно падает в страх (минуя плавный переход).
-2.  **Эффект "Выгорание"**:
-    Долгий спор -> Рост Cortisol -> Бот перестает понимать сложные аргументы (PFC off) -> Переходит на личности или замыкается.
-3.  **Эффект "Безопасная гавань"**:
-    Дружеская беседа -> Рост Serotonin -> Бот становится толерантным к ошибкам пользователя, не "агрится" по мелочам.
+We map hormones + time into **3 Control Signals** using simple linear algebra.
+
+### Signal A: `Tempo` (0.0 - 1.0)
+*Controls response length and speed.*
+$$ Tempo = NE + (0.5 \times CORT) - (0.5 \times 5HT) $$
+*   **> 0.8 (High)**: "Burst Mode". Short sentences. No intros.
+*   **< 0.3 (Low)**: "Narrative Mode". Flowing, reflective text.
+
+### Signal B: `SocialTemperature` (0.0 - 1.0)
+*Controls warmth and openness.*
+$$ Temp = 5HT + DA - CORT $$
+*   **> 0.7 (Warm)**: Polite, using emojis, supportive.
+*   **< 0.3 (Cold)**: Dry, formal, distant.
+
+### Signal C: `CognitiveLoad` (0.0 - 1.0)
+*Controls how much "thinking" is allowed.*
+$$ Load = 1.0 - CORT + (0.3 \times DA) $$
+*   **Low Load (< 0.4)**: Block complex logic. Fallback to simple answers. (Stress stupidity).
 
 ---
 
-## 4. План реализации
+## 4. Token-Efficient Style Injection
 
-1.  **Этап A**: Добавить поля `ne`, `da`, `5ht`, `cort` в `RCoreKernel`.
-2.  **Этап B**: Реализовать расчет `prediction_error` (нужен модуль Predictive Processing).
-3.  **Этап C**: Внедрить формулы модификации `mood` и `scores`.
-4.  **Этап D**: Визуализация уровней гормонов в Streamlit (Dashboard).
+Instead of describing the state, we inject **Pre-Computed Constraints**.
+
+| Combined State | Generated System Instruction (Max 10 tokens) |
+| :--- | :--- |
+| **High Tempo** | `[CONSTRAINT: Max 15 words. Direct answer.]` |
+| **Low Tempo** | `[STYLE: Relaxed, narrative, detailed.]` |
+| **High Cortisol** | `[TONE: Defensive, cold, minimal.]` |
+| **High Dopamine** | `[TONE: Enthusiastic, pro-active!]` |
+
+This bypasses the need for the LLM to "reason" about emotions. It just follows formatting constraints.
