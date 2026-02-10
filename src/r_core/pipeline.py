@@ -11,7 +11,8 @@ from .schemas import (
     AgentType,
     MoodVector,
     SemanticTriple,
-    AgentSignal
+    AgentSignal,
+    HormonalState 
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
@@ -23,6 +24,7 @@ from .agents import (
     SocialAgent,
     StriatumAgent
 )
+from .neuromodulation import NeuroModulationSystem 
 
 class RCoreKernel:
     def __init__(self, config: BotConfig):
@@ -32,6 +34,9 @@ class RCoreKernel:
         
         # --- EHS: Internal State ---
         self.current_mood = MoodVector(valence=0.1, arousal=0.1, dominance=0.0) 
+        
+        # --- Neuro-Modulation System (Hormonal Physics) ---
+        self.neuromodulation = NeuroModulationSystem()
         
         # Init agents
         self.agents = [
@@ -49,6 +54,11 @@ class RCoreKernel:
         mode="ZOMBIE" -> Simple LLM pass-through (No memory, No personality).
         """
         start_time = datetime.now()
+        
+        # --- 0. Temporal Metabolism (Sense of Time) ---
+        # Calculate delta_t and apply decay BEFORE any cognitive processing
+        delta_minutes = self.neuromodulation.metabolize_time(message.timestamp)
+        print(f"[Neuro] Time passed: {delta_minutes:.1f} min. New State: {self.neuromodulation.state}")
         
         # --- ZOMBIE MODE (Bypass Everything) ---
         if mode == "ZOMBIE":
@@ -183,7 +193,18 @@ class RCoreKernel:
             adverb_context_str = "\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\n" + "\n".join(adverb_instructions)
             print(f"[Neuro-Modulation] Applied styles from: {[s.agent_name for s in strong_losers]}")
         
+        # Legacy Mood update (for backward compatibility with internal metrics)
         self._update_mood(winner)
+        
+        # --- Hormonal Reactive Update ---
+        # Update hormones based on who won and implicit Prediction Error
+        # TODO: Implement real PE calculation. For now, infer from winner.
+        implied_pe = 0.5
+        if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 # Threat = Surprise
+        elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 # Intuition = High Confidence match
+        elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 # Reward = Everything good
+        
+        self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name)
         
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
         
@@ -193,11 +214,14 @@ class RCoreKernel:
 
         bot_gender = getattr(self.config, "gender", "Neutral")
         
-        # --- EHS: Generate Dynamic Style Instructions (SEPARATE from context) ---
-        mood_style_prompt = self._generate_style_from_mood(self.current_mood)
+        # --- STYLE GENERATION ---
+        # REPLACED legacy mood prompt with Mechanical Summation
+        # Old: mood_style_prompt = self._generate_style_from_mood(self.current_mood)
+        # New:
+        mechanical_style_instruction = self.neuromodulation.get_style_instruction()
         
         # Combine Mood + Neuro-Modulation
-        final_style_instructions = mood_style_prompt + "\n" + adverb_context_str
+        final_style_instructions = mechanical_style_instruction + "\n" + adverb_context_str
         
         # ✨ Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
@@ -242,6 +266,7 @@ class RCoreKernel:
             "winner_reason": winner.rationale_short,
             "all_scores": all_scores,
             "mood_state": str(self.current_mood),
+            "hormonal_state": str(self.neuromodulation.state), # Log hormones
             "active_style": final_style_instructions,
             "affective_triggers_detected": affective_triggers_count,
             "sentiment_context_used": bool(affective_warnings),
@@ -258,6 +283,7 @@ class RCoreKernel:
             ],
             winning_agent=winner.agent_name,
             current_mood=self.current_mood, 
+            current_hormones=self.neuromodulation.state, # Pass to UI
             processing_mode=ProcessingMode.SLOW_PATH,
             internal_stats=internal_stats
         )
@@ -340,8 +366,7 @@ class RCoreKernel:
         
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
         
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
-        
+        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05\n        
         self.current_mood.valence = (self.current_mood.valence * INERTIA) + (impact.valence * force)
         self.current_mood.arousal = (self.current_mood.arousal * INERTIA) + (impact.arousal * force)
         self.current_mood.dominance = (self.current_mood.dominance * INERTIA) + (impact.dominance * force)
