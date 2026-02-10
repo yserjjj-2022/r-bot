@@ -179,11 +179,11 @@ class RCoreKernel:
         adverb_instructions = []
         for loser in strong_losers:
             if loser.style_instruction:
-                adverb_instructions.append(f"- {loser.agent_name.name}: {loser.style_instruction}")
+                adverb_instructions.append(f"[{loser.agent_name.name}]: {loser.style_instruction}")
         
         adverb_context_str = ""
         if adverb_instructions:
-            adverb_context_str = "\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\n" + "\n".join(adverb_instructions)
+            adverb_context_str = "\nADVERBS:\n" + "\n".join(adverb_instructions)
             print(f"[Neuro-Modulation] Applied styles from: {[s.agent_name for s in strong_losers]}")
         
         self._update_mood(winner)
@@ -192,7 +192,7 @@ class RCoreKernel:
         
         # 5. Response Generation (Inject Mood Styles)
         if profile_update:
-             context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
+             context_str += f"\n[SYSTEM: Profile Updated: {cleaned_update}]"
 
         bot_gender = getattr(self.config, "gender", "Neutral")
         
@@ -200,14 +200,14 @@ class RCoreKernel:
         mood_style_prompt = self._generate_style_from_mood(self.current_mood)
         
         # Combine Mood + Neuro-Modulation
-        final_style_instructions = mood_style_prompt + "\n" + adverb_context_str
+        final_style_instructions = mood_style_prompt + adverb_context_str
         
         # ✨ Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
         affective_context_str = ""
         
         if affective_warnings:
-            affective_context_str = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\n"
+            affective_context_str = "⚠️ EMOTIONAL CONTEXT:\n"
             for warn in affective_warnings:
                 entity = warn["entity"]
                 predicate = warn["predicate"]
@@ -215,9 +215,9 @@ class RCoreKernel:
                 intensity = warn["intensity"]
                 
                 if feeling == "NEGATIVE":
-                    affective_context_str += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}). Do not use it as an example.\n"
+                    affective_context_str += f"- AVOID '{entity}' (User {predicate}, int={intensity:.1f}).\n"
                 else:
-                    affective_context_str += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}). You may reference it positively.\n"
+                    affective_context_str += f"- OK '{entity}' (User {predicate}, int={intensity:.1f}).\n"
         
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
@@ -358,72 +358,74 @@ class RCoreKernel:
 
     def _generate_style_from_mood(self, mood: MoodVector) -> str:
         """
-        Translates VAD numeric vectors into natural language style instructions for the LLM.
+        Translates VAD numeric vectors into concise, technical style tokens.
+        Reduced verbosity to prevent context flooding.
         """
         instructions = []
         
         # 1. Arousal (Energy/Tempo)
         if mood.arousal > 0.6:
-            instructions.append("SENTENCE STRUCTURE: Use short, punchy sentences. High tempo. Be direct.")
+            instructions.append("TEMPO: FAST. Sentences: Short/Punchy.")
         elif mood.arousal < -0.4:
-            instructions.append("SENTENCE STRUCTURE: Use long, flowing, relaxed sentences. Low tempo. Take your time.")
+            instructions.append("TEMPO: SLOW. Sentences: Flowing/Relaxed.")
         
         # 2. Valence (Tone)
         if mood.valence > 0.6:
-            instructions.append("TONE: Enthusiastic, warm, optimistic. You may use expressive punctuation (!) and emojis if appropriate.")
+            instructions.append("TONE: WARM/OPTIMISTIC. Allow emojis.")
         elif mood.valence < -0.5:
-            instructions.append("TONE: Cold, dry, or melancholic. Avoid exclamation marks. Be minimal.")
+            instructions.append("TONE: COLD/MINIMAL. No exclamation marks.")
             
         # 3. Dominance (Assertiveness)
         if mood.dominance > 0.5:
-            instructions.append("STANCE: Confident, leading, assertive. Don't ask for permission, state facts.")
+            instructions.append("STANCE: LEADER. Be assertive. State facts.")
         elif mood.dominance < -0.3:
-            instructions.append("STANCE: Soft, accommodating, supportive. Use phrases like 'I think', 'maybe', 'if you want'.")
+            instructions.append("STANCE: SUPPORTIVE. Be accommodating.")
             
-        # 4. Combo Special Cases (EHS "Cocktails")
-        # High Arousal + Low Valence = Anger/Stress
+        # 4. Combo Special Cases
         if mood.arousal > 0.5 and mood.valence < -0.4:
-            instructions.append("SPECIAL STATE: You are irritated or stressed. Be sharp and defensive.")
+            instructions.append("STATE: STRESSED/SHARP.")
             
-        # High Arousal + High Valence = Euphoria/Manic
         if mood.arousal > 0.5 and mood.valence > 0.5:
-            instructions.append("SPECIAL STATE: You are excited and eager! Radiate energy.")
+            instructions.append("STATE: EUPHORIC/ENERGETIC.")
 
-        base = f"CURRENT INTERNAL MOOD: {mood}\nSTYLE INSTRUCTIONS:\n"
+        base = f"MOOD_STATE: {mood}\nSTYLE_TOKENS: "
         if not instructions:
-            return base + "- Speak in a balanced, neutral, professional manner."
+            return base + "NEUTRAL/PROFESSIONAL."
         
-        return base + "- " + "\n- ".join(instructions)
+        return base + " | ".join(instructions)
 
     def _format_context_for_llm(self, context: Dict) -> str:
+        """
+        Compact context formatter.
+        """
         lines = []
         
         profile = context.get("user_profile")
         if profile:
-            lines.append("USER PROFILE (Core Identity):")
-            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
-            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
-            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
+            lines.append("### USER IDENTITY")
+            if profile.get("name"): lines.append(f"Name: {profile['name']}")
+            if profile.get("gender"): lines.append(f"Gender: {profile['gender']}")
+            if profile.get("preferred_mode"): lines.append(f"Address: {profile['preferred_mode']}")
             lines.append("")
 
         if context.get("chat_history"):
-            lines.append("RECENT DIALOGUE:")
+            lines.append("### DIALOGUE")
             for msg in context["chat_history"]:
-                role = "User" if msg["role"] == "user" else "Assistant"
+                role = "U" if msg["role"] == "user" else "A"
                 lines.append(f"{role}: {msg['content']}")
             lines.append("") 
             
         if context.get("episodic_memory"):
-            lines.append("PAST EPISODES (Long-term memory):")
+            lines.append("### MEMORY")
             for ep in context["episodic_memory"]:
-                lines.append(f"- {ep.get('raw_text', '')}")
+                lines.append(f"* {ep.get('raw_text', '')}")
         
         if context.get("semantic_facts"):
-            lines.append("KNOWN FACTS:")
+            lines.append("### FACTS")
             for fact in context["semantic_facts"]:
-                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+                lines.append(f"* {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
                 
-        return "\n".join(lines) if lines else "No prior context."
+        return "\n".join(lines) if lines else "No context."
 
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         await asyncio.sleep(0.05)
