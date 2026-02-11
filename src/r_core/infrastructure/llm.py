@@ -30,12 +30,12 @@ class LLMService:
             print(f"[LLMService] Embedding Error: {e}")
             raise e
 
-    async def generate_council_report(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
+    def _build_council_prompt_base(self, context_summary: str) -> str:
         """
-        Generate council report with fallback to last valid state.
-        If LLM fails or returns invalid JSON, uses cached report.
+        Базовый промпт для council_report (только агенты).
+        Используется в light и full режимах.
         """
-        system_prompt = (
+        return (
             "You are the Cognitive Core of R-Bot. Analyze the user's input through 5 functional lenses.\n"
             f"Context: {context_summary}\n\n"
             
@@ -57,44 +57,64 @@ class LLMService:
             
             "### 5. INTUITION (System-1 Fast Thinking)\n"
             "- Focus: Immediate, automatic, effortless responses. Pattern matching without deep reasoning.\n"
-            "- Activates when:\n"
-            "  * Simple greetings ('Hi', 'Hello', 'How are you?')\n"
-            "  * Obvious yes/no questions ('Is water wet?')\n"
-            "  * Familiar patterns ('What's 2+2?', 'Tell me a joke')\n"
-            "  * Quick acknowledgments ('Thanks', 'OK', 'Got it')\n"
-            "- Score 8-10: Response is immediate and obvious. No analysis needed.\n"
+            "- Score 8-10: Response is immediate and obvious (greetings, simple Q&A). No analysis needed.\n"
             "- Score 4-7: Message is familiar but needs slight adaptation.\n"
-            "- Score 0-3: Unfamiliar territory. Requires System-2 (Prefrontal) thinking.\n"
-            "- IMPORTANT: Final score = base_score × intuition_gain (config parameter).\n\n"
-            
-            "### 6. PROFILE EXTRACTOR (Passive Sensing)\n"
-            "Detect if the user explicitly states or clearly implies core identity facts.\n"
-            "- 'name': If user says 'My name is X' or 'Call me X'.\n"
-            "- 'gender': If user says 'I am a woman' OR uses gendered grammar (e.g. Russian verbs 'сделала' -> Female).\n"
-            "- 'preferred_mode': If user asks to be addressed formally (Вы) or informally (Ты).\n"
-            "- 'attributes': Extract explicit personality traits or self-descriptions.\n"
-            "  * Examples: 'I am skeptical' -> {'personality_traits': [{'name': 'Skeptic', 'weight': 0.6}]}\n"
-            "  * 'I am loyal' ('Я верный') -> {'personality_traits': [{'name': 'Loyal', 'weight': 0.7}]}\n"
-            "Return null if no info detected.\n\n"
+            "- Score 0-3: Unfamiliar territory. Requires System-2 (Prefrontal) thinking.\n\n"
+        )
 
-            "### 7. AFFECTIVE EXTRACTION (Emotional Relations)\n"
+    def _build_affective_block(self) -> str:
+        """
+        Блок извлечения эмоциональных отношений пользователя.
+        Добавляется только в full режиме.
+        """
+        return (
+            "### 6. AFFECTIVE EXTRACTION (Emotional Relations)\n"
             "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
             "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\n"
-            "- Output format: Array of objects with keys: 'subject' (always 'User'), 'predicate' (LOVES/HATES/FEARS/ENJOYS/DESPISES), 'object' (entity name), 'intensity' (0.0-1.0).\n"
-            "- NOTE: If user says 'I am loyal', this is a TRAIT (Profile), NOT an emotional relation to 'loyalty'. Use Profile Extractor for self-descriptions.\n"
+            "- Output format: [{'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'entity', 'intensity': float(0-1)}]\n"
             "- Examples:\n"
             "  * 'Ненавижу Java' -> {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
             "  * 'Боюсь пауков' -> {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
             "- Return empty array [] if no affective content detected.\n\n"
+        )
 
+    async def generate_council_report_light(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
+        """
+        LIGHT MODE: Только агенты (AMYGDALA, PREFRONTAL, SOCIAL, STRIATUM, INTUITION).
+        Используется для 95% запросов (без эмоциональных маркеров).
+        ~520 токенов input.
+        """
+        system_prompt = self._build_council_prompt_base(context_summary)
+        system_prompt += (
             "### OUTPUT FORMAT\n"
-            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'profile_update', 'affective_extraction'.\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition'.\n"
+            "Value schema: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }"
+        )
+        
+        return await self._execute_council_report(user_text, system_prompt, mode="light")
+
+    async def generate_council_report_full(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
+        """
+        FULL MODE: Агенты + Affective Extraction.
+        Используется для 5% запросов (с эмоциональными маркерами).
+        ~740 токенов input.
+        """
+        system_prompt = self._build_council_prompt_base(context_summary)
+        system_prompt += self._build_affective_block()
+        system_prompt += (
+            "### OUTPUT FORMAT\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'affective_extraction'.\n"
             "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
-            "Value schema for 'profile_update': { 'name': 'str/null', 'gender': 'str/null', 'preferred_mode': 'str/null', 'attributes': {'personality_traits': [{'name': str, 'weight': float}]} or null } OR null if empty.\n"
             "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
-        prompt = user_text  # Промпт для логирования
+        return await self._execute_council_report(user_text, system_prompt, mode="full")
+
+    async def _execute_council_report(self, user_text: str, system_prompt: str, mode: str) -> Dict:
+        """
+        Общая логика выполнения council_report с fallback механизмом.
+        """
+        prompt = user_text  # Для логирования
         raw_response = None
         
         try:
@@ -107,7 +127,7 @@ class LLMService:
                 json_mode=True
             )
             
-            # Пытаемся распарсить JSON
+            # Парсим JSON
             if isinstance(raw_response, str):
                 council_report = json.loads(raw_response)
             else:
@@ -118,35 +138,26 @@ class LLMService:
             missing_keys = [k for k in required_keys if k not in council_report]
             
             if missing_keys:
-                # Логируем в БД
+                # Логируем ошибку
                 await log_llm_raw_response(
-                    prompt_type="council_report",
+                    prompt_type=f"council_report_{mode}",
                     raw_request=prompt[:2000],
                     raw_response=str(raw_response)[:5000],
                     parse_status="missing_keys",
                     error_message=f"Missing: {missing_keys}"
                 )
                 
-                # Fallback на последнее валидное состояние
+                # Fallback
                 return self._get_fallback_council_report()
             
-            # Успех! Сохраняем как последнее валидное
+            # Успех! Сохраняем в кэш
             self.last_valid_council_report = council_report
-            
-            # Логируем успешный ответ (опционально, можно отключить)
-            # await log_llm_raw_response(
-            #     prompt_type="council_report",
-            #     raw_request=prompt[:2000],
-            #     raw_response=str(raw_response)[:5000],
-            #     parse_status="success"
-            # )
             
             return council_report
             
         except json.JSONDecodeError as e:
-            # JSON невалидный
             await log_llm_raw_response(
-                prompt_type="council_report",
+                prompt_type=f"council_report_{mode}",
                 raw_request=prompt[:2000],
                 raw_response=str(raw_response)[:5000] if raw_response else "N/A",
                 parse_status="json_error",
@@ -155,9 +166,8 @@ class LLMService:
             return self._get_fallback_council_report()
             
         except Exception as e:
-            # Любая другая ошибка (timeout, API error)
             await log_llm_raw_response(
-                prompt_type="council_report",
+                prompt_type=f"council_report_{mode}",
                 raw_request=prompt[:2000],
                 raw_response="N/A",
                 parse_status="api_error",
@@ -173,7 +183,7 @@ class LLMService:
             print("[LLM] Using cached council report (LLM failed)")
             return self.last_valid_council_report
         
-        # Если нет кэша — возвращаем нейтральное состояние
+        # Нейтральное состояние по умолчанию
         print("[LLM] No cached report, using neutral default")
         return {
             "intuition": {"score": 5.0, "rationale": "Fallback: neutral state", "confidence": 0.5},
