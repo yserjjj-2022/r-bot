@@ -1,4 +1,5 @@
 import uuid
+import os
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -207,3 +208,74 @@ async def log_turn_metrics(
             await session.commit()
     except Exception as e:
         print(f"[Metrics] Failed to log turn metrics: {e}")
+
+# --- LLM Raw Response Logging (Circular Buffer) ---
+
+ENABLE_LLM_RAW_LOGGING = os.getenv("ENABLE_LLM_RAW_LOGGING", "false").lower() == "true"
+
+async def log_llm_raw_response(
+    prompt_type: str,
+    raw_request: str,
+    raw_response: str,
+    parse_status: str,
+    error_message: Optional[str] = None,
+    user_id: str = "system",
+    session_id: Optional[str] = None,
+    max_records: int = 20
+):
+    """
+    Логирует сырой ответ LLM в БД (circular buffer).
+    
+    Args:
+        prompt_type: Тип запроса ('council_report', 'response_generation', etc.)
+        raw_request: Промпт (обрезается до 2000 символов)
+        raw_response: Ответ LLM (обрезается до 5000 символов)
+        parse_status: Статус ('success', 'json_error', 'timeout', 'api_error', 'missing_keys')
+        error_message: Описание ошибки (опционально)
+        user_id: ID пользователя (по умолчанию 'system')
+        session_id: ID сессии (опционально)
+        max_records: Максимальное количество записей в буфере (по умолчанию 20)
+    
+    Behavior:
+        - Если ENABLE_LLM_RAW_LOGGING=false → ничего не делает (silent fail)
+        - Если таблица не существует → silent fail (не крашит основной flow)
+        - Автоматически удаляет старые записи (оставляет только последние max_records)
+    """
+    # Проверяем флаг
+    if not ENABLE_LLM_RAW_LOGGING:
+        return
+    
+    try:
+        # Обрезаем длинные строки для экономии места
+        raw_request_truncated = raw_request[:2000] if raw_request else None
+        raw_response_truncated = raw_response[:5000] if raw_response else None
+        
+        async with engine.begin() as conn:
+            # Вставляем новую запись
+            await conn.execute(text("""
+                INSERT INTO llm_raw_responses 
+                (user_id, session_id, prompt_type, raw_request, raw_response, parse_status, error_message)
+                VALUES (:user_id, :session_id, :prompt_type, :raw_request, :raw_response, :parse_status, :error_message)
+            """), {
+                "user_id": user_id,
+                "session_id": session_id,
+                "prompt_type": prompt_type,
+                "raw_request": raw_request_truncated,
+                "raw_response": raw_response_truncated,
+                "parse_status": parse_status,
+                "error_message": error_message
+            })
+            
+            # Удаляем старые записи (circular buffer)
+            await conn.execute(text("""
+                DELETE FROM llm_raw_responses
+                WHERE id NOT IN (
+                    SELECT id FROM llm_raw_responses
+                    ORDER BY timestamp DESC
+                    LIMIT :max_records
+                )
+            """), {"max_records": max_records})
+            
+    except Exception as e:
+        # Silent fail - не ломаем основной flow, если что-то пошло не так
+        print(f"[LLM Raw Logging] Failed to log (non-critical): {e}")
