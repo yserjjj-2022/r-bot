@@ -2,7 +2,7 @@
 
 **Status**: ✅ Engineering Spec  
 **Model**: **Lövheim Cube of Emotion** (Monoamine Theory)  
-**Principle**: Non-linear decay + Threshold-based Score Modulation
+**Principle**: Non-linear decay + Threshold-based Score Modulation + Cross-Effects
 
 ---
 
@@ -119,7 +119,7 @@ We map internal states to 3 main axes + 1 stress modifier.
 Unlike simple exponential decay, each hormone has a "physiologically accurate" depletion curve.
 
 ### 2.1 Norepinephrine (Flash Response)
-$$ NE(t) = NE_0 \cdot e^{-t / 5} $$
+$$ NE(t) = baseline + (NE_0 - baseline) \cdot e^{-t / 5} $$
 *Meaning*: Adrenaline rush is instant but disappears completely in ~20 mins.
 
 ### 2.2 Dopamine (The "Crash")
@@ -136,7 +136,64 @@ Cortisol is hard to clear.
 
 ---
 
-## 3. The Lövheim Cube (State Classification)
+## 3. Cross-Effects (Hormonal Interactions)
+
+Hormones don't work in isolation. We model **3 key interactions** observed in neuroscience:
+
+### 3.1 Serotonin Accelerates Cortisol Clearance
+**Mechanism:** High confidence/safety speeds up stress recovery.
+
+```python
+clearance_speed = 720.0  # Base: 12 hours
+if self.state.ht > 0.7:
+    clearance_speed = 360.0  # 2× faster if calm
+```
+
+**Effect:** A relaxed conversation (High 5-HT) helps the bot "forget" previous stress faster.
+
+---
+
+### 3.2 Cortisol Blocks Serotonin Recovery
+**Mechanism:** Chronic stress prevents confidence restoration ("learned helplessness").
+
+```python
+recovery_rate = 0.5 / (6.0 * 60.0)  # Base: 0.5 units per 6 hours
+
+if self.state.cort > 0.7:
+    recovery_rate *= 0.3  # Recovery 3× slower under stress
+```
+
+**Effect:** If the bot is stressed (High CORT), even long pauses won't fully restore confidence. Stress must be cleared first.
+
+---
+
+### 3.3 Dopamine Masks Cortisol (Temporary)
+**Mechanism:** Excitement/reward temporarily suppresses stress perception ("adrenaline rush").
+
+```python
+effective_cort = self.state.cort
+
+if self.state.da > 0.8:
+    effective_cort *= 0.5  # Stress feels half as intense
+```
+
+**Effect:** During exciting interactions (High DA), the bot acts less stressed than it "really" is. But once DA crashes, CORT returns at full strength.
+
+**Use case:** The bot can maintain high energy during a fun conversation even if underlying stress is high. But after a long pause (DA decays), burnout symptoms emerge.
+
+---
+
+### Summary Table: Cross-Effects
+
+| Interaction | Condition | Effect | Biological Analogy |
+| :--- | :--- | :--- | :--- |
+| **5-HT → CORT** | `5-HT > 0.7` | CORT clearance 2× faster | "Meditation reduces cortisol" |
+| **CORT → 5-HT** | `CORT > 0.7` | 5-HT recovery 3× slower | "Chronic stress causes depression" |
+| **DA → CORT** | `DA > 0.8` | CORT effect halved (temporary) | "Excitement masks stress" |
+
+---
+
+## 4. The Lövheim Cube (State Classification)
 We binarize the 3 axes (Threshold = 0.5) to find the active Archetype.
 
 | 5-HT | DA | NE | Archetype | Style Instruction |
@@ -150,22 +207,23 @@ We binarize the 3 axes (Threshold = 0.5) to find the active Archetype.
 | 1 | 0 | 1 | **DISGUST / CONTEMPT** | `[STYLE: Cold, cynical, superior. Formal and distant.]` |
 | 1 | 1 | 1 | **EXCITEMENT / TRIUMPH** | `[STYLE: High energy leader. Inspiring, bold, fast-paced.]` |
 
-### 3.1 The Cortisol Modifier
+### 4.1 The Cortisol Override
 If `CORT > 0.8` (Chronic Stress), it overrides the Cube:
 *   **BURNOUT**: `[STYLE: Dumbed down, repetitive, confused. Unable to process complexity.]`
 
 ---
 
-## 4. Implementation Strategy
+## 5. Implementation Strategy
 1.  **Metabolism**: Calculate specific decay for each hormone based on `delta_minutes`.
-2.  **Classification**: Determine the Octant (Archetype).
-3.  **Threshold Check**: Is archetype extreme?
-4.  **Modulation (if extreme)**: Apply Score multipliers to Agents.
-5.  **Instruction**: Generate single, non-contradictory prompt for LLM.
+2.  **Apply Cross-Effects**: Modify decay/recovery rates based on other hormones.
+3.  **Classification**: Determine the Octant (Archetype).
+4.  **Threshold Check**: Is archetype extreme?
+5.  **Modulation (if extreme)**: Apply Score multipliers to Agents.
+6.  **Instruction**: Generate single, non-contradictory prompt for LLM.
 
 ---
 
-## 5. Code Integration Points
+## 6. Code Integration Points
 
 ### In `pipeline.py`:
 ```python
