@@ -27,6 +27,14 @@ from .agents import (
 from .neuromodulation import NeuroModulationSystem 
 
 class RCoreKernel:
+    # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
+    # Сколько последних сообщений передавать в council_report для анализа агентами.
+    # Рациональ: Эмоциональное сглаживание происходит через Hormonal Physics (NE, DA, 5-HT, CORT),
+    # поэтому council_report должен анализировать ТОЛЬКО текущий момент, без усреднения истории.
+    COUNCIL_CONTEXT_DEPTH = 1  # 1 = только последнее сообщение бота (для минимального контекста)
+                                # 2 = последнее сообщение бота + предыдущее юзера
+                                # 3 = полная мини-цепочка диалога
+    
     def __init__(self, config: BotConfig):
         self.config = config
         self.llm = LLMService() 
@@ -113,10 +121,16 @@ class RCoreKernel:
         )
 
         # 3. Parliament Debate
-        context_str = self._format_context_for_llm(context)
+        # Council: минимальный контекст (управляется через COUNCIL_CONTEXT_DEPTH)
+        council_context_str = self._format_context_for_llm(
+            context, 
+            limit_history=self.COUNCIL_CONTEXT_DEPTH,
+            exclude_episodic=True,   # Убираем episodic memory из council (не влияет на оценку агентов)
+            exclude_semantic=True    # Убираем semantic facts из council (не влияет на оценку агентов)
+        )
         
-        # Council Report 
-        council_report = await self.llm.generate_council_report(message.text, context_str)
+        # Council Report
+        council_report = await self.llm.generate_council_report(message.text, council_context_str)
         
         # --- Passive Profiling Update ---
         profile_update = council_report.get("profile_update")
@@ -212,8 +226,11 @@ class RCoreKernel:
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
         
         # 5. Response Generation (Inject Mood Styles)
+        # Response: полный контекст (без ограничений, нужен для содержательного ответа)
+        response_context_str = self._format_context_for_llm(context)
+        
         if profile_update:
-             context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
+             response_context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
 
         bot_gender = getattr(self.config, "gender", "Neutral")
         
@@ -246,7 +263,7 @@ class RCoreKernel:
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
-            context_str=context_str,  # Clean context (no metadata)
+            context_str=response_context_str,  # Full context for response generation
             rationale=winner.rationale_short,
             bot_name=self.config.name,
             bot_gender=bot_gender,
@@ -276,7 +293,8 @@ class RCoreKernel:
             "sentiment_context_used": bool(affective_warnings),
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
-            "intuition_gain": self.config.intuition_gain
+            "intuition_gain": self.config.intuition_gain,
+            "council_context_depth": self.COUNCIL_CONTEXT_DEPTH  # Log for analytics
         }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
@@ -476,9 +494,26 @@ class RCoreKernel:
         
         return base + "- " + "\n- ".join(instructions)
 
-    def _format_context_for_llm(self, context: Dict) -> str:
+    def _format_context_for_llm(
+        self, 
+        context: Dict, 
+        limit_history: Optional[int] = None,
+        exclude_episodic: bool = False,
+        exclude_semantic: bool = False
+    ) -> str:
+        """
+        Формирует контекст для LLM.
+        
+        Args:
+            context: Словарь с user_profile, chat_history, episodic_memory, semantic_facts
+            limit_history: Ограничение на количество последних сообщений из chat_history.
+                           None = все сообщения, 1 = только последнее сообщение, 2 = последние 2, и т.д.
+            exclude_episodic: Если True, не включать episodic_memory (используется для council)
+            exclude_semantic: Если True, не включать semantic_facts (используется для council)
+        """
         lines = []
         
+        # 1. USER PROFILE (всегда включаем, это важно для персонализации)
         profile = context.get("user_profile")
         if profile:
             lines.append("USER PROFILE (Core Identity):")
@@ -487,22 +522,34 @@ class RCoreKernel:
             if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
             lines.append("")
 
+        # 2. CHAT HISTORY (с ограничением для council)
         if context.get("chat_history"):
-            lines.append("RECENT DIALOGUE:")
-            for msg in context["chat_history"]:
-                role = "User" if msg["role"] == "user" else "Assistant"
-                lines.append(f"{role}: {msg['content']}")
-            lines.append("") 
+            chat_history = context["chat_history"]
             
-        if context.get("episodic_memory"):
+            # Ограничиваем, если задан лимит
+            if limit_history is not None:
+                chat_history = chat_history[-limit_history:]
+            
+            if chat_history:  # Проверяем, что после ограничения что-то осталось
+                lines.append("RECENT DIALOGUE:")
+                for msg in chat_history:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    lines.append(f"{role}: {msg['content']}")
+                lines.append("") 
+        
+        # 3. EPISODIC MEMORY (пропускаем для council, оставляем для response)
+        if not exclude_episodic and context.get("episodic_memory"):
             lines.append("PAST EPISODES (Long-term memory):")
             for ep in context["episodic_memory"]:
                 lines.append(f"- {ep.get('raw_text', '')}")
+            lines.append("")
         
-        if context.get("semantic_facts"):
+        # 4. SEMANTIC FACTS (пропускаем для council, оставляем для response)
+        if not exclude_semantic and context.get("semantic_facts"):
             lines.append("KNOWN FACTS:")
             for fact in context["semantic_facts"]:
                 lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+            lines.append("")
                 
         return "\n".join(lines) if lines else "No prior context."
 
