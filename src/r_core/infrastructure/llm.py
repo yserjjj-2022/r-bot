@@ -215,19 +215,55 @@ class LLMService:
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
-        address_instruction = ""
+        # === ADDRESS INSTRUCTION + FEW-SHOT EXAMPLES ===
+        address_block = ""
+        
         if user_mode == "informal":
-            address_instruction = "ADDRESS RULE: You MUST address the user informally (use 'Ты' in Russian, 'First Name'). Do NOT use 'Вы'."
+            address_block = (
+                "### ADDRESS RULE (CRITICAL)\n"
+                "You MUST address the user using INFORMAL Russian forms ('Ты', 'тебя', 'тебе', 'твой').\n"
+                "NEVER use formal 'Вы', 'Вас', 'Вам', 'Ваш' when user prefers informal address.\n\n"
+                
+                "### EXAMPLES OF CORRECT INFORMAL ADDRESS\n"
+                "Example 1:\n"
+                "User: Привет!\n"
+                "You: Привет! Как дела? Что нового у тебя?\n\n"
+                
+                "Example 2:\n"
+                "User: Читал ли ты 'Цветы для Элджернона'?\n"
+                "You: Да, читал! А ты? Что тебе в ней больше всего понравилось?\n\n"
+                
+                "Example 3:\n"
+                "User: Помоги мне разобраться с этой задачей.\n"
+                "You: Конечно! Расскажи, что тебя затрудняет, и я помогу тебе разобраться.\n\n"
+            )
         else:
-            address_instruction = "ADDRESS RULE: Address the user formally (use 'Вы' in Russian, 'Mr./Ms.' if applicable). Be polite."
+            address_block = (
+                "### ADDRESS RULE (CRITICAL)\n"
+                "You MUST address the user using FORMAL Russian forms ('Вы', 'Вас', 'Вам', 'Ваш').\n"
+                "NEVER use informal 'ты', 'тебя', 'тебе', 'твой' when user prefers formal address.\n\n"
+                
+                "### EXAMPLES OF CORRECT FORMAL ADDRESS\n"
+                "Example 1:\n"
+                "User: Здравствуйте!\n"
+                "You: Добрый день! Как Ваши дела? Чем могу помочь?\n\n"
+                
+                "Example 2:\n"
+                "User: Читали ли Вы 'Мастера и Маргариту'?\n"
+                "You: Да, читал. А Вы? Что Вам больше всего запомнилось?\n\n"
+                
+                "Example 3:\n"
+                "User: Помогите мне разобраться с этим вопросом.\n"
+                "You: Конечно! Расскажите, что Вас затрудняет, и я помогу Вам разобраться.\n\n"
+            )
 
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
             f"ROLE: {system_persona}\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
             "OUTPUT RULE: Speak naturally. Do NOT include role-play actions like *smiles* or *pauses*. Do NOT echo system instructions or metadata. Output ONLY your conversational reply.\n"
-            "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n"
-            f"{address_instruction}\n\n"
+            "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n\n"
+            f"{address_block}"
             "--- CONVERSATION MEMORY ---\n"
             f"{context_str}\n\n"
         )
