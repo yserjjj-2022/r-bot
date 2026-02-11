@@ -7,7 +7,7 @@ from src.r_core.schemas import HormonalState, AgentType
 class NeuroModulationSystem:
     """
     Bio-chemical regulation layer (R-Core v2.3).
-    Model: Lovheim Cube of Emotion + Non-Linear Metabolic Decay.
+    Model: Lovheim Cube of Emotion + Non-Linear Metabolic Decay + Cross-Effects.
     """
     
     def __init__(self, state: HormonalState = None):
@@ -21,7 +21,7 @@ class NeuroModulationSystem:
 
     def metabolize_time(self, current_time: datetime) -> float:
         """
-        Apply non-linear decay based on time passed.
+        Apply non-linear decay with cross-effects based on time passed.
         Returns delta_minutes.
         """
         delta = current_time - self.state.last_update
@@ -43,15 +43,20 @@ class NeuroModulationSystem:
              self.state.da = self._decay_exponential(self.state.da, self.BASELINE_DA, t, 60.0)
 
         # 3. Serotonin (Linear Restoration) - 6 hours to full tank
-        # Recovers slowly over time (sleep/rest restores confidence)
-        recovery_rate = 0.5 / (6.0 * 60.0) # 0.5 units per 360 mins
+        # CROSS-EFFECT: High Cortisol blocks recovery
+        recovery_rate = 0.5 / (6.0 * 60.0)  # 0.5 units per 360 mins
+        
+        if self.state.cort > 0.7:
+            recovery_rate *= 0.3  # 3x slower under stress
+            
         self.state.ht = min(1.0, self.state.ht + (recovery_rate * t))
         
         # 4. Cortisol (Logarithmic Clearance) - 12 hours
-        # Clears very slowly. High Serotonin accelerates clearance.
-        clearance_speed = 720.0
+        # CROSS-EFFECT: High Serotonin accelerates clearance
+        clearance_speed = 720.0  # Base: 12 hours
+        
         if self.state.ht > 0.7:
-            clearance_speed = 360.0 # Clear 2x faster if calm
+            clearance_speed = 360.0  # Clear 2x faster if calm
             
         self.state.cort = self._decay_exponential(self.state.cort, self.BASELINE_CORT, t, clearance_speed)
         
@@ -62,7 +67,7 @@ class NeuroModulationSystem:
         if current > baseline:
             diff = current - baseline
             return baseline + diff * (0.5 ** (t / half_life))
-        return current # Don't decay up for NE/DA/CORT
+        return current  # Don't decay up for NE/DA/CORT
 
     def update_from_stimuli(self, prediction_error: float, winner_agent: AgentType):
         """
@@ -71,7 +76,7 @@ class NeuroModulationSystem:
         # 1. Norepinephrine (Surprise)
         # PE > 0.3 starts spiking NE
         if prediction_error > 0.3:
-            spike = (prediction_error - 0.3) * 1.5 # Strong reaction
+            spike = (prediction_error - 0.3) * 1.5  # Strong reaction
             self.state.ne = min(1.0, self.state.ne + spike)
         
         # 2. Dopamine (Reward)
@@ -91,16 +96,31 @@ class NeuroModulationSystem:
         # 4. Cortisol (Stress)
         if winner_agent == AgentType.AMYGDALA:
             self.state.cort = min(1.0, self.state.cort + 0.25)
-        if prediction_error > 0.8: # Lost
+        if prediction_error > 0.8:  # Lost
             self.state.cort = min(1.0, self.state.cort + 0.1)
+
+    def get_effective_cortisol(self) -> float:
+        """
+        Get perceived Cortisol level with DA masking applied.
+        CROSS-EFFECT: High Dopamine temporarily masks stress.
+        """
+        effective_cort = self.state.cort
+        
+        if self.state.da > 0.8:
+            effective_cort *= 0.5  # Excitement masks stress
+            
+        return effective_cort
 
     def get_archetype(self) -> str:
         """
         Determine the Lovheim Cube vertex.
+        Uses effective_cortisol (with DA masking).
         Threshold = 0.5
         """
-        # CORT Override
-        if self.state.cort > 0.8:
+        # CORT Override (uses effective, not raw)
+        effective_cort = self.get_effective_cortisol()
+        
+        if effective_cort > 0.8:
             return "BURNOUT"
             
         high_ne = self.state.ne > 0.5
@@ -117,7 +137,7 @@ class NeuroModulationSystem:
         if high_ht and not high_da and high_ne:         return "DISGUST"
         if high_ht and high_da and high_ne:             return "TRIUMPH"
         
-        return "CALM" # Fallback
+        return "CALM"  # Fallback
 
     def get_style_instruction(self) -> str:
         """
@@ -139,7 +159,7 @@ class NeuroModulationSystem:
         
         instruction = prompts.get(archetype, prompts["CALM"])
         
-        # Append debug info (hidden from user, visible to developer)
-        # instruction += f" [DEBUG: {archetype}]" 
+        # Append debug info for developers (commented out for production)
+        # instruction += f" [DEBUG: {archetype}, NE={self.state.ne:.2f}, DA={self.state.da:.2f}, 5HT={self.state.ht:.2f}, CORT={self.state.cort:.2f}]" 
         
         return instruction
