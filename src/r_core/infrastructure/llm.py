@@ -215,13 +215,13 @@ class LLMService:
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
-        # === SIMPLIFIED ADDRESS INSTRUCTION ===
+        # === SIMPLIFIED ADDRESS INSTRUCTION (ONLY ONE ACTIVE) ===
         address_block = ""
         
         if user_mode == "informal":
-            address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой'). NEVER use formal 'Вы'.\n\n"
+            address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой').\n\n"
         else:
-            address_block = "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш'). NEVER use informal 'ты'.\n\n"
+            address_block = "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш').\n\n"
 
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
