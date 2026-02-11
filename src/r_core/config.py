@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Pool Settings (Crucial for Async)
     DB_POOL_SIZE: int = Field(default=5)
     DB_MAX_OVERFLOW: int = Field(default=10)
+    
+    # Debug / Logging
+    ENABLE_LLM_RAW_LOGGING: bool = Field(default=False)  # По умолчанию выключено
 
     @property
     def database_url(self) -> str:
