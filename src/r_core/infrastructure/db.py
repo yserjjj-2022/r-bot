@@ -1,5 +1,4 @@
 import uuid
-import os
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -211,8 +210,6 @@ async def log_turn_metrics(
 
 # --- LLM Raw Response Logging (Circular Buffer) ---
 
-ENABLE_LLM_RAW_LOGGING = os.getenv("ENABLE_LLM_RAW_LOGGING", "false").lower() == "true"
-
 async def log_llm_raw_response(
     prompt_type: str,
     raw_request: str,
@@ -237,12 +234,12 @@ async def log_llm_raw_response(
         max_records: Максимальное количество записей в буфере (по умолчанию 20)
     
     Behavior:
-        - Если ENABLE_LLM_RAW_LOGGING=false → ничего не делает (silent fail)
+        - Если settings.ENABLE_LLM_RAW_LOGGING=False → ничего не делает (silent fail)
         - Если таблица не существует → silent fail (не крашит основной flow)
         - Автоматически удаляет старые записи (оставляет только последние max_records)
     """
-    # Проверяем флаг
-    if not ENABLE_LLM_RAW_LOGGING:
+    # Проверяем флаг из settings
+    if not settings.ENABLE_LLM_RAW_LOGGING:
         return
     
     try:
