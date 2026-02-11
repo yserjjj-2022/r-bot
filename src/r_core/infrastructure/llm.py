@@ -215,47 +215,13 @@ class LLMService:
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
-        # === ADDRESS INSTRUCTION + FEW-SHOT EXAMPLES ===
+        # === SIMPLIFIED ADDRESS INSTRUCTION ===
         address_block = ""
         
         if user_mode == "informal":
-            address_block = (
-                "### ADDRESS RULE (CRITICAL)\n"
-                "You MUST address the user using INFORMAL Russian forms ('Ты', 'тебя', 'тебе', 'твой').\n"
-                "NEVER use formal 'Вы', 'Вас', 'Вам', 'Ваш' when user prefers informal address.\n\n"
-                
-                "### EXAMPLES OF CORRECT INFORMAL ADDRESS\n"
-                "Example 1:\n"
-                "User: Привет!\n"
-                "You: Привет! Как дела? Что нового у тебя?\n\n"
-                
-                "Example 2:\n"
-                "User: Читал ли ты 'Цветы для Элджернона'?\n"
-                "You: Да, читал! А ты? Что тебе в ней больше всего понравилось?\n\n"
-                
-                "Example 3:\n"
-                "User: Помоги мне разобраться с этой задачей.\n"
-                "You: Конечно! Расскажи, что тебя затрудняет, и я помогу тебе разобраться.\n\n"
-            )
+            address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой'). NEVER use formal 'Вы'.\n\n"
         else:
-            address_block = (
-                "### ADDRESS RULE (CRITICAL)\n"
-                "You MUST address the user using FORMAL Russian forms ('Вы', 'Вас', 'Вам', 'Ваш').\n"
-                "NEVER use informal 'ты', 'тебя', 'тебе', 'твой' when user prefers formal address.\n\n"
-                
-                "### EXAMPLES OF CORRECT FORMAL ADDRESS\n"
-                "Example 1:\n"
-                "User: Здравствуйте!\n"
-                "You: Добрый день! Как Ваши дела? Чем могу помочь?\n\n"
-                
-                "Example 2:\n"
-                "User: Читали ли Вы 'Мастера и Маргариту'?\n"
-                "You: Да, читал. А Вы? Что Вам больше всего запомнилось?\n\n"
-                
-                "Example 3:\n"
-                "User: Помогите мне разобраться с этим вопросом.\n"
-                "You: Конечно! Расскажите, что Вас затрудняет, и я помогу Вам разобраться.\n\n"
-            )
+            address_block = "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш'). NEVER use informal 'ты'.\n\n"
 
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
