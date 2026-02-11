@@ -175,6 +175,9 @@ class RCoreKernel:
             signals = await self._process_legacy_council(council_report, message, context)
             print(f"[Pipeline] Using LEGACY mode (Intuition evaluated separately)")
 
+        # ✨ NEW: Apply Hormonal Modulation BEFORE arbitration
+        signals = self._apply_hormonal_modulation(signals)
+
         # 4. Arbitration & Mood Update
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
@@ -267,6 +270,7 @@ class RCoreKernel:
             "all_scores": all_scores,
             "mood_state": str(self.current_mood),
             "hormonal_state": str(self.neuromodulation.state), # Log hormones
+            "hormonal_archetype": self.neuromodulation.get_archetype(),
             "active_style": final_style_instructions,
             "affective_triggers_detected": affective_triggers_count,
             "sentiment_context_used": bool(affective_warnings),
@@ -287,6 +291,63 @@ class RCoreKernel:
             processing_mode=ProcessingMode.SLOW_PATH,
             internal_stats=internal_stats
         )
+
+    def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
+        """
+        Модулирует Scores агентов на основе гормонального архетипа.
+        Применяется ТОЛЬКО для экстремальных состояний (RAGE, FEAR, BURNOUT, SHAME, TRIUMPH).
+        
+        Returns: Modified list of AgentSignals.
+        """
+        archetype = self.neuromodulation.get_archetype()
+        
+        # Таблица модификаторов для экстремальных состояний
+        MODULATION_MAP = {
+            "RAGE": {
+                AgentType.AMYGDALA: 1.6,
+                AgentType.PREFRONTAL: 0.6,
+                AgentType.SOCIAL: 0.8
+            },
+            "FEAR": {
+                AgentType.AMYGDALA: 1.8,
+                AgentType.STRIATUM: 0.4,
+                AgentType.PREFRONTAL: 0.7
+            },
+            "BURNOUT": {
+                AgentType.PREFRONTAL: 0.3,
+                AgentType.INTUITION: 1.5,
+                AgentType.AMYGDALA: 1.2
+            },
+            "SHAME": {
+                AgentType.INTUITION: 1.3
+                # Все остальные: 0.8 (см. ниже)
+            },
+            "TRIUMPH": {
+                AgentType.STRIATUM: 1.3,
+                AgentType.AMYGDALA: 0.5,
+                AgentType.PREFRONTAL: 1.1
+            }
+        }
+        
+        if archetype not in MODULATION_MAP:
+            # Не экстремальное состояние → без модуляции
+            return signals
+        
+        print(f"[Hormonal Override] {archetype} is modulating agent scores")
+        
+        modifiers = MODULATION_MAP[archetype]
+        default_mod = 0.8 if archetype == "SHAME" else 1.0
+        
+        for signal in signals:
+            mod = modifiers.get(signal.agent_name, default_mod)
+            old_score = signal.score
+            signal.score *= mod
+            signal.score = max(0.0, min(10.0, signal.score))  # Clamp to [0, 10]
+            
+            if mod != 1.0:
+                print(f"  - {signal.agent_name.name}: {old_score:.2f} → {signal.score:.2f} (×{mod})")
+        
+        return signals
 
     def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
         """
@@ -366,7 +427,8 @@ class RCoreKernel:
         
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
         
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05\n        
+        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
+        
         self.current_mood.valence = (self.current_mood.valence * INERTIA) + (impact.valence * force)
         self.current_mood.arousal = (self.current_mood.arousal * INERTIA) + (impact.arousal * force)
         self.current_mood.dominance = (self.current_mood.dominance * INERTIA) + (impact.dominance * force)
