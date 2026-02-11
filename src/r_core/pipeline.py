@@ -118,7 +118,15 @@ class RCoreKernel:
         )
         
         user_profile = context.get("user_profile", {})
-        preferred_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
+        
+        # === FIX: Normalize user mode (DB has "ты", code expects "informal") ===
+        raw_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
+        if raw_mode and raw_mode.lower() in ["ты", "informal", "casual", "friendly"]:
+            preferred_mode = "informal"
+        else:
+            preferred_mode = "formal"
+            
+        print(f"[Pipeline] Mode Normalized: '{raw_mode}' -> '{preferred_mode}'")
 
         # Save memory
         extraction_result = await perception_task
@@ -215,7 +223,7 @@ class RCoreKernel:
         
         adverb_context_str = ""
         if adverb_instructions:
-            adverb_context_str = "\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\n" + "\n".join(adverb_instructions)
+            adverb_context_str = "\\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\\n" + "\\n".join(adverb_instructions)
             print(f"[Neuro-Modulation] Applied styles from: {[s.agent_name for s in strong_losers]}")
         
         # Legacy Mood update (for backward compatibility with internal metrics)
@@ -246,14 +254,14 @@ class RCoreKernel:
         mechanical_style_instruction = self.neuromodulation.get_style_instruction()
         
         # Combine Mood + Neuro-Modulation
-        final_style_instructions = mechanical_style_instruction + "\n" + adverb_context_str
+        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str
         
         # ✨ Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
         affective_context_str = ""
         
         if affective_warnings:
-            affective_context_str = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\n"
+            affective_context_str = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\\n"
             for warn in affective_warnings:
                 entity = warn["entity"]
                 predicate = warn["predicate"]
@@ -261,9 +269,9 @@ class RCoreKernel:
                 intensity = warn["intensity"]
                 
                 if feeling == "NEGATIVE":
-                    affective_context_str += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}). Do not use it as an example.\n"
+                    affective_context_str += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}). Do not use it as an example.\\n"
                 else:
-                    affective_context_str += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}). You may reference it positively.\n"
+                    affective_context_str += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}). You may reference it positively.\\n"
         
         response_text = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
@@ -494,11 +502,11 @@ class RCoreKernel:
         if mood.arousal > 0.5 and mood.valence > 0.5:
             instructions.append("SPECIAL STATE: You are excited and eager! Radiate energy.")
 
-        base = f"CURRENT INTERNAL MOOD: {mood}\nSTYLE INSTRUCTIONS:\n"
+        base = f"CURRENT INTERNAL MOOD: {mood}\\nSTYLE INSTRUCTIONS:\\n"
         if not instructions:
             return base + "- Speak in a balanced, neutral, professional manner."
         
-        return base + "- " + "\n- ".join(instructions)
+        return base + "- " + "\\n- ".join(instructions)
 
     def _format_context_for_llm(
         self, 
@@ -557,7 +565,7 @@ class RCoreKernel:
                 lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
             lines.append("")
                 
-        return "\n".join(lines) if lines else "No prior context."
+        return "\\n".join(lines) if lines else "No prior context."
 
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         await asyncio.sleep(0.05)
