@@ -35,6 +35,14 @@ class RCoreKernel:
                                 # 2 = последнее сообщение бота + предыдущее юзера
                                 # 3 = полная мини-цепочка диалога
     
+    # === AFFECTIVE KEYWORDS ===
+    # Ключевые слова для определения, нужен ли полный council (с Affective Extraction).
+    # Если сообщение содержит хотя бы одно из этих слов → используем full mode.
+    AFFECTIVE_KEYWORDS = [
+        "ненавижу", "боюсь", "люблю", "обожаю", "презираю", "терпеть не могу", "не выношу",
+        "hate", "fear", "love", "enjoy", "despise", "adore", "can't stand"
+    ]
+    
     def __init__(self, config: BotConfig):
         self.config = config
         self.llm = LLMService() 
@@ -129,18 +137,18 @@ class RCoreKernel:
             exclude_semantic=True    # Убираем semantic facts из council (не влияет на оценку агентов)
         )
         
-        # Council Report
-        council_report = await self.llm.generate_council_report(message.text, council_context_str)
+        # ✨ Conditional Council Mode: Light (95%) vs Full (5%)
+        # Проверяем, есть ли эмоциональные маркеры в сообщении
+        has_affective = any(keyword in message.text.lower() for keyword in self.AFFECTIVE_KEYWORDS)
         
-        # --- Passive Profiling Update ---
-        profile_update = council_report.get("profile_update")
-        if profile_update:
-            cleaned_update = {k: v for k, v in profile_update.items() if v is not None}
-            if cleaned_update:
-                print(f"[Profiling] Detected user identity update: {cleaned_update}")
-                await self.memory.update_user_profile(message.user_id, cleaned_update)
+        if has_affective:
+            print("[Council] Using FULL mode (Affective Extraction enabled)")
+            council_report = await self.llm.generate_council_report_full(message.text, council_context_str)
+        else:
+            print("[Council] Using LIGHT mode (agents only)")
+            council_report = await self.llm.generate_council_report_light(message.text, council_context_str)
         
-        # ✨ NEW: Affective Extraction Processing
+        # ✨ Affective Extraction Processing (только если был full mode)
         affective_extracts = council_report.get("affective_extraction", [])
         affective_triggers_count = 0
         
@@ -179,7 +187,7 @@ class RCoreKernel:
                 affective_triggers_count += 1
                 print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object} (valence={valence:.2f})")
         
-        # ✨ NEW: Feature Flag - Unified Council vs Legacy
+        # ✨ Feature Flag - Unified Council vs Legacy
         if self.config.use_unified_council:
             # NEW LOGIC: All agents processed through council_report (including Intuition)
             signals = self._process_unified_council(council_report, message, context)
@@ -189,7 +197,7 @@ class RCoreKernel:
             signals = await self._process_legacy_council(council_report, message, context)
             print(f"[Pipeline] Using LEGACY mode (Intuition evaluated separately)")
 
-        # ✨ NEW: Apply Hormonal Modulation BEFORE arbitration
+        # ✨ Apply Hormonal Modulation BEFORE arbitration
         signals = self._apply_hormonal_modulation(signals)
 
         # 4. Arbitration & Mood Update
@@ -228,9 +236,6 @@ class RCoreKernel:
         # 5. Response Generation (Inject Mood Styles)
         # Response: полный контекст (без ограничений, нужен для содержательного ответа)
         response_context_str = self._format_context_for_llm(context)
-        
-        if profile_update:
-             response_context_str += f"\n[SYSTEM NOTICE: User just updated profile: {cleaned_update}]"
 
         bot_gender = getattr(self.config, "gender", "Neutral")
         
@@ -294,7 +299,8 @@ class RCoreKernel:
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
             "intuition_gain": self.config.intuition_gain,
-            "council_context_depth": self.COUNCIL_CONTEXT_DEPTH  # Log for analytics
+            "council_context_depth": self.COUNCIL_CONTEXT_DEPTH,  # Log for analytics
+            "council_mode": "FULL" if has_affective else "LIGHT"  # NEW: Track council mode
         }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
