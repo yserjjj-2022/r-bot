@@ -6,6 +6,7 @@ from typing import List, Optional, Any, Dict
 from openai import AsyncOpenAI, RateLimitError, APIError
 from src.r_core.config import settings
 from src.r_core.schemas import AgentSignal, AgentType
+from src.r_core.infrastructure.db import log_llm_raw_response
 
 class LLMService:
     def __init__(self):
@@ -14,6 +15,9 @@ class LLMService:
             base_url=settings.OPENAI_BASE_URL
         )
         self.model_name = settings.LLM_MODEL_NAME
+        
+        # Кэш последнего валидного Council Report
+        self.last_valid_council_report = None
 
     async def get_embedding(self, text: str) -> List[float]:
         try:
@@ -27,6 +31,10 @@ class LLMService:
             raise e
 
     async def generate_council_report(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
+        """
+        Generate council report with fallback to last valid state.
+        If LLM fails or returns invalid JSON, uses cached report.
+        """
         system_prompt = (
             "You are the Cognitive Core of R-Bot. Analyze the user's input through 5 functional lenses.\n"
             f"Context: {context_summary}\n\n"
@@ -86,14 +94,94 @@ class LLMService:
             "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
         
-        return await self._safe_chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"},
-            json_mode=True
-        )
+        prompt = user_text  # Промпт для логирования
+        raw_response = None
+        
+        try:
+            raw_response = await self._safe_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ],
+                response_format={"type": "json_object"},
+                json_mode=True
+            )
+            
+            # Пытаемся распарсить JSON
+            if isinstance(raw_response, str):
+                council_report = json.loads(raw_response)
+            else:
+                council_report = raw_response
+            
+            # Проверяем обязательные ключи
+            required_keys = ["intuition", "amygdala", "prefrontal", "social", "striatum"]
+            missing_keys = [k for k in required_keys if k not in council_report]
+            
+            if missing_keys:
+                # Логируем в БД
+                await log_llm_raw_response(
+                    prompt_type="council_report",
+                    raw_request=prompt[:2000],
+                    raw_response=str(raw_response)[:5000],
+                    parse_status="missing_keys",
+                    error_message=f"Missing: {missing_keys}"
+                )
+                
+                # Fallback на последнее валидное состояние
+                return self._get_fallback_council_report()
+            
+            # Успех! Сохраняем как последнее валидное
+            self.last_valid_council_report = council_report
+            
+            # Логируем успешный ответ (опционально, можно отключить)
+            # await log_llm_raw_response(
+            #     prompt_type="council_report",
+            #     raw_request=prompt[:2000],
+            #     raw_response=str(raw_response)[:5000],
+            #     parse_status="success"
+            # )
+            
+            return council_report
+            
+        except json.JSONDecodeError as e:
+            # JSON невалидный
+            await log_llm_raw_response(
+                prompt_type="council_report",
+                raw_request=prompt[:2000],
+                raw_response=str(raw_response)[:5000] if raw_response else "N/A",
+                parse_status="json_error",
+                error_message=str(e)
+            )
+            return self._get_fallback_council_report()
+            
+        except Exception as e:
+            # Любая другая ошибка (timeout, API error)
+            await log_llm_raw_response(
+                prompt_type="council_report",
+                raw_request=prompt[:2000],
+                raw_response="N/A",
+                parse_status="api_error",
+                error_message=str(e)
+            )
+            return self._get_fallback_council_report()
+
+    def _get_fallback_council_report(self) -> Dict:
+        """
+        Возвращает последний валидный Council Report или дефолтный.
+        """
+        if self.last_valid_council_report:
+            print("[LLM] Using cached council report (LLM failed)")
+            return self.last_valid_council_report
+        
+        # Если нет кэша — возвращаем нейтральное состояние
+        print("[LLM] No cached report, using neutral default")
+        return {
+            "intuition": {"score": 5.0, "rationale": "Fallback: neutral state", "confidence": 0.5},
+            "amygdala": {"score": 3.0, "rationale": "Fallback: low threat", "confidence": 0.5},
+            "prefrontal": {"score": 6.0, "rationale": "Fallback: default logic", "confidence": 0.5},
+            "social": {"score": 5.0, "rationale": "Fallback: neutral empathy", "confidence": 0.5},
+            "striatum": {"score": 4.0, "rationale": "Fallback: moderate reward", "confidence": 0.5}
+        }
 
     async def generate_response(
         self, 
