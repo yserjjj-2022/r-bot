@@ -327,6 +327,6 @@ async def reflect_on_response(self, user_text: str, bot_response: str) -> Dict:
 ---
 
 **Дата создания:** 2026-02-11  
-**Статус:** Active Development  
+**Статус:** Draft (черновик)  
 **Автор:** yserjjj-2022  
-**Связанные документы:** [Neuro-Modulation Spec](./neuromodulation-spec.md), [Affective ToM Guide](./affective-tom-guide.md)
+**Связанные документы:** `docs/neuro-modulation-spec.md` (если есть)
