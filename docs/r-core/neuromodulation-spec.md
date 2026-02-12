@@ -248,3 +248,20 @@ response = llm.generate(agent_rationale=winner.rationale, style_instruction=styl
 # 7. Update hormones based on outcome
 self.neuromodulation.update_from_stimuli(prediction_error, winner.agent_name)
 ```
+
+---
+
+## 7. Реализация в коде
+
+**Файл**: [`src/r_core/neuromodulation.py`](../../src/r_core/neuromodulation.py)
+
+Основные классы:
+- `HormonalState` — хранит текущие уровни NE, DA, 5-HT, CORT
+- `NeuroModulationEngine` — метаболизм, распад, кросс-эффекты, определение архетипа
+
+**Методы**:
+- `metabolize_time(timestamp)` — вычисляет распад гормонов с учётом времени
+- `get_style_instruction()` — генерирует style-инструкцию на основе архетипа
+- `update_from_stimuli(prediction_error, winning_agent)` — обновляет уровни гормонов на основе результатов взаимодействия
+
+**Интеграция в pipeline**: См. секцию 6 выше и файл [`src/r_core/pipeline.py`](../../src/r_core/pipeline.py).
