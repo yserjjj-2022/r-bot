@@ -1,6 +1,7 @@
 import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
+from sqlalchemy import text
 
 from .schemas import (
     IncomingMessage, 
@@ -16,7 +17,7 @@ from .schemas import (
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
-from .infrastructure.db import log_turn_metrics
+from .infrastructure.db import log_turn_metrics, AsyncSessionLocal
 from .agents import (
     IntuitionAgent,
     AmygdalaAgent,
@@ -24,7 +25,8 @@ from .agents import (
     SocialAgent,
     StriatumAgent
 )
-from .neuromodulation import NeuroModulationSystem 
+from .neuromodulation import NeuroModulationSystem
+from .hippocampus import Hippocampus
 
 class RCoreKernel:
     # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
@@ -53,6 +55,12 @@ class RCoreKernel:
         
         # --- Neuro-Modulation System (Hormonal Physics) ---
         self.neuromodulation = NeuroModulationSystem()
+        
+        # --- Hippocampus (Lazy Consolidation) ---
+        self.hippocampus = Hippocampus(
+            llm_client=self.llm,
+            embedding_client=self.llm
+        )
         
         # Init agents
         self.agents = [
@@ -135,6 +143,10 @@ class RCoreKernel:
             extraction_result,
             precomputed_embedding=current_embedding
         )
+
+        # === HIPPOCAMPUS TRIGGER ===
+        # Запускаем проверку и консолидацию асинхронно, не блокируя ответ
+        asyncio.create_task(self._check_and_trigger_hippocampus(message.user_id))
 
         # 3. Parliament Debate
         # Council: минимальный контекст (управляется через COUNCIL_CONTEXT_DEPTH)
@@ -323,6 +335,34 @@ class RCoreKernel:
             processing_mode=ProcessingMode.SLOW_PATH,
             internal_stats=internal_stats
         )
+
+    async def _check_and_trigger_hippocampus(self, user_id: int):
+        """
+        Инкрементирует счётчик нагрузки и запускает консолидацию при достижении порога.
+        Выполняется в фоне.
+        """
+        try:
+            async with AsyncSessionLocal() as session:
+                # Increment
+                await session.execute(
+                    text("UPDATE user_profiles SET short_term_memory_load = short_term_memory_load + 1 WHERE user_id = :uid"),
+                    {"uid": user_id}
+                )
+                await session.commit()
+                
+                # Check
+                result = await session.execute(
+                    text("SELECT short_term_memory_load FROM user_profiles WHERE user_id = :uid"),
+                    {"uid": user_id}
+                )
+                load = result.scalar() or 0
+                
+                if load >= 20:
+                    print(f"[Hippocampus] Triggered consolidation for user {user_id} (load={load})")
+                    # Запускаем консолидацию
+                    await self.hippocampus.consolidate(user_id)
+        except Exception as e:
+            print(f"[Pipeline] Hippocampus trigger failed: {e}")
 
     def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         """
