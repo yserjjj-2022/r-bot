@@ -29,6 +29,18 @@ class LLMService:
         except Exception as e:
             print(f"[LLMService] Embedding Error: {e}")
             raise e
+            
+    async def embed(self, text: str) -> List[float]:
+        """Alias for get_embedding to satisfy Hippocampus protocol"""
+        return await self.get_embedding(text)
+
+    async def complete(self, prompt: str) -> str:
+        """Raw completion wrapper for internal tasks (Hippocampus, etc)"""
+        return await self._safe_chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            response_format=None,
+            json_mode=False
+        )
 
     def _build_council_prompt_base(self, context_summary: str) -> str:
         """
