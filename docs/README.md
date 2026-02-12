@@ -24,6 +24,7 @@
 - [💚 Affective Theory of Mind](./r-core/affective-tom-guide.md)
 - [🔮 Predictive Processing](./r-core/predictive-processing.md)
 - [💊 Neuro-Modulation](./r-core/neuromodulation-spec.md)
+- [🗺️ Self & Other Model Roadmap](./r-core/self-and-other-roadmap.md) ⭐️ **New**
 
 ---
 
