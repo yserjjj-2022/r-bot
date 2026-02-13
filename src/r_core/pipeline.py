@@ -484,28 +484,27 @@ class RCoreKernel:
         # Получаем настройку Pace из конфига
         pace = self.config.sliders.pace_setting
         
-        # Debug print для проверки (виден в консоли Streamlit)
         print(f"[VAD Style] Pace: {pace:.2f}, Arousal: {mood.arousal:.2f}")
 
         # 1. AROUSAL (Tempo & Length) + PACE MODIFIER
-        # Пороги: 0.6 и 0.4 (было 0.7 и 0.3)
-        if mood.arousal > 0.6 or pace > 0.6:
-            instructions.append("🔴 [HIGH TEMPO] STRICT LIMIT: Max 2 sentences per turn. Be abrupt. No polite fillers.")
-        elif mood.arousal < -0.6 or pace < 0.4:
-            instructions.append("🔵 [LOW TEMPO] Long, flowing sentences (20+ words). Use '...' and pauses. Elaborate thoughts.")
+        # RELAXED Thresholds (было 0.6, стало 0.7)
+        if mood.arousal > 0.7 or pace > 0.7:
+            instructions.append("🔴 [HIGH TEMPO] Max 2 sentences. Be concise.")
+        elif mood.arousal < -0.7 or pace < 0.3:
+            instructions.append("🔵 [LOW TEMPO] Long, flowing sentences. Elaborate thoughts.")
         else:
-            # Default "Neutral" is now STRICTLY CONCISE
-            instructions.append("🟢 [NEUTRAL PACING] Conversational brevity. Max 2-3 sentences. Do NOT write paragraphs.")
+            # RELAXED Neutral: убрали "STRICT LIMIT"
+            instructions.append("🟢 [NEUTRAL PACING] Conversational brevity. Keep it natural (2-4 sentences). Avoid huge paragraphs, but don't be robotic.")
             
         # 2. DOMINANCE (Stance)
         if mood.dominance > 0.6:
-            instructions.append("🦁 [DOMINANT] Imperative mood. No 'please', 'maybe', or 'I think'. Give orders or state absolute facts.")
+            instructions.append("🦁 [DOMINANT] Imperative mood. State absolute facts.")
         elif mood.dominance < -0.6:
-            instructions.append("🐰 [SUBMISSIVE] Hesitant tone. Use 'sorry', 'if I may', 'perhaps'. Ask for validation.")
+            instructions.append("🐰 [SUBMISSIVE] Hesitant tone. Ask for validation.")
             
         # 3. VALENCE (Tone modifiers - auxiliary to Archetype)
         if mood.valence < -0.7:
-             instructions.append("⚫ [NEGATIVE] Dry, cold punctuation. Use periods instead of commas. No pleasantries.")
+             instructions.append("⚫ [NEGATIVE] Dry, cold punctuation.")
         
         final_instruction = " ".join(instructions)
         print(f"[VAD Style] Result: {final_instruction}")
