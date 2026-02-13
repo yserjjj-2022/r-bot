@@ -84,8 +84,9 @@ async def load_session_data(limit=100):
                     FROM rcore_metrics
                     ORDER BY timestamp DESC
                     LIMIT :limit
-                """),
-                {"limit": limit}
+                """)
+            ,
+            {"limit": limit}
             )
             metrics = metrics_result.mappings().all()
         except Exception as e:
@@ -309,7 +310,7 @@ async def get_profile_data():
 #              MAIN NAVIGATION
 # ==========================================
 st.sidebar.title("🧠 Cortex Controls")
-app_mode = st.sidebar.radio("Navigation", ["💬 Chat Interface", "📈 Encephalogram (Analytics)"])
+app_mode = st.sidebar.radio("Navigation", ["💬 Chat Interface", "📈 Encephalogram (Analytics)", "🧬 Brain Structure (Introspection)"])
 st.sidebar.divider()
 
 
@@ -479,6 +480,55 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     with h_cols[idx]:
                         st.metric(label=h_name, value=f"{h_val:.2f}", delta=h_delta)
 
+elif app_mode == "🧬 Brain Structure (Introspection)":
+    st.title("🧬 Живая Архитектура (Introspection)")
+    
+    if not st.session_state.kernel_instance:
+        st.warning("⚠️ Kernel not initialized. Please start a chat session first.")
+    else:
+        try:
+            snapshot = st.session_state.kernel_instance.get_architecture_snapshot()
+            
+            # 1. Agents
+            st.header("1. Активные Нейро-Агенты")
+            st.caption("Компоненты, загруженные в Council System")
+            
+            cols = st.columns(len(snapshot["active_agents"]))
+            for i, agent in enumerate(snapshot["active_agents"]):
+                with cols[i]:
+                    st.info(f"**{agent['name']}**\n\n`{agent['class']}`\n\n_{agent['description']}_")
+            
+            # 2. Subsystems
+            st.header("2. Подсистемы")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Hippocampus", snapshot["subsystems"]["hippocampus"])
+            c2.metric("Council Mode", snapshot["subsystems"]["council_mode"])
+            c3.metric("Perception", snapshot["subsystems"]["perception_module"])
+            
+            # 3. Hormonal Rules
+            st.header("3. Гормональная Модуляция (Rules)")
+            st.caption("Как эмоции (Archetypes) влияют на веса агентов")
+            
+            rules = snapshot["modulation_rules"]
+            # Convert to DataFrame: Index = Archetype, Columns = AgentType
+            rows = []
+            for archetype, modifiers in rules.items():
+                row = {"Archetype": archetype}
+                for agent_enum, val in modifiers.items():
+                    # agent_enum is typically an AgentType Enum, need .name
+                    key = getattr(agent_enum, "name", str(agent_enum))
+                    row[key] = val
+                rows.append(row)
+                
+            df_rules = pd.DataFrame(rows).set_index("Archetype").fillna(1.0)
+            st.dataframe(df_rules.style.background_gradient(cmap="coolwarm", vmin=0.0, vmax=2.0))
+            
+            # 4. Sliders (Current Config)
+            st.header("4. Текущие веса (Sliders)")
+            st.json(snapshot["control_sliders"])
+            
+        except Exception as e:
+            st.error(f"Introspection failed: {e}")
 
 else:
     # ==========================================
