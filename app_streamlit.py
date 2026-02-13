@@ -64,7 +64,7 @@ async def load_session_data(limit=50):
         )
         messages = msgs_result.mappings().all()
         
-        # FIX: use correct table name 'rcore_metrics' instead of 'metrics_logs'
+        # Загружаем метрики
         metrics_result = await session.execute(
             text("""
                 SELECT session_id, timestamp as created_at, payload, affective_triggers_detected, sentiment_context_used
@@ -78,8 +78,6 @@ async def load_session_data(limit=50):
     return messages, metrics
 
 def parse_metrics(metrics_row):
-    # В rcore_metrics данные лежат в поле payload (JSONB)
-    # Но мы также хотим вытащить верхнеуровневые поля если они нужны
     try:
         data = metrics_row["payload"]
         if isinstance(data, str):
@@ -87,7 +85,7 @@ def parse_metrics(metrics_row):
         elif data is None:
             data = {}
             
-        # Добавляем специфичные поля обратно в словарь для унификации
+        # Добавляем специфичные поля
         data["affective_triggers_detected"] = metrics_row.get("affective_triggers_detected", 0)
         data["sentiment_context_used"] = metrics_row.get("sentiment_context_used", False)
         
@@ -99,6 +97,7 @@ def parse_metrics(metrics_row):
 def extract_scores(metrics_data):
     scores = metrics_data.get("all_scores", {})
     if not scores:
+        # Fallback 1: может быть в другом формате?
         return {"Amygdala": 0, "Prefrontal": 0, "Striatum": 0, "Social": 0, "Intuition": 0}
     return scores
 
@@ -115,6 +114,37 @@ def extract_hormones(metrics_data):
                 except:
                     pass
     return h_map
+
+def extract_mood(metrics_data):
+    """Извлекает VAD (Mood) из метрик"""
+    # Обычно это лежит в current_mood: "Valence: 0.5, Arousal: ..." или объект
+    mood_str = metrics_data.get("current_mood", "")
+    vad = {"Valence": 0.0, "Arousal": 0.0, "Dominance": 0.0}
+    
+    if isinstance(mood_str, str):
+        # Парсим строку вида "Valence: 0.85, Arousal: 0.42, Dominance: 0.65"
+        try:
+            parts = mood_str.split(",")
+            for p in parts:
+                k, v = p.strip().split(":")
+                if k in vad:
+                    vad[k] = float(v)
+        except:
+            pass
+    elif isinstance(mood_str, dict):
+         vad.update(mood_str)
+         
+    return vad
+
+def get_winner_safe(metrics_data):
+    # Пытаемся найти победителя в разных полях
+    w = metrics_data.get("winner_agent")
+    if not w:
+        w = metrics_data.get("winning_agent") # sometimes stored differently
+    if not w:
+        w = metrics_data.get("winner")
+        
+    return w or "Unknown"
 
 # --- DB Operations for Agents ---
 async def get_all_agents():
@@ -209,7 +239,8 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     "metrics": matched_metric,
                     "scores": extract_scores(matched_metric),
                     "hormones": extract_hormones(matched_metric),
-                    "winner": matched_metric.get("winner_agent", "Unknown")
+                    "mood": extract_mood(matched_metric),
+                    "winner": get_winner_safe(matched_metric)
                 })
 
     # Global Charts
@@ -217,16 +248,21 @@ if app_mode == "📈 Encephalogram (Analytics)":
     if timeline:
         df_scores = pd.DataFrame([t["scores"] for t in timeline])
         df_scores["time"] = [t["time"] for t in timeline]
+        
         df_hormones = pd.DataFrame([t["hormones"] for t in timeline])
         df_hormones["time"] = [t["time"] for t in timeline]
+        
+        df_mood = pd.DataFrame([t["mood"] for t in timeline])
+        df_mood["time"] = [t["time"] for t in timeline]
 
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Agent Conflict")
             st.line_chart(df_scores.set_index("time"))
         with c2:
-            st.subheader("Biochemistry")
+            st.subheader("Biochemistry & Mood")
             st.line_chart(df_hormones.set_index("time"))
+            # Можно добавить и Mood на график, но пока ограничимся этим
 
     # Timeline Cards
     st.header("📅 Interaction History")
@@ -234,7 +270,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
         item = timeline[i]
         prev_item = timeline[i-1] if i > 0 else None
         
-        with st.expander(f"⏰ {item['time']} | 🏆 Winner: {item.get('winner', 'Unknown')}", expanded=(i == len(timeline)-1)):
+        with st.expander(f"⏰ {item['time']} | 🏆 Winner: {item['winner']}", expanded=(i == len(timeline)-1)):
             c1, c2 = st.columns([1, 1])
             with c1:
                 st.markdown(f"**👤 User:** {item['user']}")
@@ -242,8 +278,19 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 volition = item['metrics'].get("volition_selected")
                 if volition:
                     st.success(f"🛡️ **Volition Active:** {volition}")
+                
+                # --- NEW: Mood Section ---
+                st.markdown("### 🎭 Current Mood")
+                m_cols = st.columns(3)
+                mood_order = ["Valence", "Arousal", "Dominance"]
+                for idx, m_key in enumerate(mood_order):
+                    val = item['mood'].get(m_key, 0.0)
+                    with m_cols[idx]:
+                        st.metric(label=m_key, value=f"{val:.2f}")
+
             with c2:
                 # Scores
+                st.markdown("### 📊 Council Votes")
                 cols = st.columns(5)
                 agent_names = ["Amygdala", "Prefrontal", "Striatum", "Social", "Intuition"]
                 for idx, agent in enumerate(agent_names):
@@ -252,11 +299,19 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     if prev_item:
                         diff = val - prev_item['scores'].get(agent, 0)
                         if abs(diff) > 0.1: delta_str = f"{diff:+.1f}"
+                    
+                    # Highlight winner visually
+                    color = "normal"
+                    if agent == item['winner']:
+                         val_str = f"🏆 {val:.1f}"
+                    else:
+                         val_str = f"{val:.1f}"
+                         
                     with cols[idx]:
-                        st.metric(label=agent[:4], value=f"{val:.1f}", delta=delta_str)
+                        st.metric(label=agent[:4], value=val_str, delta=delta_str)
                 
                 # Hormones
-                st.markdown("---")
+                st.markdown("### ⚗️ Hormones")
                 h_cols = st.columns(4)
                 for idx, (h_name, h_val) in enumerate(item['hormones'].items()):
                     h_delta = ""
@@ -362,19 +417,21 @@ else:
                 st.session_state.user_profile_data.update({"name": p_name, "preferred_mode": p_mode})
                 st.success("Saved!")
 
-    # --- Affective Memory ---
+    # --- Affective Memory (Collapsed by default) ---
     st.sidebar.subheader("💚 Emotional Memory")
-    try:
-        affective_data = run_async(get_affective_memory(999))
-        if affective_data:
-            for item in affective_data:
-                pred = item["predicate"]
-                emoji = "🔴" if pred in ["HATES", "DESPISES"] else "💚" if pred in ["LOVES", "ADORES"] else "⚪"
-                st.sidebar.caption(f"{emoji} {pred} {item['object']}")
-        else:
-            st.sidebar.caption("No emotional data yet.")
-    except Exception:
-        pass
+    # FIX: expanded=False by default
+    with st.sidebar.expander("View User Preferences", expanded=False):
+        try:
+            affective_data = run_async(get_affective_memory(999))
+            if affective_data:
+                for item in affective_data:
+                    pred = item["predicate"]
+                    emoji = "🔴" if pred in ["HATES", "DESPISES"] else "💚" if pred in ["LOVES", "ADORES"] else "⚪"
+                    st.caption(f"{emoji} {pred} {item['object']}")
+            else:
+                st.caption("No emotional data yet.")
+        except Exception:
+            pass
 
     if st.sidebar.button("Clear Chat"):
         st.session_state.messages = []
@@ -416,8 +473,10 @@ else:
                     
                     if "all_scores" in stats:
                         scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
+                        # FIX: Use scale=alt.Scale(domain=[...]) instead of direct domain=...
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                            x=alt.X('Score', domain=[0, 10]), y=alt.Y('Agent', sort='-x'),
+                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                            y=alt.Y('Agent', sort='-x'),
                             color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))
                         ).properties(height=150)
                         st.altair_chart(chart, use_container_width=True)
@@ -469,8 +528,10 @@ else:
                         
                         if "all_scores" in stats:
                             scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
+                            # FIX: Use scale=alt.Scale(domain=[...])
                             chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                                x=alt.X('Score', domain=[0, 10]), y=alt.Y('Agent', sort='-x'),
+                                x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                                y=alt.Y('Agent', sort='-x'),
                                 color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
                             ).properties(height=150)
                             st.altair_chart(chart, use_container_width=True)
