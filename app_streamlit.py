@@ -64,11 +64,12 @@ async def load_session_data(limit=50):
         )
         messages = msgs_result.mappings().all()
         
+        # FIX: use correct table name 'rcore_metrics' instead of 'metrics_logs'
         metrics_result = await session.execute(
             text("""
-                SELECT session_id, created_at, metrics_json
-                FROM metrics_logs
-                ORDER BY created_at DESC
+                SELECT session_id, timestamp as created_at, payload, affective_triggers_detected, sentiment_context_used
+                FROM rcore_metrics
+                ORDER BY timestamp DESC
                 LIMIT :limit
             """),
             {"limit": limit}
@@ -77,12 +78,22 @@ async def load_session_data(limit=50):
     return messages, metrics
 
 def parse_metrics(metrics_row):
+    # В rcore_metrics данные лежат в поле payload (JSONB)
+    # Но мы также хотим вытащить верхнеуровневые поля если они нужны
     try:
-        data = metrics_row["metrics_json"]
+        data = metrics_row["payload"]
         if isinstance(data, str):
             data = json.loads(data)
+        elif data is None:
+            data = {}
+            
+        # Добавляем специфичные поля обратно в словарь для унификации
+        data["affective_triggers_detected"] = metrics_row.get("affective_triggers_detected", 0)
+        data["sentiment_context_used"] = metrics_row.get("sentiment_context_used", False)
+        
         return data
-    except:
+    except Exception as e:
+        print(f"Error parsing metrics: {e}")
         return {}
 
 def extract_scores(metrics_data):
@@ -94,7 +105,7 @@ def extract_scores(metrics_data):
 def extract_hormones(metrics_data):
     h_str = metrics_data.get("hormonal_state", "")
     h_map = {"NE": 0.5, "DA": 0.5, "5HT": 0.5, "CORT": 0.5}
-    if "NE:" in h_str:
+    if isinstance(h_str, str) and "NE:" in h_str:
         parts = h_str.split(" ")
         for p in parts:
             if ":" in p:
