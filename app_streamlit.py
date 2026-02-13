@@ -10,9 +10,11 @@ from sqlalchemy import select, delete, text
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
 from src.r_core.memory import MemorySystem
-from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel, get_async_session_maker
+# FIX: Removed get_async_session_maker from imports
+from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel
 from src.r_core.config import settings
 import re
+
 
 # --- Setup Page ---
 st.set_page_config(
@@ -21,9 +23,11 @@ st.set_page_config(
     layout="wide"
 )
 
+
 # --- Init State ---
 if "messages" not in st.session_state:
     st.session_state.messages = [] 
+
 
 if "sliders" not in st.session_state:
     st.session_state.sliders = PersonalitySliders(
@@ -34,13 +38,16 @@ if "sliders" not in st.session_state:
         neuroticism=0.1
     )
 
+
 if "bot_name" not in st.session_state:
     st.session_state.bot_name = "R-Bot"
     st.session_state.bot_gender = "Neutral"
 
+
 # --- PERSISTENT KERNEL HACK ---
 if "kernel_instance" not in st.session_state:
     st.session_state.kernel_instance = None
+
 
 def run_async(coro):
     try:
@@ -49,11 +56,13 @@ def run_async(coro):
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(coro)
 
+
 # --- ANALYTICS HELPERS ---
 async def load_session_data(limit=50):
     """Загружает историю диалога и метрики, объединяя их по времени"""
-    SessionLocal = get_async_session_maker()
-    async with SessionLocal() as session:
+    # FIX: Use AsyncSessionLocal directly
+    async with AsyncSessionLocal() as session:
+        # 1. Загружаем сообщения
         msgs_result = await session.execute(
             text("""
                 SELECT id, role, content, created_at, session_id, user_id
@@ -65,18 +74,25 @@ async def load_session_data(limit=50):
         )
         messages = msgs_result.mappings().all()
         
-        # Загружаем метрики
-        metrics_result = await session.execute(
-            text("""
-                SELECT session_id, timestamp as created_at, payload, affective_triggers_detected, sentiment_context_used
-                FROM rcore_metrics
-                ORDER BY timestamp DESC
-                LIMIT :limit
-            """),
-            {"limit": limit}
-        )
-        metrics = metrics_result.mappings().all()
+        # 2. Загружаем метрики (с поддержкой нового формата таблицы)
+        # Проверяем наличие колонок перед запросом, чтобы не падать на старой схеме
+        try:
+            metrics_result = await session.execute(
+                text("""
+                    SELECT session_id, timestamp, payload
+                    FROM rcore_metrics
+                    ORDER BY timestamp DESC
+                    LIMIT :limit
+                """),
+                {"limit": limit}
+            )
+            metrics = metrics_result.mappings().all()
+        except Exception as e:
+            print(f"Warning: Could not load metrics (schema mismatch?): {e}")
+            metrics = []
+            
     return messages, metrics
+
 
 def parse_metrics(metrics_row):
     try:
@@ -86,14 +102,15 @@ def parse_metrics(metrics_row):
         elif data is None:
             data = {}
             
-        # Добавляем специфичные поля
-        data["affective_triggers_detected"] = metrics_row.get("affective_triggers_detected", 0)
-        data["sentiment_context_used"] = metrics_row.get("sentiment_context_used", False)
-        
+        # Восстанавливаем timestamp, если он был потерян при парсинге JSON
+        if "timestamp" not in data and "timestamp" in metrics_row:
+            data["timestamp"] = metrics_row["timestamp"]
+            
         return data
     except Exception as e:
         print(f"Error parsing metrics: {e}")
         return {}
+
 
 def extract_scores(metrics_data):
     # Пытаемся достать 'all_scores' - бывает внутри 'agent_scores' или просто 'all_scores'
@@ -119,6 +136,7 @@ def extract_scores(metrics_data):
     # Сначала заполним нулями
     for v in mapping.values(): clean_scores[v] = 0.0
 
+
     for k, v in scores.items():
         k_lower = k.lower()
         found = False
@@ -134,6 +152,7 @@ def extract_scores(metrics_data):
         
     return clean_scores
 
+
 def extract_hormones(metrics_data):
     h_str = metrics_data.get("hormonal_state", "")
     h_map = {"NE": 0.5, "DA": 0.5, "5HT": 0.5, "CORT": 0.5}
@@ -143,18 +162,21 @@ def extract_hormones(metrics_data):
         h_map.update(h_str)
         return h_map
 
+
     # 2. Если строка "NE:0.5 DA:0.3..."
     if isinstance(h_str, str):
-        # Очистка от лишних пробелов
-        parts = h_str.split()
+        # Очистка от лишних символов (скобок, запятых)
+        clean_str = h_str.replace(",", " ").replace("{", "").replace("}", "").replace("'", "")
+        parts = clean_str.split()
         for p in parts:
             if ":" in p:
                 k, v = p.split(":")
                 try:
-                    h_map[k] = float(v)
+                    h_map[k.strip()] = float(v)
                 except:
                     pass
     return h_map
+
 
 def extract_mood(metrics_data):
     """Извлекает VAD (Mood) из метрик"""
@@ -168,11 +190,17 @@ def extract_mood(metrics_data):
         vad["Dominance"] = mood_data.get("dominance", mood_data.get("Dominance", 0.0))
         
     elif isinstance(mood_data, str):
-        # Парсим строку вида "V:0.04 A:-0.05 D:0.01" или "Valence:..."
+        # Парсим строку вида "V:0.04 A:-0.05 D:0.01" или "MoodVector(valence=...)"
         try:
-            parts = mood_data.split() # split by space
+            # Убираем лишний мусор если это repr() объекта
+            clean_str = mood_data.replace("MoodVector(", "").replace(")", "").replace(",", " ")
+            parts = clean_str.split() 
             for p in parts:
-                if ":" in p:
+                if "=" in p: # format valence=0.5
+                    k, v = p.split("=")
+                    k_title = k.capitalize()
+                    if k_title in vad: vad[k_title] = float(v)
+                elif ":" in p: # format V:0.5
                     k, v = p.split(":")
                     k_upper = k.upper()
                     if k_upper.startswith("V"): vad["Valence"] = float(v)
@@ -182,6 +210,7 @@ def extract_mood(metrics_data):
             pass
             
     return vad
+
 
 def get_mood_label(metrics_data, vad):
     """
@@ -194,39 +223,36 @@ def get_mood_label(metrics_data, vad):
     
     # 1. Hormonal Archetype
     archetype = metrics_data.get("hormonal_archetype")
-    if archetype and isinstance(archetype, str) and archetype.upper() != "NEUTRAL":
+    if archetype and isinstance(archetype, str) and archetype.upper() not in ["NEUTRAL", "CALM"]:
         return f"🔥 {archetype.upper()}"
 
-    # 2. Active Style
+
+    # 2. Active Style (Technical VAD description)
     style = metrics_data.get("active_style")
     if style and isinstance(style, str):
-        # Пытаемся вытащить текст из [STYLE: ...]
-        # Пример: "[STYLE: Aggressive, sharp. ...]"
-        match = re.search(r"\[STYLE:(.*?)\]", style, re.IGNORECASE)
-        if match:
-            # Берем первую часть до точки или запятой, чтобы не было слишком длинно
-            style_desc = match.group(1).strip()
-            # Обрезаем до первого предложения или 3-4 слов
-            short_style = style_desc.split('.')[0]
-            if len(short_style) > 30:
-                short_style = short_style[:30] + "..."
-            return f"🎭 {short_style}"
+        # Ищем технические маркеры VAD
+        if "[HIGH TEMPO]" in style: return "⚡ High Tempo (Agitated)"
+        if "[LOW TEMPO]" in style: return "🐢 Low Tempo (Relaxed)"
+        if "[DOMINANT]" in style: return "🦁 Dominant"
+        if "[SUBMISSIVE]" in style: return "🐰 Submissive"
             
-    # 3. VAD Fallback
+    # 3. VAD Fallback (Quadrants)
     v = vad.get("Valence", 0)
     a = vad.get("Arousal", 0)
     
     if v > 0.3 and a > 0.3: return "Joyful / Excited"
     if v > 0.3 and a < -0.1: return "Relaxed / Content"
     if v < -0.1 and a > 0.3: return "Angry / Anxious"
-    if v < -0.1 and a < -0.1: return "Sad / Bored"
+    if v < -0.1 and a < -0.1: return "Sad / Depressed"
     
-    return "Neutral / Calm"
+    return "Neutral / Balanced"
+
 
 def get_winner_safe(metrics_data):
     # 1. Явное поле
     w = metrics_data.get("winner_agent") or metrics_data.get("winning_agent") or metrics_data.get("winner")
     if w: return w
+
 
     # 2. Вычисление по максимальному скору (если есть all_scores)
     scores = extract_scores(metrics_data)
@@ -236,11 +262,13 @@ def get_winner_safe(metrics_data):
         
     return "Unknown"
 
+
 # --- DB Operations for Agents ---
 async def get_all_agents():
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(AgentProfileModel))
         return result.scalars().all()
+
 
 async def create_agent(name: str, desc: str, gender: str, sliders: Dict):
     async with AsyncSessionLocal() as session:
@@ -253,6 +281,7 @@ async def create_agent(name: str, desc: str, gender: str, sliders: Dict):
         session.add(new_agent)
         await session.commit()
 
+
 async def get_affective_memory(user_id: int = 999):
     async with AsyncSessionLocal() as session:
         stmt = select(SemanticModel).where(
@@ -263,13 +292,16 @@ async def get_affective_memory(user_id: int = 999):
         rows = result.scalars().all()
         return [{"subject": r.subject, "predicate": r.predicate, "object": r.object, "sentiment": r.sentiment} for r in rows]
 
+
 async def update_profile_data(data):
     mem = MemorySystem()
     await mem.update_user_profile(999, data)
 
+
 async def get_profile_data():
     mem = MemorySystem()
     return await mem.store.get_user_profile(999) 
+
 
 
 # ==========================================
@@ -278,6 +310,7 @@ async def get_profile_data():
 st.sidebar.title("🧠 Cortex Controls")
 app_mode = st.sidebar.radio("Navigation", ["💬 Chat Interface", "📈 Encephalogram (Analytics)"])
 st.sidebar.divider()
+
 
 if app_mode == "📈 Encephalogram (Analytics)":
     # ==========================================
@@ -293,21 +326,27 @@ if app_mode == "📈 Encephalogram (Analytics)":
     </style>
     """, unsafe_allow_html=True)
 
+
     if st.sidebar.button("Refresh Data"):
         st.rerun()
+
 
     # Load Data
     with st.spinner("Reading Synaptic Logs..."):
         messages, metrics_logs = run_async(load_session_data(30))
 
+
     if not messages:
         st.warning("No data found.")
         st.stop()
 
+
     # Process Data
     timeline = []
+    # Сортируем чтобы сопоставить сообщения и логи
     messages = sorted(messages, key=lambda x: x["created_at"])
-    metrics_logs = sorted(metrics_logs, key=lambda x: x["created_at"])
+    metrics_logs = sorted(metrics_logs, key=lambda x: x["timestamp"]) # Используем timestamp из метрик
+
 
     for i, msg in enumerate(messages):
         if msg["role"] == "assistant":
@@ -316,8 +355,9 @@ if app_mode == "📈 Encephalogram (Analytics)":
             timestamp = msg["created_at"]
             
             matched_metric = None
+            # Ищем ближайший лог (в пределах 5 сек)
             for m in metrics_logs:
-                delta = (m["created_at"] - timestamp).total_seconds()
+                delta = (m["timestamp"] - timestamp).total_seconds()
                 if abs(delta) < 5:
                     matched_metric = parse_metrics(m)
                     break
@@ -336,6 +376,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     "winner": get_winner_safe(matched_metric)
                 })
 
+
     # Global Charts
     st.header("📈 Session Dynamics")
     if timeline:
@@ -345,16 +386,19 @@ if app_mode == "📈 Encephalogram (Analytics)":
         df_hormones = pd.DataFrame([t["hormones"] for t in timeline])
         df_hormones["time"] = [t["time"] for t in timeline]
 
+
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Agent Conflict")
             st.line_chart(df_scores.set_index("time"))
         with c2:
-            st.subheader("Biochemistry")
+            st.subheader("Biochemistry (Hormones)")
             st.line_chart(df_hormones.set_index("time"))
+
 
     # Timeline Cards
     st.header("📅 Interaction History")
+    # Обратный порядок для ленты
     for i in range(len(timeline)-1, -1, -1):
         item = timeline[i]
         prev_item = timeline[i-1] if i > 0 else None
@@ -362,20 +406,18 @@ if app_mode == "📈 Encephalogram (Analytics)":
         winner_display = item['winner']
         if winner_display == "Unknown": winner_display = "⚠️ Log Missing"
 
+
         with st.expander(f"⏰ {item['time']} | 🏆 {winner_display}", expanded=(i == len(timeline)-1)):
             c1, c2 = st.columns([1, 1])
             with c1:
                 st.markdown(f"**👤 User:** {item['user']}")
                 st.markdown(f"**🤖 Bot:** {item['bot']}")
-                volition = item['metrics'].get("volition_selected")
-                if volition:
-                    st.success(f"🛡️ **Volition Active:** {volition}")
                 
                 # --- Mood Section ---
                 st.divider()
-                # Show label (Archetype/Style) prominently
                 st.markdown(f"<div class='mood-text'>{item['mood_label']}</div>", unsafe_allow_html=True)
                 
+                # VAD Metrics
                 m_cols = st.columns(3)
                 mood_order = ["Valence", "Arousal", "Dominance"]
                 for idx, m_key in enumerate(mood_order):
@@ -383,13 +425,10 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     with m_cols[idx]:
                         st.metric(label=m_key, value=f"{val:.2f}")
 
+
             with c2:
                 # Scores
                 st.markdown("### 📊 Council Votes")
-                # Fix: check if scores exist, otherwise warn
-                if all(v == 0 for v in item['scores'].values()):
-                    st.warning("⚠️ No votes recorded (Parsing Error)")
-                
                 cols = st.columns(5)
                 agent_names = ["Amygdala", "Prefrontal", "Striatum", "Social", "Intuition"]
                 for idx, agent in enumerate(agent_names):
@@ -399,7 +438,6 @@ if app_mode == "📈 Encephalogram (Analytics)":
                         diff = val - prev_item['scores'].get(agent, 0)
                         if abs(diff) > 0.1: delta_str = f"{diff:+.1f}"
                     
-                    # Highlight winner visually
                     val_str = f"{val:.1f}"
                     if agent == item['winner']: val_str = f"🏆 {val:.1f}"
                          
@@ -417,6 +455,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     with h_cols[idx]:
                         st.metric(label=h_name, value=f"{h_val:.2f}", delta=h_delta)
 
+
 else:
     # ==========================================
     #              CHAT INTERFACE
@@ -430,15 +469,19 @@ else:
     except Exception:
         agent_names = []
 
+
     selected_agent_name = st.sidebar.selectbox("Select Persona", ["Default"] + agent_names)
+
 
     # Reset kernel if persona changes
     if "last_agent_name" not in st.session_state:
         st.session_state.last_agent_name = selected_agent_name
 
+
     if st.session_state.last_agent_name != selected_agent_name:
         st.session_state.kernel_instance = None
         st.session_state.last_agent_name = selected_agent_name
+
 
     if selected_agent_name != "Default":
         st.session_state.bot_name = selected_agent_name
@@ -458,6 +501,7 @@ else:
         st.session_state.bot_name = "R-Bot"
         st.session_state.bot_gender = "Neutral"
 
+
     # --- Sliders Control ---
     with st.sidebar.expander("Personality Tuner", expanded=False):
         empathy = st.slider("❤️ Empathy", 0.0, 1.0, st.session_state.sliders.empathy_bias)
@@ -467,6 +511,7 @@ else:
         
         use_unified_council = st.checkbox("🔄 Unified Council", value=False)
 
+
         st.session_state.sliders = PersonalitySliders(
             empathy_bias=empathy,
             risk_tolerance=risk,
@@ -474,6 +519,7 @@ else:
             pace_setting=pace,
             neuroticism=0.1
         )
+
 
     # --- Save Agent ---
     with st.sidebar.expander("💾 Save New Persona"):
@@ -491,60 +537,30 @@ else:
                     st.success(f"Agent {new_name} saved!")
                     st.rerun()
 
+
     test_mode = st.sidebar.radio("🧪 Mode", ["Standard", "A/B Test"])
     
-    # --- User Profile ---
-    st.sidebar.divider()
-    if "profile_loaded" not in st.session_state:
-        try:
-            data = run_async(get_profile_data())
-            st.session_state.user_profile_data = data or {}
-            st.session_state.profile_loaded = True
-        except Exception:
-            st.session_state.user_profile_data = {}
-
-    with st.sidebar.expander("👤 User Identity"):
-        with st.form("profile_form"):
-            p_name = st.text_input("Name", st.session_state.user_profile_data.get("name", ""))
-            curr_mode = st.session_state.user_profile_data.get("preferred_mode", "formal")
-            p_mode = st.selectbox("Style", ["formal", "informal"], index=0 if curr_mode=="formal" else 1)
-            if st.form_submit_button("Save"):
-                run_async(update_profile_data({"name": p_name, "preferred_mode": p_mode}))
-                st.session_state.user_profile_data.update({"name": p_name, "preferred_mode": p_mode})
-                st.success("Saved!")
-
-    # --- Affective Memory (Collapsed by default) ---
-    st.sidebar.subheader("💚 Emotional Memory")
-    with st.sidebar.expander("View User Preferences", expanded=False):
-        try:
-            affective_data = run_async(get_affective_memory(999))
-            if affective_data:
-                for item in affective_data:
-                    pred = item["predicate"]
-                    emoji = "🔴" if pred in ["HATES", "DESPISES"] else "💚" if pred in ["LOVES", "ADORES"] else "⚪"
-                    st.caption(f"{emoji} {pred} {item['object']}")
-            else:
-                st.caption("No emotional data yet.")
-        except Exception:
-            pass
-
     if st.sidebar.button("Clear Chat"):
         st.session_state.messages = []
         st.session_state.kernel_instance = None
         st.rerun()
 
+
     # --- CHAT AREA ---
     st.title("R-Bot: Cognitive Architecture Debugger")
     st.markdown(f"Current Agent: **{st.session_state.bot_name}**")
 
-    # Mood Dashboard
+
+    # Mood Dashboard (Top of Chat)
     if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
         m = st.session_state.kernel_instance.current_mood
+        st.caption("Current Brain State (VAD)")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Valence", f"{m.valence:.2f}")
-        c2.metric("Arousal", f"{m.arousal:.2f}")
-        c3.metric("Dominance", f"{m.dominance:.2f}")
+        c1.metric("Valence", f"{m.valence:.2f}", help="Pleasure (+1) vs Displeasure (-1)")
+        c2.metric("Arousal", f"{m.arousal:.2f}", help="Excitement (+1) vs Calm (-1)")
+        c3.metric("Dominance", f"{m.dominance:.2f}", help="Control (+1) vs Submission (-1)")
         st.divider()
+
 
     # Chat History
     for msg in st.session_state.messages:
@@ -575,6 +591,7 @@ else:
                         ).properties(height=150)
                         st.altair_chart(chart, use_container_width=True)
 
+
     # Input
     user_input = st.chat_input("Say something...")
     if user_input:
@@ -588,8 +605,10 @@ else:
             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
             st.session_state.kernel_instance.config.use_unified_council = use_unified_council
 
+
         kernel = st.session_state.kernel_instance
         incoming = IncomingMessage(user_id=999, session_id="streamlit_session", text=user_input)
+
 
         if test_mode == "A/B Test":
             with st.chat_message("user"): st.write(user_input)
@@ -628,6 +647,7 @@ else:
                                 color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
                             ).properties(height=150)
                             st.altair_chart(chart, use_container_width=True)
+
 
                     st.session_state.messages.append({
                         "role": "assistant", "content": bot_text,

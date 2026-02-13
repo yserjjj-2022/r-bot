@@ -9,19 +9,31 @@
 1. Открой DBeaver.
 2. Подключись к `postgresql://rbot:rbot_password@localhost:5433/rbot`.
 3. Открой SQL-редактор (SQL Editor).
+<<<<<<< HEAD
 4. Скопируй содержимое файла миграции (например, `003_short_term_memory_load.sql`).
 5. Выполни скрипт (Ctrl+Enter или кнопка Execute).
 6. Проверь, что колонки добавлены:
    ```sql
    \d user_profiles
    \d semantic_memory
+=======
+4. Скопируй содержимое файла миграции (например, `002_llm_raw_responses.sql`).
+5. Выполни скрипт (Ctrl+Enter или кнопка Execute).
+6. Проверь, что таблица создана:
+   ```sql
+   \dt llm_raw_responses
+>>>>>>> feature/neuro-modulation-v1
    ```
 
 ### 2. Через psql (командная строка)
 
 ```bash
+<<<<<<< HEAD
 psql postgresql://rbot:rbot_password@localhost:5433/rbot -f migrations/003_short_term_memory_load.sql
 psql postgresql://rbot:rbot_password@localhost:5433/rbot -f migrations/004_semantic_memory_embedding.sql
+=======
+psql postgresql://rbot:rbot_password@localhost:5433/rbot -f migrations/002_llm_raw_responses.sql
+>>>>>>> feature/neuro-modulation-v1
 ```
 
 ### 3. На проде (Amvera)
@@ -36,14 +48,18 @@ psql postgresql://rbot:rbot_password@localhost:5433/rbot -f migrations/004_seman
 | # | Файл | Описание | Дата |
 | :--- | :--- | :--- | :--- |
 | 002 | `002_llm_raw_responses.sql` | Circular buffer для сырых ответов LLM | 2026-02-11 |
+<<<<<<< HEAD
 | 003 | `003_short_term_memory_load.sql` | Счётчик `short_term_memory_load` для триггера гиппокампа | 2026-02-13 |
 | 004 | `004_semantic_memory_embedding.sql` | Добавление `embedding` в `semantic_memory` для дедупликации | 2026-02-13 |
+=======
+>>>>>>> feature/neuro-modulation-v1
 
 ---
 
 ## Проверка примененных миграций:
 
 ```sql
+<<<<<<< HEAD
 -- Проверяем, есть ли новые колонки
 SELECT column_name, data_type 
 FROM information_schema.columns 
@@ -58,6 +74,16 @@ AND column_name = 'embedding';
 -- Просмотр структуры таблиц
 \d user_profiles
 \d semantic_memory
+=======
+-- Проверяем, есть ли таблица
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+AND table_name = 'llm_raw_responses';
+
+-- Просмотр структуры таблицы
+\d llm_raw_responses
+>>>>>>> feature/neuro-modulation-v1
 ```
 
 ---
@@ -78,6 +104,7 @@ ORDER BY timestamp DESC
 LIMIT 10;
 ```
 
+<<<<<<< HEAD
 ### Проверить счётчик гиппокампа:
 ```sql
 SELECT 
@@ -117,6 +144,11 @@ WHERE user_id = 123
   AND embedding IS NOT NULL
 ORDER BY similarity DESC
 LIMIT 5;
+=======
+### Посмотреть количество записей в буфере:
+```sql
+SELECT COUNT(*) AS total_records FROM llm_raw_responses;
+>>>>>>> feature/neuro-modulation-v1
 ```
 
 ### Очистить таблицу (если нужно):

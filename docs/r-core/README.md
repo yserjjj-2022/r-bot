@@ -14,14 +14,14 @@
 Описывает общую архитектуру R-Core Kernel:
 - Cognitive Parliament (5 агентов)
 - Mood System (VAD модель)
-- Memory System (Semantic, Episodic, Volitional)
+- Memory System (Буквальная STM, Векторная LTM, Семантическая, Волевая)
 - Council Report (LLM Batch Processing)
 - Входы/Выходы (Schemas)
 
 **Читать первым** для понимания общей картины.
 
 **Статус**: ✅ Актуальная версия  
-**Последнее обновление**: Октябрь 2025
+**Последнее обновление**: Февраль 2026
 
 ---
 
@@ -85,7 +85,29 @@
 
 Документ содержит математическую модель динамической инерции и чувствительности.
 
-**Статус**: 📝 Спецификация готова (Этап 2.2)
+**Статус**: ✅ Спецификация готова, модуль реализован (Этап 2.2)
+
+---
+
+### 🗺️ **Том 7: [Self & Other Model Roadmap](./self-and-other-roadmap.md)** *(🆕 New)*
+**Дорожная карта развития самосознания и Theory of Mind**
+
+Поэтапный план внедрения двух ключевых способностей "мыслящего" AI:
+
+**Self-Model (Понимание себя):**
+- Явные ценности бота (Bot Values)
+- Собственные убеждения о мире (Bot Affective Profile)
+- Рефлексия над действиями (Reflective Layer)
+
+**Other-Model (Theory of Mind):**
+- Инференция состояния юзера (User State Inference)
+- Предсказание реакций (Reaction Prediction)
+- Моделирование целей юзера (Goal Graphs)
+
+Документ включает 3 фазы разработки, оценку сложности и конкретные технические рекомендации.
+
+**Статус**: 📝 Дорожная карта (Февраль 2026)  
+**Теоретическая основа**: Александр Мирер (концепция "мыслящего"), Premack & Woodruff (Theory of Mind, 1978)
 
 ---
 
@@ -124,7 +146,7 @@
 
 ### 🚧 В процессе
 - **Этап 2.2**: Optimization & Deep Memory
-  - ⏳ **Hormonal Physics**: Внедрение NE, DA, 5-HT, CORT в ядро
+  - ✅ **Hormonal Physics**: Модуль `neuromodulation.py` реализован (NE, DA, 5-HT, CORT)
   - ⏳ **Latency Reduction**: Parallel agent execution (`asyncio.gather`)
   - ⏳ **Vector Traits**: Fuzzy matching для профиля через эмбеддинги
   - ⏳ **Deep Episodic**: Использование эпизодической памяти для формирования мнений

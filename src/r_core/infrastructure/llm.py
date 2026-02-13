@@ -34,6 +34,7 @@ class LLMService:
         """Alias for get_embedding to satisfy Hippocampus protocol"""
         return await self.get_embedding(text)
 
+<<<<<<< HEAD
     async def complete(self, prompt: str) -> str:
         """Raw completion wrapper for internal tasks (Hippocampus, etc)"""
         return await self._safe_chat_completion(
@@ -42,6 +43,8 @@ class LLMService:
             json_mode=False
         )
 
+=======
+>>>>>>> feature/neuro-modulation-v1
     def _build_council_prompt_base(self, context_summary: str) -> str:
         """
         Базовый промпт для council_report (только агенты).
