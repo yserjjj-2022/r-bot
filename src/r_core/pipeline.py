@@ -481,17 +481,21 @@ class RCoreKernel:
         """
         instructions = []
         
-        # Получаем настройку Pace из конфига (по умолчанию 0.5)
+        # Получаем настройку Pace из конфига
         pace = self.config.sliders.pace_setting
         
+        # Debug print для проверки (виден в консоли Streamlit)
+        print(f"[VAD Style] Pace: {pace:.2f}, Arousal: {mood.arousal:.2f}")
+
         # 1. AROUSAL (Tempo & Length) + PACE MODIFIER
-        if mood.arousal > 0.6 or pace > 0.7:
-            instructions.append("🔴 [HIGH TEMPO] Short sentences (max 5-7 words). Be abrupt and concise. No fluff.")
-        elif mood.arousal < -0.6 or pace < 0.3:
+        # Пороги: 0.6 и 0.4 (было 0.7 и 0.3)
+        if mood.arousal > 0.6 or pace > 0.6:
+            instructions.append("🔴 [HIGH TEMPO] STRICT LIMIT: Max 2 sentences per turn. Be abrupt. No polite fillers.")
+        elif mood.arousal < -0.6 or pace < 0.4:
             instructions.append("🔵 [LOW TEMPO] Long, flowing sentences (20+ words). Use '...' and pauses. Elaborate thoughts.")
         else:
-            # Default "Neutral" is now CONCISE/CONVERSATIONAL instead of "Natural"
-            instructions.append("🟢 [NEUTRAL PACING] Conversational brevity. Keep responses under 3 sentences unless asked for details. Avoid monologues.")
+            # Default "Neutral" is now STRICTLY CONCISE
+            instructions.append("🟢 [NEUTRAL PACING] Conversational brevity. Max 2-3 sentences. Do NOT write paragraphs.")
             
         # 2. DOMINANCE (Stance)
         if mood.dominance > 0.6:
@@ -503,7 +507,9 @@ class RCoreKernel:
         if mood.valence < -0.7:
              instructions.append("⚫ [NEGATIVE] Dry, cold punctuation. Use periods instead of commas. No pleasantries.")
         
-        return " ".join(instructions)
+        final_instruction = " ".join(instructions)
+        print(f"[VAD Style] Result: {final_instruction}")
+        return final_instruction
 
     def _format_context_for_llm(
         self, 
