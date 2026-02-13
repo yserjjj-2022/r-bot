@@ -62,6 +62,11 @@ class BaseAgent(ABC):
 # --- Specific Agents ---
 
 class IntuitionAgent(BaseAgent):
+    """
+    🔮 Intuition (Pattern Matching)
+    Fast system responsible for 'gut feelings' and déjà vu.
+    Detects recurring patterns from episodic memory.
+    """
     agent_type = AgentType.INTUITION
     
     @property
@@ -106,6 +111,11 @@ class IntuitionAgent(BaseAgent):
         return 1.5 - (sliders.pace_setting * 1.0)
 
 class AmygdalaAgent(BaseAgent):
+    """
+    🛡️ Amygdala (Safety & Boundaries)
+    Scans input for threats, aggression, or violations.
+    Activates Fight/Flight response.
+    """
     agent_type = AgentType.AMYGDALA
     
     @property
@@ -123,6 +133,11 @@ class AmygdalaAgent(BaseAgent):
         return 1.5 - (sliders.risk_tolerance * 1.2)
 
 class PrefrontalAgent(BaseAgent):
+    """
+    🧠 Prefrontal Cortex (Logic & Control)
+    Responsible for structured reasoning, planning, and factual accuracy.
+    Inhibits impulsive responses.
+    """
     agent_type = AgentType.PREFRONTAL
     
     @property
@@ -147,6 +162,11 @@ class PrefrontalAgent(BaseAgent):
         return 0.7 + (sliders.pace_setting * 0.8)
 
 class SocialAgent(BaseAgent):
+    """
+    🤝 Social Cortex (Empathy & Norms)
+    Manages relationships, politeness, and emotional resonance.
+    Ensures social coherence.
+    """
     agent_type = AgentType.SOCIAL
     
     @property
@@ -163,6 +183,11 @@ class SocialAgent(BaseAgent):
         return 0.5 + sliders.empathy_bias
 
 class StriatumAgent(BaseAgent):
+    """
+    💎 Striatum (Reward & Drive)
+    Seeks novelty, engagement, and dopamine rewards.
+    Drives playful and energetic responses.
+    """
     agent_type = AgentType.STRIATUM
     
     @property
