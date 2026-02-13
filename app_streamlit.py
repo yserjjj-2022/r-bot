@@ -621,7 +621,7 @@ else:
                     st.caption(caption)
                     
                     if "all_scores" in stats:
-                        scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
+                        scores_df = pd.DataFrame([{\"Agent\": k, \"Score\": v} for k, v in stats[\"all_scores\"].items()])
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
                             x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                             y=alt.Y('Agent', sort='-x'),
