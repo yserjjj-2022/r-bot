@@ -406,6 +406,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 # title="Agent Activation Levels Over Time",
                 markers=True
             )
+            # FIX: Limit X-axis to current time
             fig_scores.update_layout(
                 xaxis_title="Time", 
                 yaxis_title="Activation Score", 
@@ -425,6 +426,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 # title="Hormonal Levels Over Time",
                 markers=True
             )
+            # FIX: Limit X-axis to current time
             fig_hormones.update_layout(
                 xaxis_title="Time", 
                 yaxis_title="Concentration", 
