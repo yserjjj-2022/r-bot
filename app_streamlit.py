@@ -12,6 +12,7 @@ from src.r_core.pipeline import RCoreKernel
 from src.r_core.memory import MemorySystem
 from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel, get_async_session_maker
 from src.r_core.config import settings
+import re
 
 # --- Setup Page ---
 st.set_page_config(
@@ -182,7 +183,36 @@ def extract_mood(metrics_data):
             
     return vad
 
-def get_mood_description(vad):
+def get_mood_label(metrics_data, vad):
+    """
+    Определяет текстовое описание настроения.
+    Приоритет:
+    1. Hormonal Archetype (если есть и не Neutral)
+    2. Active Style (если есть)
+    3. VAD interpretation
+    """
+    
+    # 1. Hormonal Archetype
+    archetype = metrics_data.get("hormonal_archetype")
+    if archetype and isinstance(archetype, str) and archetype.upper() != "NEUTRAL":
+        return f"🔥 {archetype.upper()}"
+
+    # 2. Active Style
+    style = metrics_data.get("active_style")
+    if style and isinstance(style, str):
+        # Пытаемся вытащить текст из [STYLE: ...]
+        # Пример: "[STYLE: Aggressive, sharp. ...]"
+        match = re.search(r"\[STYLE:(.*?)\]", style, re.IGNORECASE)
+        if match:
+            # Берем первую часть до точки или запятой, чтобы не было слишком длинно
+            style_desc = match.group(1).strip()
+            # Обрезаем до первого предложения или 3-4 слов
+            short_style = style_desc.split('.')[0]
+            if len(short_style) > 30:
+                short_style = short_style[:30] + "..."
+            return f"🎭 {short_style}"
+            
+    # 3. VAD Fallback
     v = vad.get("Valence", 0)
     a = vad.get("Arousal", 0)
     
@@ -259,7 +289,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
     <style>
         .delta-pos { color: green; font-weight: bold; }
         .delta-neg { color: red; font-weight: bold; }
-        .mood-text { font-size: 1.2em; font-weight: bold; color: #555; }
+        .mood-text { font-size: 1.2em; font-weight: bold; color: #222; background-color: #f0f2f6; padding: 5px 10px; border-radius: 5px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -293,6 +323,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     break
             
             if matched_metric:
+                vad = extract_mood(matched_metric)
                 timeline.append({
                     "time": timestamp.strftime("%H:%M:%S"),
                     "user": user_text,
@@ -300,7 +331,8 @@ if app_mode == "📈 Encephalogram (Analytics)":
                     "metrics": matched_metric,
                     "scores": extract_scores(matched_metric),
                     "hormones": extract_hormones(matched_metric),
-                    "mood": extract_mood(matched_metric),
+                    "mood_vad": vad,
+                    "mood_label": get_mood_label(matched_metric, vad),
                     "winner": get_winner_safe(matched_metric)
                 })
 
@@ -341,12 +373,13 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 
                 # --- Mood Section ---
                 st.divider()
-                st.markdown(f"<div class='mood-text'>🎭 Current Mood: {get_mood_description(item['mood'])}</div>", unsafe_allow_html=True)
+                # Show label (Archetype/Style) prominently
+                st.markdown(f"<div class='mood-text'>{item['mood_label']}</div>", unsafe_allow_html=True)
                 
                 m_cols = st.columns(3)
                 mood_order = ["Valence", "Arousal", "Dominance"]
                 for idx, m_key in enumerate(mood_order):
-                    val = item['mood'].get(m_key, 0.0)
+                    val = item['mood_vad'].get(m_key, 0.0)
                     with m_cols[idx]:
                         st.metric(label=m_key, value=f"{val:.2f}")
 
