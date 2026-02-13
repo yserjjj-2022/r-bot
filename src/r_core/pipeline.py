@@ -42,6 +42,15 @@ class RCoreKernel:
     VOLITION_PERSISTENCE_BONUS = 0.3  # Бонус для текущего фокуса
     VOLITION_DECAY_PER_DAY = 0.1      # Штраф за давность (если decay_rate не задан)
     VOLITION_FOCUS_DURATION = 3       # Сколько ходов длится фокус по умолчанию
+
+    # === HORMONAL MODULATION RULES (Introspection Exposed) ===
+    HORMONAL_MODULATION_RULES = {
+        "RAGE": {AgentType.AMYGDALA: 1.6, AgentType.PREFRONTAL: 0.6, AgentType.SOCIAL: 0.8},
+        "FEAR": {AgentType.AMYGDALA: 1.8, AgentType.STRIATUM: 0.4, AgentType.PREFRONTAL: 0.7},
+        "BURNOUT": {AgentType.PREFRONTAL: 0.3, AgentType.INTUITION: 1.5, AgentType.AMYGDALA: 1.2},
+        "SHAME": {AgentType.INTUITION: 1.3},
+        "TRIUMPH": {AgentType.STRIATUM: 1.3, AgentType.AMYGDALA: 0.5, AgentType.PREFRONTAL: 1.1}
+    }
     
     def __init__(self, config: BotConfig):
         self.config = config
@@ -74,6 +83,36 @@ class RCoreKernel:
             "pattern_id": None,
             "turns_remaining": 0,
             "user_id": None
+        }
+
+    def get_architecture_snapshot(self) -> Dict:
+        """
+        Возвращает текущую структуру управления для визуализации.
+        Динамически считывает загруженных агентов и настройки.
+        """
+        return {
+            # 1. Список активных агентов (какие классы реально загружены)
+            "active_agents": [
+                {
+                    "name": agent.name.value,
+                    "class": agent.__class__.__name__,
+                    "description": agent.__doc__.strip().split('\n')[0] if agent.__doc__ else "No docstring"
+                }
+                for agent in self.agents
+            ],
+            
+            # 2. Текущая конфигурация слайдеров (весов)
+            "control_sliders": self.config.sliders.dict(),
+            
+            # 3. Карта гормональной модуляции (правила)
+            "modulation_rules": self.HORMONAL_MODULATION_RULES,
+            
+            # 4. Активные системы
+            "subsystems": {
+                "hippocampus": "Active" if self.hippocampus else "Disabled",
+                "council_mode": "Unified" if self.config.use_unified_council else "Legacy",
+                "perception_module": "Mock (Simulated)"
+            }
         }
 
     async def process_message(self, message: IncomingMessage, mode: str = "CORTICAL") -> CoreResponse:
@@ -403,13 +442,9 @@ class RCoreKernel:
 
     def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         archetype = self.neuromodulation.get_archetype()
-        MODULATION_MAP = {
-            "RAGE": {AgentType.AMYGDALA: 1.6, AgentType.PREFRONTAL: 0.6, AgentType.SOCIAL: 0.8},
-            "FEAR": {AgentType.AMYGDALA: 1.8, AgentType.STRIATUM: 0.4, AgentType.PREFRONTAL: 0.7},
-            "BURNOUT": {AgentType.PREFRONTAL: 0.3, AgentType.INTUITION: 1.5, AgentType.AMYGDALA: 1.2},
-            "SHAME": {AgentType.INTUITION: 1.3},
-            "TRIUMPH": {AgentType.STRIATUM: 1.3, AgentType.AMYGDALA: 0.5, AgentType.PREFRONTAL: 1.1}
-        }
+        
+        # Use class constant for rules
+        MODULATION_MAP = self.HORMONAL_MODULATION_RULES
         
         if archetype not in MODULATION_MAP: return signals
         print(f"[Hormonal Override] {archetype} is modulating agent scores")
