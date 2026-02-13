@@ -392,8 +392,8 @@ class RCoreKernel:
                 )
                 load = result.scalar() or 0
                 
-                # FIX: Lower threshold for testing (was 20)
-                THRESHOLD = 2 
+                # FIX: Set threshold to 10
+                THRESHOLD = 10 
                 
                 if load >= THRESHOLD:
                     print(f"[Hippocampus] Triggered consolidation for user {user_id} (load={load})")
