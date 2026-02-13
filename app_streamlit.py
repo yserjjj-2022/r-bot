@@ -367,7 +367,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
             if matched_metric:
                 vad = extract_mood(matched_metric)
                 timeline.append({
-                    "time_str": timestamp.strftime("%H:%M:%S\"),
+                    "time_str": timestamp.strftime("%H:%M:%S"),
                     "timestamp": timestamp, # Raw timestamp for plotting
                     "user": user_text,
                     "bot": bot_text,
@@ -622,7 +622,8 @@ else:
         # Init Kernel
         if st.session_state.kernel_instance is None:
             config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
-            config.gender = st.session_state.bot_gender\n            st.session_state.kernel_instance = RCoreKernel(config)
+            config.gender = st.session_state.bot_gender
+            st.session_state.kernel_instance = RCoreKernel(config)
         else:
             st.session_state.kernel_instance.config.name = st.session_state.bot_name
             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
