@@ -10,7 +10,8 @@ from sqlalchemy import select, delete, text
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
 from src.r_core.memory import MemorySystem
-from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel, get_async_session_maker
+# FIX: Removed get_async_session_maker from imports
+from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel
 from src.r_core.config import settings
 import re
 
@@ -59,8 +60,8 @@ def run_async(coro):
 # --- ANALYTICS HELPERS ---
 async def load_session_data(limit=50):
     """Загружает историю диалога и метрики, объединяя их по времени"""
-    SessionLocal = get_async_session_maker()
-    async with SessionLocal() as session:
+    # FIX: Use AsyncSessionLocal directly
+    async with AsyncSessionLocal() as session:
         # 1. Загружаем сообщения
         msgs_result = await session.execute(
             text("""
