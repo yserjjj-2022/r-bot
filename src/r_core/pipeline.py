@@ -477,14 +477,21 @@ class RCoreKernel:
     def _generate_style_from_mood(self, mood: MoodVector) -> str:
         """
         Translates VAD numeric vectors into TECHNICAL constraints (Syntax/Pacing).
+        Uses 'pace_setting' slider to modulate verbosity.
         """
         instructions = []
         
-        # 1. AROUSAL (Tempo & Length)
-        if mood.arousal > 0.6:
-            instructions.append("🔴 [HIGH TEMPO] Short sentences (max 5-7 words). No complex grammar. Use '!' or caps if needed. Be abrupt.")
-        elif mood.arousal < -0.6:
-            instructions.append("🔵 [LOW TEMPO] Long, flowing sentences (20+ words). Use '...' and pauses. Passive voice allowed. Be slow.")
+        # Получаем настройку Pace из конфига (по умолчанию 0.5)
+        pace = self.config.sliders.pace_setting
+        
+        # 1. AROUSAL (Tempo & Length) + PACE MODIFIER
+        if mood.arousal > 0.6 or pace > 0.7:
+            instructions.append("🔴 [HIGH TEMPO] Short sentences (max 5-7 words). Be abrupt and concise. No fluff.")
+        elif mood.arousal < -0.6 or pace < 0.3:
+            instructions.append("🔵 [LOW TEMPO] Long, flowing sentences (20+ words). Use '...' and pauses. Elaborate thoughts.")
+        else:
+            # Default "Neutral" is now CONCISE/CONVERSATIONAL instead of "Natural"
+            instructions.append("🟢 [NEUTRAL PACING] Conversational brevity. Keep responses under 3 sentences unless asked for details. Avoid monologues.")
             
         # 2. DOMINANCE (Stance)
         if mood.dominance > 0.6:
@@ -496,9 +503,6 @@ class RCoreKernel:
         if mood.valence < -0.7:
              instructions.append("⚫ [NEGATIVE] Dry, cold punctuation. Use periods instead of commas. No pleasantries.")
         
-        if not instructions:
-            return "🟢 [NEUTRAL PACING] Natural sentence length and structure."
-            
         return " ".join(instructions)
 
     def _format_context_for_llm(
