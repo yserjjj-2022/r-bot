@@ -116,7 +116,7 @@ class RCoreKernel:
             print(f"[Pipeline] Embedding failed early: {e}")
         
         # 1. Perception
-        # FIX: Await immediately to avoid RuntimeWarning if next steps fail
+        # FIX: Await immediately to avoid RuntimeWarning
         extraction_result = await self._mock_perception(message)
         
         # 2. Retrieval 
@@ -282,15 +282,18 @@ class RCoreKernel:
             internal_stats=internal_stats
         )
 
-    # ... [Helper methods unchanged: _check_and_trigger_hippocampus, _apply_hormonal_modulation, _process_unified_council, _process_legacy_council, _update_mood, _generate_style_from_mood, _select_dominant_volition, _process_affective_extraction, _format_affective_context, _format_context_for_llm, _mock_perception] ...
-    
-    # === Re-declaring helper methods to ensure file validity ===
+    # === HELPER METHODS (RESTORED) ===
     
     def _select_dominant_volition(self, patterns: List[Dict], user_id: int) -> Optional[Dict]:
+        """
+        Winner-Takes-Volition mechanism.
+        """
         if not patterns: return None
         now = datetime.utcnow()
         candidates = []
         current_focus_id = None
+        
+        # Check focus persistence
         if self.active_focus["user_id"] == user_id and self.active_focus["turns_remaining"] > 0:
             current_focus_id = self.active_focus["pattern_id"]
             self.active_focus["turns_remaining"] -= 1
@@ -299,37 +302,65 @@ class RCoreKernel:
         
         for p in patterns:
             if not p.get("is_active", True): continue
+            
+            # Base Score
             score = p.get("intensity", 0.5) + p.get("learned_delta", 0.0)
+            
+            # Decay
             last_active = p.get("last_activated_at")
             if last_active and isinstance(last_active, datetime):
                 days_passed = (now - last_active).days
                 decay_rate = p.get("decay_rate") or self.VOLITION_DECAY_PER_DAY
                 decay_penalty = days_passed * decay_rate
                 score -= decay_penalty
+            
+            # Persistence Bonus
             if p["id"] == current_focus_id: score += self.VOLITION_PERSISTENCE_BONUS
+            
+            # Affective Filter
             if self.current_mood.arousal > 0.7 and self.current_mood.dominance < -0.3: score *= 0.2
             if self.current_mood.arousal > 0.7 and self.current_mood.dominance > 0.5: score *= 1.2
+            
             candidates.append({**p, "effective_score": score})
             
         if not candidates: return None
         candidates.sort(key=lambda x: x["effective_score"], reverse=True)
         winner = candidates[0]
+        
+        # Set new focus if strong enough
         if winner["effective_score"] > 0.6:
             if winner["id"] != current_focus_id:
                 self.active_focus["pattern_id"] = winner["id"]
                 self.active_focus["turns_remaining"] = self.VOLITION_FOCUS_DURATION
                 print(f"[Volition] New Focus Acquired: {winner['impulse']} (for {self.VOLITION_FOCUS_DURATION} turns)")
+        
         return winner
 
     async def _process_affective_extraction(self, message: IncomingMessage, extracts: List[Dict]):
+        """Helper to process extracted emotions"""
         for item in extracts:
             intensity = item.get("intensity", 0.5)
             predicate = item.get("predicate", "UNKNOWN")
+            
             if predicate in ["HATES", "DESPISES", "FEARS"]: valence = -intensity
             elif predicate in ["LOVES", "ENJOYS", "ADORES"]: valence = intensity
             else: valence = 0.0
-            sentiment_vad = {"valence": valence, "arousal": 0.5 if predicate == "FEARS" else 0.3, "dominance": -0.2 if predicate == "FEARS" else 0.0}
-            triple = SemanticTriple(subject=item.get("subject", "User"), predicate=predicate, object=item.get("object", ""), confidence=intensity, source_message_id=message.message_id, sentiment=sentiment_vad)
+            
+            sentiment_vad = {
+                "valence": valence,
+                "arousal": 0.5 if predicate == "FEARS" else 0.3,
+                "dominance": -0.2 if predicate == "FEARS" else 0.0
+            }
+            
+            triple = SemanticTriple(
+                subject=item.get("subject", "User"),
+                predicate=predicate,
+                object=item.get("object", ""),
+                confidence=intensity,
+                source_message_id=message.message_id,
+                sentiment=sentiment_vad
+            )
+            
             await self.memory.store.save_semantic(message.user_id, triple)
             print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object}")
 
@@ -341,16 +372,24 @@ class RCoreKernel:
             predicate = warn["predicate"]
             feeling = warn["user_feeling"]
             intensity = warn["intensity"]
-            if feeling == "NEGATIVE": s += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}).\\n"
-            else: s += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}).\\n"
+            if feeling == "NEGATIVE":
+                s += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}).\\n"
+            else:
+                s += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}).\\n"
         return s
 
     async def _check_and_trigger_hippocampus(self, user_id: int):
         try:
             async with AsyncSessionLocal() as session:
-                await session.execute(text("UPDATE user_profiles SET short_term_memory_load = short_term_memory_load + 1 WHERE user_id = :uid"), {"uid": user_id})
+                await session.execute(
+                    text("UPDATE user_profiles SET short_term_memory_load = short_term_memory_load + 1 WHERE user_id = :uid"),
+                    {"uid": user_id}
+                )
                 await session.commit()
-                result = await session.execute(text("SELECT short_term_memory_load FROM user_profiles WHERE user_id = :uid"), {"uid": user_id})
+                result = await session.execute(
+                    text("SELECT short_term_memory_load FROM user_profiles WHERE user_id = :uid"),
+                    {"uid": user_id}
+                )
                 load = result.scalar() or 0
                 if load >= 20:
                     print(f"[Hippocampus] Triggered consolidation for user {user_id} (load={load})")
@@ -367,10 +406,13 @@ class RCoreKernel:
             "SHAME": {AgentType.INTUITION: 1.3},
             "TRIUMPH": {AgentType.STRIATUM: 1.3, AgentType.AMYGDALA: 0.5, AgentType.PREFRONTAL: 1.1}
         }
+        
         if archetype not in MODULATION_MAP: return signals
         print(f"[Hormonal Override] {archetype} is modulating agent scores")
+        
         modifiers = MODULATION_MAP[archetype]
         default_mod = 0.8 if archetype == "SHAME" else 1.0
+        
         for signal in signals:
             mod = modifiers.get(signal.agent_name, default_mod)
             signal.score = max(0.0, min(10.0, signal.score * mod))
@@ -398,7 +440,12 @@ class RCoreKernel:
     async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
         signals = [intuition_signal]
-        agent_map = {"amygdala": self.agents[1], "prefrontal": self.agents[2], "social": self.agents[3], "striatum": self.agents[4]}
+        agent_map = {
+            "amygdala": self.agents[1],
+            "prefrontal": self.agents[2],
+            "social": self.agents[3],
+            "striatum": self.agents[4]
+        }
         for key, agent in agent_map.items():
             report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
             signals.append(agent.process_from_report(report_data, self.config.sliders))
@@ -416,6 +463,7 @@ class RCoreKernel:
         }
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
         force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
+        
         self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
@@ -429,25 +477,36 @@ class RCoreKernel:
             if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
             if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
             lines.append("")
+
         if context.get("chat_history"):
             chat_history = context["chat_history"]
-            if limit_history is not None: chat_history = chat_history[-limit_history:]
+            if limit_history is not None:
+                chat_history = chat_history[-limit_history:]
             if chat_history:
                 lines.append("RECENT DIALOGUE:")
                 for msg in chat_history:
                     role = "User" if msg["role"] == "user" else "Assistant"
                     lines.append(f"{role}: {msg['content']}")
                 lines.append("") 
+        
         if not exclude_episodic and context.get("episodic_memory"):
             lines.append("PAST EPISODES (Long-term memory):")
-            for ep in context["episodic_memory"]: lines.append(f"- {ep.get('raw_text', '')}")
+            for ep in context["episodic_memory"]:
+                lines.append(f"- {ep.get('raw_text', '')}")
             lines.append("")
+        
         if not exclude_semantic and context.get("semantic_facts"):
             lines.append("KNOWN FACTS:")
-            for fact in context["semantic_facts"]: lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+            for fact in context["semantic_facts"]:
+                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
             lines.append("")
+                
         return "\\n".join(lines) if lines else "No prior context."
 
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         await asyncio.sleep(0.05)
-        return {"triples": [], "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], "volitional_pattern": None}
+        return {
+            "triples": [], 
+            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
+            "volitional_pattern": None
+        }
