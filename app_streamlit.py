@@ -275,8 +275,7 @@ async def create_agent(name: str, desc: str, gender: str, sliders: Dict):
     async with AsyncSessionLocal() as session:
         new_agent = AgentProfileModel(
             name=name, 
-            description=desc, 
-            gender=gender,
+            description=desc, \n            gender=gender,
             sliders_preset=sliders
         )
         session.add(new_agent)
@@ -388,10 +387,6 @@ if app_mode == "📈 Encephalogram (Analytics)":
         
         df_hormones = pd.DataFrame([t["hormones"] for t in timeline])
         df_hormones["timestamp"] = [t["timestamp"] for t in timeline]
-        
-        # Calculate time range
-        min_time = df_scores["timestamp"].min()
-        max_time = datetime.now()
 
         c1, c2 = st.columns(2)
         with c1:
@@ -406,12 +401,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 # title="Agent Activation Levels Over Time",
                 markers=True
             )
-            fig_scores.update_layout(
-                xaxis_title="Time", 
-                yaxis_title="Activation Score", 
-                hovermode="x unified",
-                xaxis=dict(range=[min_time, max_time])
-            )
+            fig_scores.update_layout(xaxis_title="Time", yaxis_title="Activation Score", hovermode="x unified")
             st.plotly_chart(fig_scores, use_container_width=True)
             
         with c2:
@@ -425,12 +415,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 # title="Hormonal Levels Over Time",
                 markers=True
             )
-            fig_hormones.update_layout(
-                xaxis_title="Time", 
-                yaxis_title="Concentration", 
-                hovermode="x unified",
-                xaxis=dict(range=[min_time, max_time])
-            )
+            fig_hormones.update_layout(xaxis_title="Time", yaxis_title="Concentration", hovermode="x unified")
             st.plotly_chart(fig_hormones, use_container_width=True)
 
 
@@ -571,8 +556,7 @@ else:
                         "empathy_bias": empathy, "risk_tolerance": risk,
                         "dominance_level": dominance, "pace_setting": pace, "neuroticism": 0.1
                     }
-                    run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))
-                    st.success(f"Agent {new_name} saved!")
+                    run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))\n                    st.success(f"Agent {new_name} saved!")
                     st.rerun()
 
 
@@ -625,9 +609,64 @@ else:
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
                             x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                             y=alt.Y('Agent', sort='-x'),
-                            color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
-                        ).properties(height=150)
+                            color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))\n                        ).properties(height=150)
                         st.altair_chart(chart, use_container_width=True)
+
+
+    # Input
+    user_input = st.chat_input("Say something...")
+    if user_input:
+        # Init Kernel\n        if st.session_state.kernel_instance is None:
+            config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
+            config.gender = st.session_state.bot_gender
+            st.session_state.kernel_instance = RCoreKernel(config)
+        else:
+            st.session_state.kernel_instance.config.name = st.session_state.bot_name
+            st.session_state.kernel_instance.config.sliders = st.session_state.sliders
+            st.session_state.kernel_instance.config.use_unified_council = use_unified_council
+
+
+        kernel = st.session_state.kernel_instance
+        incoming = IncomingMessage(user_id=999, session_id="streamlit_session", text=user_input)
+
+
+        if test_mode == "A/B Test":
+            with st.chat_message("user"): st.write(user_input)
+            c1, c2 = st.columns(2)
+            with c1, st.spinner("🧠 Cortical..."):
+                resp_c = run_async(kernel.process_message(incoming, mode="CORTICAL"))
+                st.info("Cortical"); st.write(resp_c.actions[0].payload['text'])
+            with c2, st.spinner("🧟 Zombie..."):
+                resp_z = run_async(kernel.process_message(incoming, mode="ZOMBIE"))
+                st.warning("Zombie"); st.write(resp_z.actions[0].payload['text'])
+            
+            st.session_state.messages.append({
+                "type": "ab_test", "role": "user", "content": user_input,
+                "cortical_text": resp_c.actions[0].payload['text'], "cortical_latency": resp_c.internal_stats['latency_ms'],
+                "zombie_text": resp_z.actions[0].payload['text'], "zombie_latency": resp_z.internal_stats['latency_ms']
+            })
+        else:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"): st.write(user_input)
+            
+            with st.spinner("Thinking..."):
+                try:
+                    response = run_async(kernel.process_message(incoming, mode="CORTICAL"))
+                    bot_text = response.actions[0].payload['text']
+                    stats = response.internal_stats
+                    
+                    with st.chat_message("assistant"):
+                        st.write(bot_text)
+                        st.caption(f"🏆 Winner: {response.winning_agent.value}")
+                        
+                        if "all_scores" in stats:
+                            scores_df = pd.DataFrame([{\"Agent\": k, \"Score\": v} for k, v in stats[\"all_scores\"].items()])
+                            chart = alt.Chart(scores_df).mark_bar(size=15).encode(
+                                x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                                y=alt.Y('Agent', sort='-x'),
+                                color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
+                            ).properties(height=150)
+                            st.altair_chart(chart, use_container_width=True)
 
 
                     st.session_state.messages.append({
