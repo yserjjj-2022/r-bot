@@ -410,7 +410,7 @@ class Hippocampus:
         
         prompt = f"""
 Ты - система анализа эпизодической памяти.
-Задача: найти повторяющиеся темы/интересы пользователя.
+Задача: найти повторяющиеся темы, отношения и эмоциональные паттерны пользователя.
 
 Эпизоды:
 {episodes_text}
@@ -418,13 +418,19 @@ class Hippocampus:
 Инструкция:
 - Найди темы, которые встречаются >= {self.min_theme_frequency} раз.
 - Создай факт в формате Subject-Predicate-Object.
-- confidence = frequency / total_episodes.
+- ИСПОЛЬЗУЙ БОГАТЫЙ НАБОР ПРЕДИКАТОВ (отношений), а не только INTERESTED_IN.
+- Примеры предикатов:
+  - Эмоции: LOVES, ADORES, HATES, FEARS, TRUSTS, RESPECTS, ADMIRES, IS_SKEPTICAL_OF, IS_ANNOYED_BY
+  - Интеллект: STUDIES, KNOWS, UNDERSTANDS, IS_EXPERT_IN, IS_CURIOUS_ABOUT
+  - Состояние: FEELS, WANTS, NEEDS, BELIEVES, VALUES
+  - Социальное: IS_FRIENDS_WITH, MENTORS, SUPPORTS
 
 Пример:
 {{
     "themes": [
-        {{\"subject\": \"User\", \"predicate\": \"INTERESTED_IN\", \"object\": \"Python\", \"confidence\": 0.75}},
-        {{\"subject\": \"User\", \"predicate\": \"DISLIKES\", \"object\": \"холодная погода\", \"confidence\": 0.6}}
+        {{\"subject\": \"User\", \"predicate\": \"ADMIRES\", \"object\": \"Shakespeare\", \"confidence\": 0.9}},
+        {{\"subject\": \"User\", \"predicate\": \"IS_SKEPTICAL_OF\", \"object\": \"Modern Art\", \"confidence\": 0.6}},
+        {{\"subject\": \"User\", \"predicate\": \"INTERESTED_IN\", \"object\": \"Python\", \"confidence\": 0.75}}
     ]
 }}
 
