@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional, Any, Dict
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, Integer, Float, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import String, Integer, Float, DateTime, Text, ForeignKey, JSON, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
 from src.r_core.config import settings
@@ -33,9 +33,12 @@ class SemanticModel(Base):
     object: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     source_message_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    # ✨ NEW: Affective ToM - эмоциональное отношение пользователя к объекту
+    # ✨ Affective ToM - эмоциональное отношение пользователя к объекту
     sentiment: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    # ✨ NEW (Migration 004): Embedding для дедупликации через гиппокамп
+    embedding = mapped_column(Vector(settings.EMBEDDING_DIM), nullable=True)
 
 class EpisodicModel(Base):
     __tablename__ = "episodic_memory"
@@ -58,6 +61,17 @@ class VolitionalModel(Base):
     conflict_detected: Mapped[bool] = mapped_column(default=False)
     resolution_strategy: Mapped[str] = mapped_column(String(255))
     action_taken: Mapped[str] = mapped_column(Text)
+    
+    # ✨ NEW (Migration 005): Volitional System Fields
+    intensity: Mapped[float] = mapped_column(Float, default=0.5) # Base strength
+    learned_delta: Mapped[float] = mapped_column(Float, default=0.0) # Learning param
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Switch
+    
+    last_activated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    decay_rate: Mapped[float] = mapped_column(Float, default=0.01)
+    reinforcement_rate: Mapped[float] = mapped_column(Float, default=0.05)
+    energy_cost: Mapped[float] = mapped_column(Float, default=0.1) # Future use
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class MetricsModel(Base):
@@ -68,7 +82,7 @@ class MetricsModel(Base):
     session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    # ✨ NEW: Метрики для Affective ToM
+    # ✨ Метрики для Affective ToM
     affective_triggers_detected: Mapped[int] = mapped_column(Integer, default=0)
     sentiment_context_used: Mapped[bool] = mapped_column(default=False)
     payload: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
@@ -91,6 +105,10 @@ class UserProfileModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     attributes: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
+    
+    # ✨ NEW (Migration 003): Триггер для "ленивого гиппокампа"
+    short_term_memory_load: Mapped[int] = mapped_column(Integer, default=0)
+    last_consolidation_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 class AgentProfileModel(Base):
     __tablename__ = "agent_profiles"
@@ -101,7 +119,7 @@ class AgentProfileModel(Base):
     gender: Mapped[Optional[str]] = mapped_column(String(20), default="Neutral")
     sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
     
-    # ✨ NEW: Сохраняем experimental controls
+    # ✨ Experimental controls
     intuition_gain: Mapped[float] = mapped_column(Float, default=1.0)
     use_unified_council: Mapped[bool] = mapped_column(default=False)
     
@@ -155,7 +173,7 @@ async def init_models():
         except Exception as e:
             print(f"[DB Init] Schema update (gender): {e}")
         
-        # ✨ NEW Migration: Add intuition_gain and use_unified_council to agent_profiles
+        # ✨ Migration: Add intuition_gain and use_unified_council to agent_profiles
         try:
             await conn.execute(text(
                 "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS intuition_gain FLOAT DEFAULT 1.0"
@@ -169,6 +187,54 @@ async def init_models():
             print("[DB Init] ✅ intuition_gain, use_unified_council, updated_at added to agent_profiles")
         except Exception as e:
             print(f"[DB Init] Schema update (agent experimental controls): {e}")
+        
+        # ✨ NEW Migration 003: short_term_memory_load для гиппокампа
+        try:
+            await conn.execute(text(
+                "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS short_term_memory_load INTEGER DEFAULT 0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS last_consolidation_at TIMESTAMP DEFAULT NULL"
+            ))
+            print("[DB Init] ✅ short_term_memory_load, last_consolidation_at added to user_profiles")
+        except Exception as e:
+            print(f"[DB Init] Schema update (hippocampus trigger): {e}")
+        
+        # ✨ NEW Migration 004: embedding в semantic_memory для дедупликации
+        try:
+            await conn.execute(text(
+                f"ALTER TABLE semantic_memory ADD COLUMN IF NOT EXISTS embedding vector({settings.EMBEDDING_DIM}) DEFAULT NULL"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_semantic_memory_embedding ON semantic_memory USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL"
+            ))
+            print("[DB Init] ✅ embedding column + HNSW index added to semantic_memory")
+        except Exception as e:
+            print(f"[DB Init] Schema update (semantic embedding): {e}")
+
+        # ✨ NEW Migration 005: Volitional System Fields
+        try:
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS intensity FLOAT DEFAULT 0.5"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS learned_delta FLOAT DEFAULT 0.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS last_activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS decay_rate FLOAT DEFAULT 0.01"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS reinforcement_rate FLOAT DEFAULT 0.05"
+            ))
+            print("[DB Init] ✅ Volitional System fields added (Migration 005)")
+        except Exception as e:
+            print(f"[DB Init] Schema update (volitional): {e}")
 
 # --- Helper Methods ---
 
