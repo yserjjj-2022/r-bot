@@ -62,24 +62,24 @@
 
 ### Фаза 1: The Sensor (Чувствительность)
 **Фокус:** Научить бота "видеть" состояние юзера и помнить свое.
-1.  ✅ **Council Report:** Добавить секцию `User State Inference` (Emotional State, Goal).
-2.  ✅ **Identity Injection:** Внедрить `identity_core.json` (Anchors) в System Prompt.
-3.  **Bot Values:** Явные ценности в промпте ("Curiosity > Agreement").
+1.  ⚪ **Council Report: User State Inference** — Добавить секцию `User State Inference` (Emotional State, Goal) в отчеты агентов.
+2.  ⚪ **Identity Injection** — Внедрить `identity_core.json` (Anchors) в System Prompt.
+3.  ⚪ **Bot Values** — Явные ценности в промпте ("Curiosity > Agreement").
 
 ### Фаза 2: The Chronicler (Нарратив и Стратегия)
 **Фокус:** Создание чувства времени, глубины и поведенческой свободы.
-1.  **Rolling Bio:** Скрипт еженедельной суммаризации (`chat_history` -> `biography.md`).
-2.  **Shadow Profile:** Таблица `user_traits` для хранения гипотез о характере юзера.
-3.  **Strategic Silence (Subjunctive Action):**
+1.  ⚪ **Rolling Bio** — Скрипт еженедельной суммаризации (`chat_history` -> `biography.md`).
+2.  ⚪ **Shadow Profile** — Таблица `user_traits` для хранения гипотез о характере юзера.
+3.  ⚪ **Strategic Silence (Subjunctive Action)**
     *   **Цель:** Дать боту право **не отвечать**, если это стратегически или эмоционально обосновано (обида, игнорирование троллинга, "значимая пауза").
     *   **Механика:** Разрешить LLM генерировать токен `[SILENCE]` или `*actions*` вместо текста.
     *   **Council Strategy:** Добавить опцию `IGNORE` для агентов (особенно Amygdala и Prefrontal).
 
 ### Фаза 3: The Dreamer (Рефлексия)
 **Фокус:** Самообучение без учителя.
-1.  **Dream Cycle:** Фоновый процесс анализа диалогов.
-2.  **Volition Generator:** Автоматическое создание паттернов поведения на основе снов.
-3.  **Active Testing:** Бот проверяет гипотезы ("А что если я не соглашусь?").
+1.  ⚪ **Dream Cycle** — Фоновый процесс анализа диалогов.
+2.  ⚪ **Volition Generator** — Автоматическое создание паттернов поведения на основе снов.
+3.  ⚪ **Active Testing** — Бот проверяет гипотезы ("А что если я не соглашусь?").
 
 ---
 
