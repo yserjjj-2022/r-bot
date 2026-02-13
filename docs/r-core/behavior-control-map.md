@@ -6,66 +6,59 @@
 ## Mermaid diagram
 
 ```mermaid
-flowchart TD
+graph TD
+    %% 1. INPUT
+    User["User Input"] --> Perception["Perception & Embedding"]
+    Perception --> Retrieval["Memory Retrieval"]
 
-%% ========== Inputs ==========
-U[User message<br/>(text)] --> NLU[NLU/Parsing<br/>(intent, entities, sentiment)]
-UP[User Profile<br/>(name, gender, preferred_mode)] --> CTX[Context Builder]
-SM[Semantic Memory<br/>(facts)] --> CTX
-EM[Episodic Memory<br/>(episodes)] --> CTX
-VP[Volitional Patterns<br/>(trigger/impulse/strategy)] --> CTX
-CH[Chat History<br/>(last N)] --> CTX
-NLU --> CTX
+    %% 2. MEMORY
+    subgraph MEMORY_SYSTEM ["Memory System"]
+        Retrieval <--> Episodic["Episodic Memory"]
+        Retrieval <--> Semantic["Semantic Facts"]
+        Episodic -.->|Lazy Consolidation| Hippocampus["🧠 Hippocampus"]
+        Hippocampus --> Semantic
+        Hippocampus --> VolitionalPatterns["Volitional Patterns"]
+    end
 
-%% ========== Background consolidation ==========
-subgraph BG[Background]
-HIPPO[Hippocampus<br/>(async consolidation)]
-EM --> HIPPO
-SM --> HIPPO
-CH --> HIPPO
-HIPPO --> SM
-HIPPO --> VP
-end
+    %% 3. THE COUNCIL
+    Retrieval --> Council["Council of Agents"]
+    subgraph AGENTS ["The Council - Organ 1"]
+        Amygdala["🔴 Amygdala: Threat"]
+        Prefrontal["🔵 Prefrontal: Logic"]
+        Striatum["🟢 Striatum: Reward"]
+        Social["🟡 Social: Empathy"]
+        Intuition["🟣 Intuition: Gut feeling"]
+    end
+    
+    Council --> Amygdala & Prefrontal & Striatum & Social & Intuition
 
-%% ========== Emergency gate ==========
-CTX --> STATE[State Estimation<br/>(arousal/valence/risk)]
-STATE -->|normal| VOLSEL[Volition Selector<br/>(gating + persistence)]
-STATE -->|extreme| EMERGENCY[Emergency Controller<br/>(PFC shutdown / burnout / panic)]
+    %% 4. HORMONES
+    subgraph HORMONES ["Neuro-Modulation - Organ 2"]
+        Chemistry["⚗️ Hormonal State"]
+        Chemistry -->|Modulates Scores| AgentScores["Agent Scores"]
+        Amygdala -.->|Increases CORT| Chemistry
+        Striatum -.->|Increases DA| Chemistry
+    end
 
-EMERGENCY --> STYLE_EM[Emergency Style Modifiers]
-EMERGENCY --> SAFE[Safety & De-escalation Policy]
-SAFE --> RESP
+    Amygdala & Prefrontal & Striatum & Social & Intuition --> AgentScores
 
-%% ========== Council ==========
-VOLSEL --> COUNCIL[Council Scoring]
+    %% 5. VOLITION
+    subgraph VOLITION ["Volitional System - Organ 3"]
+        VolitionalPatterns -->|Selects Dominant| VolitionalGating["🛡️ Volitional Gating"]
+        VolitionalGating -->|Injection| PromptContext["Final Prompt Context"]
+        Chemistry -.->|Panic Blocks| VolitionalGating
+    end
 
-subgraph C[Council (5 agents)]
-INT[Intuition] --> COUNCIL
-SOC[Social] --> COUNCIL
-PFC[Prefrontal] --> COUNCIL
-STR[Striatum] --> COUNCIL
-AMY[Amygdala] --> COUNCIL
-end
-
-COUNCIL --> HORM[Neuro‑Modulation<br/>(NE, DA, 5‑HT, CORT)]
-HORM --> ARCH[Archetype Selector<br/>(CALM, RAGE, FEAR, ...)]
-ARCH --> WIN[Winner Selection<br/>(max score + constraints)]
-
-%% ========== Prompts ==========
-SYS[System Prompt<br/>(values, role)] --> PROMPT[Prompt Composer]
-AGP[Agent Prompt<br/>(winner instruction)] --> PROMPT
-VOLSEL --> VINS[Volitional Directive<br/>(dominant impulse)]
-VINS --> PROMPT
-ARCH --> STYLE[Style Modifiers<br/>(tone, tempo, empathy)]
-STYLE --> PROMPT
-WIN --> PROMPT
-
-%% ========== Optional module ==========
-TM[Time Machine (optional)<br/>(counterfactual recall / rewind)] --> CTX
-
-%% ========== Output ==========
-PROMPT --> RESP[Final Response<br/>(user-facing text)]
-PROMPT --> STATS[Internal Stats<br/>(scores, hormones, archetype, volition, tokens, latency)]
+    %% 6. ARBITRATION
+    AgentScores --> Arbitration["⚖️ ARBITRATION"]
+    Arbitration -->|Winner Takes All| Winner["Winning Agent"]
+    
+    %% RESPONSE
+    Winner --> LLM_Generation["LLM Generation"]
+    VolitionalGating -.->|Directive| LLM_Generation
+    Chemistry -.->|Style/Adverbs| LLM_Generation
+    
+    LLM_Generation --> Response["Bot Response"]
 ```
 
 ## Блоки и ответственность
