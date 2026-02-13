@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional, Any, Dict
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, Integer, Float, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import String, Integer, Float, DateTime, Text, ForeignKey, JSON, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from pgvector.sqlalchemy import Vector
 from src.r_core.config import settings
@@ -61,6 +61,17 @@ class VolitionalModel(Base):
     conflict_detected: Mapped[bool] = mapped_column(default=False)
     resolution_strategy: Mapped[str] = mapped_column(String(255))
     action_taken: Mapped[str] = mapped_column(Text)
+    
+    # ✨ NEW (Migration 005): Volitional System Fields
+    intensity: Mapped[float] = mapped_column(Float, default=0.5) # Base strength
+    learned_delta: Mapped[float] = mapped_column(Float, default=0.0) # Learning param
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Switch
+    
+    last_activated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    decay_rate: Mapped[float] = mapped_column(Float, default=0.01)
+    reinforcement_rate: Mapped[float] = mapped_column(Float, default=0.05)
+    energy_cost: Mapped[float] = mapped_column(Float, default=0.1) # Future use
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class MetricsModel(Base):
@@ -200,6 +211,30 @@ async def init_models():
             print("[DB Init] ✅ embedding column + HNSW index added to semantic_memory")
         except Exception as e:
             print(f"[DB Init] Schema update (semantic embedding): {e}")
+
+        # ✨ NEW Migration 005: Volitional System Fields
+        try:
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS intensity FLOAT DEFAULT 0.5"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS learned_delta FLOAT DEFAULT 0.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS last_activated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS decay_rate FLOAT DEFAULT 0.01"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS reinforcement_rate FLOAT DEFAULT 0.05"
+            ))
+            print("[DB Init] ✅ Volitional System fields added (Migration 005)")
+        except Exception as e:
+            print(f"[DB Init] Schema update (volitional): {e}")
 
 # --- Helper Methods ---
 
