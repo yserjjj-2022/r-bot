@@ -391,7 +391,11 @@ class RCoreKernel:
                     {"uid": user_id}
                 )
                 load = result.scalar() or 0
-                if load >= 20:
+                
+                # FIX: Lower threshold for testing (was 20)
+                THRESHOLD = 2 
+                
+                if load >= THRESHOLD:
                     print(f"[Hippocampus] Triggered consolidation for user {user_id} (load={load})")
                     await self.hippocampus.consolidate(user_id)
         except Exception as e:
