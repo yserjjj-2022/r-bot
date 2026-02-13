@@ -9,7 +9,7 @@
 Три основные задачи:
 1. Deduplicate semantic facts (слияние дублей фактов)
 2. Extract facts from episodes (консолидация: эпизод → семантика)
-3. Update volitional patterns (выявление паттернов поведения)
+3. Update volitional patterns (выявление паттернов поведения, их обучение и поддержка)
 
 Триггер: user_profiles.short_term_memory_load >= 20
 """
@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Set, Tuple
-from sqlalchemy import select, text, delete, and_
+from sqlalchemy import select, text, delete, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.r_core.infrastructure.db import (
     AsyncSessionLocal,
@@ -447,8 +447,13 @@ class Hippocampus:
         
         Анализируем:
         - Время активности (night_owl / morning_person)
-        - Частоту инициативы (active / passive user)
         - Энергетический профиль (high / low energy)
+        
+        ✨ NEW (Update): Reinforcement Learning of Volition
+        Вместо простого добавления, мы теперь:
+        1. Ищем существующий паттерн.
+        2. Если найден: Увеличиваем learned_delta (обучение) и обновляем last_activated_at.
+        3. Если нет: Создаем с базовым intensity.
         """
         async with AsyncSessionLocal() as session:
             # Загрузить эпизоды за последние N дней
@@ -468,45 +473,103 @@ class Hippocampus:
             if len(episodes) < 5:
                 return {"status": "skip", "reason": "too_few_episodes", "count": len(episodes)}
             
-            # Анализ времени активности
-            timestamps = [ep.created_at for ep in episodes]
-            night_owl = self._detect_night_owl(timestamps)
+            patterns_updated = 0
             
-            if night_owl:
-                # Создаём/обновляем volitional pattern
-                pattern = VolitionalModel(
-                    user_id=user_id,
+            # --- Analysis 1: Night Owl ---
+            timestamps = [ep.created_at for ep in episodes]
+            is_night_owl = self._detect_night_owl(timestamps)
+            
+            if is_night_owl:
+                await self._reinforce_or_create_pattern(
+                    session, user_id,
                     trigger="time > 22:00",
                     impulse="initiate_dialogue",
-                    goal="social_connection",
-                    resolution_strategy="wait_for_user",
-                    action_taken="detected_night_owl_pattern"
+                    defaults={
+                        "goal": "social_connection",
+                        "resolution_strategy": "wait_for_user",
+                        "action_taken": "detected_night_owl_pattern",
+                        "intensity": 0.4  # Базовая сила хронотипа
+                    }
                 )
-                session.add(pattern)
+                patterns_updated += 1
             
-            # Анализ энергии (длина сообщений, эмоции)
+            # --- Analysis 2: High Energy ---
             avg_emotion = sum(ep.emotion_score for ep in episodes) / len(episodes)
             energy_level = min(1.0, max(0.0, (avg_emotion + 1.0) / 2.0))  # нормализация -1..1 → 0..1
             
             if energy_level > 0.7:
-                pattern = VolitionalModel(
-                    user_id=user_id,
+                await self._reinforce_or_create_pattern(
+                    session, user_id,
                     trigger="user_message_received",
                     impulse="high_energy",
-                    goal="maintain_engagement",
-                    resolution_strategy="mirror_energy",
-                    action_taken=f"detected_high_energy (avg={energy_level:.2f})"
+                    defaults={
+                        "goal": "maintain_engagement",
+                        "resolution_strategy": "mirror_energy",
+                        "action_taken": f"detected_high_energy (avg={energy_level:.2f})",
+                        "intensity": 0.7  # Высокая базовая сила
+                    }
                 )
-                session.add(pattern)
+                patterns_updated += 1
             
             await session.commit()
             
             return {
                 "status": "ok",
                 "episodes_analyzed": len(episodes),
-                "patterns_created": 2 if night_owl and energy_level > 0.7 else (1 if night_owl or energy_level > 0.7 else 0)
+                "patterns_updated": patterns_updated
             }
-    
+            
+    async def _reinforce_or_create_pattern(
+        self, 
+        session: AsyncSession, 
+        user_id: int, 
+        trigger: str, 
+        impulse: str, 
+        defaults: Dict[str, Any]
+    ):
+        """
+        Helper: Ищет паттерн. Если есть — усиливает (Reinforcement). Если нет — создает.
+        """
+        # 1. Try to find existing pattern
+        result = await session.execute(
+            select(VolitionalModel).where(
+                and_(
+                    VolitionalModel.user_id == user_id,
+                    VolitionalModel.trigger == trigger,
+                    VolitionalModel.impulse == impulse
+                )
+            )
+        )
+        pattern = result.scalar_one_or_none()
+        
+        if pattern:
+            # ✨ REINFORCEMENT: Усиливаем паттерн
+            # learned_delta растет, но не бесконечно (clamp -1.0 to +1.0)
+            new_delta = pattern.learned_delta + pattern.reinforcement_rate
+            pattern.learned_delta = max(-1.0, min(1.0, new_delta))
+            
+            # Обновляем время последней активации (важно для decay)
+            pattern.last_activated_at = datetime.utcnow()
+            
+            # Обновляем метаданные (например, новый уровень энергии)
+            if "action_taken" in defaults:
+                pattern.action_taken = defaults["action_taken"]
+                
+        else:
+            # ✨ CREATE: Создаем новый паттерн
+            new_pattern = VolitionalModel(
+                user_id=user_id,
+                trigger=trigger,
+                impulse=impulse,
+                goal=defaults.get("goal"),
+                resolution_strategy=defaults.get("resolution_strategy"),
+                action_taken=defaults.get("action_taken"),
+                intensity=defaults.get("intensity", 0.5),
+                learned_delta=0.0,
+                last_activated_at=datetime.utcnow()
+            )
+            session.add(new_pattern)
+
     def _detect_night_owl(self, timestamps: List[datetime]) -> bool:
         """Проверяет, является ли пользователь ночной совой (>50% активности 22:00-06:00)"""
         night_count = sum(1 for ts in timestamps if ts.hour >= 22 or ts.hour <= 6)
