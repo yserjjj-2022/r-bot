@@ -1,35 +1,108 @@
-# r-bot
+# R-Bot (Replicant)
 
-Телеграм-бот для автоматизации уведомлений и управления задачами.
+Experimental AI cognitive architecture exploring "Artificial Psyche".
+Project playground for studying human-AI interaction dynamics.
 
-## Документация
+## 🧠 Core Architecture: "The Governing Organs"
 
-### Научные работы
+This project implements a multi-agent cognitive architecture where behavior is not hardcoded but emerges from the competition of internal "organs".
 
-- [Волевая архитектура поведения: теоретический фреймворк для анализа конфликта целей](docs/volitional_architecture.md) — концептуальная статья об интеграции COM-B с агентной теорией и психологией воли
+### 1. The Council of Agents (Decision Making)
+The primary decision-making body. Five specialized agents debate how to respond to every user message.
+- 🔴 **Amygdala**: Responsible for threat detection, boundaries, and aggression.
+- 🔵 **Prefrontal Cortex**: Responsible for logic, planning, and following instructions.
+- 🟢 **Striatum**: Responsible for reward seeking, fun, and curiosity.
+- 🟡 **Social Center**: Responsible for empathy, social norms, and politeness.
+- 🟣 **Intuition (System 1)**: Fast, heuristic-based judgments.
 
-### Технические руководства
+### 2. Hormonal Physics (Modulation)
+A biochemical layer that modulates the agents' influence.
+- **DA (Dopamine)**: Boosts Striatum (reward seeking).
+- **NE (Norepinephrine)**: Controls arousal/alertness.
+- **CORT (Cortisol)**: Stress hormone. High CORT suppresses Prefrontal (logic) and boosts Amygdala (fight/flight).
+- **5-HT (Serotonin)**: Mood stabilizer.
 
-- [Timing DSL Manual](TIMING_DSL_MANUAL.md) — руководство по использованию DSL для временных выражений
-- [Rollback Instructions](rollback_instructions.md) — инструкции по откату изменений
+### 3. Hippocampus & Volition (Long-term Strategy)
+- **Lazy Consolidation**: Background process that sleeps during dialogue and wakes up (every 20 turns) to consolidate raw episodes into semantic facts.
+- **Volitional Gating**: A mechanism that allows the bot to "force" a focus (e.g., "I want to learn about X") even if the immediate conversation drifts. It implements "Willpower" via persistence and decay.
 
-## Структура проекта
+### 4. Arbitration (The Final Verdict)
+The system that weighs the votes of the Council against the hormonal state and volitional directives to choose the single "Winner Agent" that generates the final response.
 
-- `app/` — основной код приложения
-- `docs/` — документация и научные статьи
-- `data/` — данные и конфигурации
-- `tools/` — вспомогательные инструменты
+---
 
-## Установка
+## 🗺️ Architecture Map
 
-```bash
-pip install -r requirements.txt
+```mermaid
+graph TD
+    %% Styling
+    classDef input fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef memory fill:#ffd700,stroke:#333,stroke-width:2px;
+    classDef agents fill:#add8e6,stroke:#333,stroke-width:2px;
+    classDef hormones fill:#ff7f50,stroke:#333,stroke-width:2px;
+    classDef volition fill:#90ee90,stroke:#333,stroke-width:4px;
+    classDef arbitration fill:#ff69b4,stroke:#333,stroke-width:4px;
+    classDef output fill:#f9f,stroke:#333,stroke-width:2px;
+
+    %% 1. INPUT
+    User((User Input)):::input --> Perception[Perception & Embedding]
+    Perception --> Retrieval[Memory Retrieval]
+
+    %% 2. MEMORY
+    subgraph MEMORY_SYSTEM [Memory System]
+        Retrieval <--> Episodic[(Episodic Memory)]
+        Retrieval <--> Semantic[(Semantic Facts)]
+        Episodic -.->|Lazy Consolidation| Hippocampus[🧠 Hippocampus]:::memory
+        Hippocampus --> Semantic
+        Hippocampus --> VolitionalPatterns[(Volitional Patterns)]
+    end
+
+    %% 3. THE COUNCIL
+    Retrieval --> Council[Council of Agents]
+    subgraph AGENTS [The Council - Organ 1]
+        Amygdala(🔴 Amygdala: Threat)
+        Prefrontal(🔵 Prefrontal: Logic)
+        Striatum(🟢 Striatum: Reward)
+        Social(🟡 Social: Empathy)
+        Intuition(🟣 Intuition: Gut feeling)
+    end
+    
+    Council --> Amygdala & Prefrontal & Striatum & Social & Intuition
+
+    %% 4. HORMONES
+    subgraph HORMONES [Neuro-Modulation - Organ 2]
+        Chemistry{⚗️ Hormonal State}:::hormones
+        Chemistry -->|Modulates Scores| AgentScores[Agent Scores]
+        Amygdala -.->|Increases CORT| Chemistry
+        Striatum -.->|Increases DA| Chemistry
+    end
+
+    Amygdala & Prefrontal & Striatum & Social & Intuition --> AgentScores
+
+    %% 5. VOLITION
+    subgraph VOLITION [Volitional System - Organ 3]
+        VolitionalPatterns -->|Selects Dominant| VolitionalGating{🛡️ Volitional Gating}:::volition
+        VolitionalGating -->|Injection| PromptContext[Final Prompt Context]
+        Chemistry -.->|Panic Blocks| VolitionalGating
+    end
+
+    %% 6. ARBITRATION
+    AgentScores --> Arbitration{⚖️ ARBITRATION}:::arbitration
+    Arbitration -->|Winner Takes All| Winner[Winning Agent]
+    
+    %% RESPONSE
+    Winner --> LLM_Generation[LLM Generation]
+    VolitionalGating -.->|Directive| LLM_Generation
+    Chemistry -.->|Style/Adverbs| LLM_Generation
+    
+    LLM_Generation --> Response((Bot Response)):::output
 ```
 
-## Развертывание
+## 🛠️ Development Setup
 
-Проект настроен для развертывания на платформе Amvera (см. `amvera.yml`).
-
-## Лицензия
-
-MIT License
+1. **Database**: PostgreSQL with `pgvector` extension.
+2. **Environment**: Python 3.11+.
+3. **Run**:
+   ```bash
+   streamlit run src/main.py
+   ```
