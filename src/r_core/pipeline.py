@@ -226,9 +226,6 @@ class RCoreKernel:
             adverb_context_str = "\\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\\n" + "\\n".join(adverb_instructions)
             print(f"[Neuro-Modulation] Applied styles from: {[s.agent_name for s in strong_losers]}")
         
-        # Legacy Mood update (for backward compatibility with internal metrics)
-        self._update_mood(winner)
-        
         # --- Hormonal Reactive Update ---
         # Update hormones based on who won and implicit Prediction Error
         # TODO: Implement real PE calculation. For now, infer from winner.
@@ -239,6 +236,9 @@ class RCoreKernel:
         
         self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name)
         
+        # NEW: Update VAD Mood directly from Hormones (Physics consistency)
+        self._update_mood_from_hormones()
+        
         all_scores = {s.agent_name.value: round(s.score, 2) for s in signals}
         
         # 5. Response Generation (Inject Mood Styles)
@@ -248,13 +248,19 @@ class RCoreKernel:
         bot_gender = getattr(self.config, "gender", "Neutral")
         
         # --- STYLE GENERATION ---
-        # REPLACED legacy mood prompt with Mechanical Summation
-        # Old: mood_style_prompt = self._generate_style_from_mood(self.current_mood)
-        # New:
+        # 1. Semantic Style (Archetype) - WHAT to play (e.g. "Aggressive")
         mechanical_style_instruction = self.neuromodulation.get_style_instruction()
         
-        # Combine Mood + Neuro-Modulation
-        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str
+        # 2. Syntactic Style (VAD) - HOW to play (e.g. "Short sentences")
+        vad_technical_instruction = self._generate_style_from_mood(self.current_mood)
+        
+        # Combine: Archetype + VAD Constraints + Agent Adverbs
+        final_style_instructions = (
+            f"{mechanical_style_instruction}\n"
+            f"SYNTAX & PACING CONTROLS (VAD System):\n"
+            f"{vad_technical_instruction}\n"
+            f"{adverb_context_str}"
+        )
         
         # ✨ Формируем affective_context_str из context["affective_context"]
         affective_warnings = context.get("affective_context", [])
@@ -441,72 +447,59 @@ class RCoreKernel:
         
         return signals
 
-    def _update_mood(self, winner_signal):
+    def _update_mood_from_hormones(self):
         """
-        Hormonal Physics:
-        NewMood = (OldMood * Inertia) + (AgentImpact * Sensitivity)
+        Recalculates VAD mood directly from Hormonal State (Lovheim mapping).
+        Ensures internal consistency: Mood IS Hormones.
         """
-        INERTIA = 0.7
-        SENSITIVITY = 0.3
+        s = self.neuromodulation.state
         
-        impact_map = {
-            AgentType.AMYGDALA:  MoodVector(valence=-0.8, arousal=0.9, dominance=0.8), # Fear/Aggression
-            AgentType.STRIATUM:  MoodVector(valence=0.8, arousal=0.7, dominance=0.3),  # Joy/Excitement
-            AgentType.SOCIAL:    MoodVector(valence=0.5, arousal=-0.2, dominance=-0.1),# Warmth/Calm
-            AgentType.PREFRONTAL:MoodVector(valence=0.0, arousal=-0.5, dominance=0.1), # Cold Logic
-            AgentType.INTUITION: MoodVector(valence=0.0, arousal=0.1, dominance=0.0)   # Neutral
-        }
+        # 1. VALENCE (Pleasure/Positivity)
+        # Positive: DA (Reward), 5HT (Satisfaction)
+        # Negative: CORT (Stress), NE (Stress/Anger)
+        raw_valence = (s.da * 0.6 + s.ht * 0.4) - (s.cort * 0.6 + s.ne * 0.4)
         
-        impact = impact_map.get(winner_signal.agent_name, MoodVector())
+        # 2. AROUSAL (Energy/Activation)
+        # High: NE (Adrenaline), DA (Drive)
+        # Low: 5HT (Calm)
+        raw_arousal = (s.ne * 0.7 + s.da * 0.3) - (s.ht * 0.5)
         
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
-        
-        self.current_mood.valence = (self.current_mood.valence * INERTIA) + (impact.valence * force)
-        self.current_mood.arousal = (self.current_mood.arousal * INERTIA) + (impact.arousal * force)
-        self.current_mood.dominance = (self.current_mood.dominance * INERTIA) + (impact.dominance * force)
-        
-        for attr in ["valence", "arousal", "dominance"]:
-            val = getattr(self.current_mood, attr)
-            setattr(self.current_mood, attr, max(-1.0, min(1.0, val)))
+        # 3. DOMINANCE (Control/Power)
+        # High: DA (Confidence), NE (Power)
+        # Low: CORT (Fear/Submission)
+        raw_dominance = (s.da * 0.5 + s.ne * 0.5) - (s.cort * 0.8)
+
+        # Normalize to [-1.0, 1.0]
+        self.current_mood.valence = max(-1.0, min(1.0, raw_valence))
+        self.current_mood.arousal = max(-1.0, min(1.0, raw_arousal))
+        self.current_mood.dominance = max(-1.0, min(1.0, raw_dominance))
 
     def _generate_style_from_mood(self, mood: MoodVector) -> str:
         """
-        Translates VAD numeric vectors into natural language style instructions for the LLM.
+        Translates VAD numeric vectors into TECHNICAL constraints (Syntax/Pacing).
         """
         instructions = []
         
-        # 1. Arousal (Energy/Tempo)
+        # 1. AROUSAL (Tempo & Length)
         if mood.arousal > 0.6:
-            instructions.append("SENTENCE STRUCTURE: Use short, punchy sentences. High tempo. Be direct.")
-        elif mood.arousal < -0.4:
-            instructions.append("SENTENCE STRUCTURE: Use long, flowing, relaxed sentences. Low tempo. Take your time.")
+            instructions.append("🔴 [HIGH TEMPO] Short sentences (max 5-7 words). No complex grammar. Use '!' or caps if needed. Be abrupt.")
+        elif mood.arousal < -0.6:
+            instructions.append("🔵 [LOW TEMPO] Long, flowing sentences (20+ words). Use '...' and pauses. Passive voice allowed. Be slow.")
+            
+        # 2. DOMINANCE (Stance)
+        if mood.dominance > 0.6:
+            instructions.append("🦁 [DOMINANT] Imperative mood. No 'please', 'maybe', or 'I think'. Give orders or state absolute facts.")
+        elif mood.dominance < -0.6:
+            instructions.append("🐰 [SUBMISSIVE] Hesitant tone. Use 'sorry', 'if I may', 'perhaps'. Ask for validation.")
+            
+        # 3. VALENCE (Tone modifiers - auxiliary to Archetype)
+        if mood.valence < -0.7:
+             instructions.append("⚫ [NEGATIVE] Dry, cold punctuation. Use periods instead of commas. No pleasantries.")
         
-        # 2. Valence (Tone)
-        if mood.valence > 0.6:
-            instructions.append("TONE: Enthusiastic, warm, optimistic. You may use expressive punctuation (!) and emojis if appropriate.")
-        elif mood.valence < -0.5:
-            instructions.append("TONE: Cold, dry, or melancholic. Avoid exclamation marks. Be minimal.")
-            
-        # 3. Dominance (Assertiveness)
-        if mood.dominance > 0.5:
-            instructions.append("STANCE: Confident, leading, assertive. Don't ask for permission, state facts.")
-        elif mood.dominance < -0.3:
-            instructions.append("STANCE: Soft, accommodating, supportive. Use phrases like 'I think', 'maybe', 'if you want'.")
-            
-        # 4. Combo Special Cases (EHS "Cocktails")
-        # High Arousal + Low Valence = Anger/Stress
-        if mood.arousal > 0.5 and mood.valence < -0.4:
-            instructions.append("SPECIAL STATE: You are irritated or stressed. Be sharp and defensive.")
-            
-        # High Arousal + High Valence = Euphoria/Manic
-        if mood.arousal > 0.5 and mood.valence > 0.5:
-            instructions.append("SPECIAL STATE: You are excited and eager! Radiate energy.")
-
-        base = f"CURRENT INTERNAL MOOD: {mood}\\nSTYLE INSTRUCTIONS:\\n"
         if not instructions:
-            return base + "- Speak in a balanced, neutral, professional manner."
-        
-        return base + "- " + "\\n- ".join(instructions)
+            return "🟢 [NEUTRAL PACING] Natural sentence length and structure."
+            
+        return " ".join(instructions)
 
     def _format_context_for_llm(
         self, 
