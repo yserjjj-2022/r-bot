@@ -95,15 +95,38 @@ def parse_metrics(metrics_row):
         return {}
 
 def extract_scores(metrics_data):
-    scores = metrics_data.get("all_scores", {})
+    # Пытаемся достать 'all_scores' - бывает внутри 'agent_scores' или просто 'all_scores'
+    scores = metrics_data.get("all_scores")
     if not scores:
-        # Fallback 1: может быть в другом формате?
+        scores = metrics_data.get("agent_scores") # Fallback for some versions
+    
+    if not scores:
         return {"Amygdala": 0, "Prefrontal": 0, "Striatum": 0, "Social": 0, "Intuition": 0}
-    return scores
+        
+    # Нормализуем ключи (убираем эмодзи если есть)
+    clean_scores = {}
+    for k, v in scores.items():
+        clean_key = k.replace("🔴", "").replace("🔵", "").replace("🟢", "").replace("🟡", "").replace("🟣", "").strip()
+        # Маппинг имен
+        if "Amygdala" in clean_key: clean_scores["Amygdala"] = v
+        elif "Prefrontal" in clean_key: clean_scores["Prefrontal"] = v
+        elif "Striatum" in clean_key: clean_scores["Striatum"] = v
+        elif "Social" in clean_key: clean_scores["Social"] = v
+        elif "Intuition" in clean_key: clean_scores["Intuition"] = v
+        else: clean_scores[clean_key] = v
+        
+    return clean_scores
 
 def extract_hormones(metrics_data):
     h_str = metrics_data.get("hormonal_state", "")
     h_map = {"NE": 0.5, "DA": 0.5, "5HT": 0.5, "CORT": 0.5}
+    
+    # 1. Если это словарь
+    if isinstance(h_str, dict):
+        h_map.update(h_str)
+        return h_map
+
+    # 2. Если строка "NE:0.5 DA:0.3..."
     if isinstance(h_str, str) and "NE:" in h_str:
         parts = h_str.split(" ")
         for p in parts:
@@ -117,33 +140,51 @@ def extract_hormones(metrics_data):
 
 def extract_mood(metrics_data):
     """Извлекает VAD (Mood) из метрик"""
-    # Обычно это лежит в current_mood: "Valence: 0.5, Arousal: ..." или объект
-    mood_str = metrics_data.get("current_mood", "")
+    mood_data = metrics_data.get("current_mood", "")
     vad = {"Valence": 0.0, "Arousal": 0.0, "Dominance": 0.0}
     
-    if isinstance(mood_str, str):
-        # Парсим строку вида "Valence: 0.85, Arousal: 0.42, Dominance: 0.65"
+    if isinstance(mood_data, dict):
+        # Иногда ключи lowercase
+        vad["Valence"] = mood_data.get("valence", mood_data.get("Valence", 0.0))
+        vad["Arousal"] = mood_data.get("arousal", mood_data.get("Arousal", 0.0))
+        vad["Dominance"] = mood_data.get("dominance", mood_data.get("Dominance", 0.0))
+    elif isinstance(mood_data, str):
+        # Парсим строку
         try:
-            parts = mood_str.split(",")
+            parts = mood_data.split(",")
             for p in parts:
-                k, v = p.strip().split(":")
-                if k in vad:
-                    vad[k] = float(v)
+                if ":" in p:
+                    k, v = p.strip().split(":")
+                    k = k.strip().capitalize()
+                    if k in vad:
+                        vad[k] = float(v)
         except:
             pass
-    elif isinstance(mood_str, dict):
-         vad.update(mood_str)
-         
+            
     return vad
 
+def get_mood_description(vad):
+    v = vad.get("Valence", 0)
+    a = vad.get("Arousal", 0)
+    
+    if v > 0.5 and a > 0.5: return "Joyful / Excited"
+    if v > 0.5 and a < 0.5: return "Relaxed / Content"
+    if v < 0.5 and a > 0.5: return "Angry / Anxious"
+    if v < 0.5 and a < 0.5: return "Sad / Bored"
+    if v > 0.3 and v < 0.7 and a < 0.3: return "Calm / Neutral"
+    
+    return "Neutral"
+
 def get_winner_safe(metrics_data):
-    # Пытаемся найти победителя в разных полях
+    # Ищем победителя глубоким поиском
     w = metrics_data.get("winner_agent")
-    if not w:
-        w = metrics_data.get("winning_agent") # sometimes stored differently
-    if not w:
-        w = metrics_data.get("winner")
-        
+    if not w: w = metrics_data.get("winning_agent")
+    if not w: w = metrics_data.get("winner")
+    
+    # Иногда победитель лежит внутри вложенного dict (legacy logs)
+    if not w and "council_result" in metrics_data:
+         w = metrics_data["council_result"].get("winner")
+         
     return w or "Unknown"
 
 # --- DB Operations for Agents ---
@@ -199,6 +240,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
     <style>
         .delta-pos { color: green; font-weight: bold; }
         .delta-neg { color: red; font-weight: bold; }
+        .mood-text { font-size: 1.2em; font-weight: bold; color: #555; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -251,18 +293,14 @@ if app_mode == "📈 Encephalogram (Analytics)":
         
         df_hormones = pd.DataFrame([t["hormones"] for t in timeline])
         df_hormones["time"] = [t["time"] for t in timeline]
-        
-        df_mood = pd.DataFrame([t["mood"] for t in timeline])
-        df_mood["time"] = [t["time"] for t in timeline]
 
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("Agent Conflict")
             st.line_chart(df_scores.set_index("time"))
         with c2:
-            st.subheader("Biochemistry & Mood")
+            st.subheader("Biochemistry")
             st.line_chart(df_hormones.set_index("time"))
-            # Можно добавить и Mood на график, но пока ограничимся этим
 
     # Timeline Cards
     st.header("📅 Interaction History")
@@ -270,7 +308,10 @@ if app_mode == "📈 Encephalogram (Analytics)":
         item = timeline[i]
         prev_item = timeline[i-1] if i > 0 else None
         
-        with st.expander(f"⏰ {item['time']} | 🏆 Winner: {item['winner']}", expanded=(i == len(timeline)-1)):
+        winner_display = item['winner']
+        if winner_display == "Unknown": winner_display = "⚠️ Log Missing"
+
+        with st.expander(f"⏰ {item['time']} | 🏆 {winner_display}", expanded=(i == len(timeline)-1)):
             c1, c2 = st.columns([1, 1])
             with c1:
                 st.markdown(f"**👤 User:** {item['user']}")
@@ -279,8 +320,10 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 if volition:
                     st.success(f"🛡️ **Volition Active:** {volition}")
                 
-                # --- NEW: Mood Section ---
-                st.markdown("### 🎭 Current Mood")
+                # --- Mood Section ---
+                st.divider()
+                st.markdown(f"<div class='mood-text'>🎭 Current Mood: {get_mood_description(item['mood'])}</div>", unsafe_allow_html=True)
+                
                 m_cols = st.columns(3)
                 mood_order = ["Valence", "Arousal", "Dominance"]
                 for idx, m_key in enumerate(mood_order):
@@ -291,6 +334,10 @@ if app_mode == "📈 Encephalogram (Analytics)":
             with c2:
                 # Scores
                 st.markdown("### 📊 Council Votes")
+                # Fix: check if scores exist, otherwise warn
+                if all(v == 0 for v in item['scores'].values()):
+                    st.warning("⚠️ No votes recorded (Parsing Error)")
+                
                 cols = st.columns(5)
                 agent_names = ["Amygdala", "Prefrontal", "Striatum", "Social", "Intuition"]
                 for idx, agent in enumerate(agent_names):
@@ -301,11 +348,8 @@ if app_mode == "📈 Encephalogram (Analytics)":
                         if abs(diff) > 0.1: delta_str = f"{diff:+.1f}"
                     
                     # Highlight winner visually
-                    color = "normal"
-                    if agent == item['winner']:
-                         val_str = f"🏆 {val:.1f}"
-                    else:
-                         val_str = f"{val:.1f}"
+                    val_str = f"{val:.1f}"
+                    if agent == item['winner']: val_str = f"🏆 {val:.1f}"
                          
                     with cols[idx]:
                         st.metric(label=agent[:4], value=val_str, delta=delta_str)
@@ -419,7 +463,6 @@ else:
 
     # --- Affective Memory (Collapsed by default) ---
     st.sidebar.subheader("💚 Emotional Memory")
-    # FIX: expanded=False by default
     with st.sidebar.expander("View User Preferences", expanded=False):
         try:
             affective_data = run_async(get_affective_memory(999))
@@ -473,7 +516,6 @@ else:
                     
                     if "all_scores" in stats:
                         scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
-                        # FIX: Use scale=alt.Scale(domain=[...]) instead of direct domain=...
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
                             x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                             y=alt.Y('Agent', sort='-x'),
@@ -528,7 +570,6 @@ else:
                         
                         if "all_scores" in stats:
                             scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
-                            # FIX: Use scale=alt.Scale(domain=[...])
                             chart = alt.Chart(scores_df).mark_bar(size=15).encode(
                                 x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                                 y=alt.Y('Agent', sort='-x'),
