@@ -45,34 +45,34 @@ graph TD
     classDef output fill:#f9f,stroke:#333,stroke-width:2px;
 
     %% 1. INPUT
-    User((User Input)):::input --> Perception[Perception & Embedding]
-    Perception --> Retrieval[Memory Retrieval]
+    User("User Input"):::input --> Perception["Perception & Embedding"]
+    Perception --> Retrieval["Memory Retrieval"]
 
     %% 2. MEMORY
-    subgraph MEMORY_SYSTEM [Memory System]
-        Retrieval <--> Episodic[(Episodic Memory)]
-        Retrieval <--> Semantic[(Semantic Facts)]
-        Episodic -.->|Lazy Consolidation| Hippocampus[🧠 Hippocampus]:::memory
+    subgraph MEMORY_SYSTEM ["Memory System"]
+        Retrieval <--> Episodic[("Episodic Memory")]
+        Retrieval <--> Semantic[("Semantic Facts")]
+        Episodic -.->|Lazy Consolidation| Hippocampus["🧠 Hippocampus"]:::memory
         Hippocampus --> Semantic
-        Hippocampus --> VolitionalPatterns[(Volitional Patterns)]
+        Hippocampus --> VolitionalPatterns[("Volitional Patterns")]
     end
 
     %% 3. THE COUNCIL
-    Retrieval --> Council[Council of Agents]
-    subgraph AGENTS [The Council - Organ 1]
-        Amygdala(🔴 Amygdala: Threat)
-        Prefrontal(🔵 Prefrontal: Logic)
-        Striatum(🟢 Striatum: Reward)
-        Social(🟡 Social: Empathy)
-        Intuition(🟣 Intuition: Gut feeling)
+    Retrieval --> Council["Council of Agents"]
+    subgraph AGENTS ["The Council - Organ 1"]
+        Amygdala("🔴 Amygdala: Threat")
+        Prefrontal("🔵 Prefrontal: Logic")
+        Striatum("🟢 Striatum: Reward")
+        Social("🟡 Social: Empathy")
+        Intuition("🟣 Intuition: Gut feeling")
     end
     
     Council --> Amygdala & Prefrontal & Striatum & Social & Intuition
 
     %% 4. HORMONES
-    subgraph HORMONES [Neuro-Modulation - Organ 2]
-        Chemistry{⚗️ Hormonal State}:::hormones
-        Chemistry -->|Modulates Scores| AgentScores[Agent Scores]
+    subgraph HORMONES ["Neuro-Modulation - Organ 2"]
+        Chemistry{"⚗️ Hormonal State"}:::hormones
+        Chemistry -->|Modulates Scores| AgentScores["Agent Scores"]
         Amygdala -.->|Increases CORT| Chemistry
         Striatum -.->|Increases DA| Chemistry
     end
@@ -80,22 +80,22 @@ graph TD
     Amygdala & Prefrontal & Striatum & Social & Intuition --> AgentScores
 
     %% 5. VOLITION
-    subgraph VOLITION [Volitional System - Organ 3]
-        VolitionalPatterns -->|Selects Dominant| VolitionalGating{🛡️ Volitional Gating}:::volition
-        VolitionalGating -->|Injection| PromptContext[Final Prompt Context]
+    subgraph VOLITION ["Volitional System - Organ 3"]
+        VolitionalPatterns -->|Selects Dominant| VolitionalGating{"🛡️ Volitional Gating"}:::volition
+        VolitionalGating -->|Injection| PromptContext["Final Prompt Context"]
         Chemistry -.->|Panic Blocks| VolitionalGating
     end
 
     %% 6. ARBITRATION
-    AgentScores --> Arbitration{⚖️ ARBITRATION}:::arbitration
-    Arbitration -->|Winner Takes All| Winner[Winning Agent]
+    AgentScores --> Arbitration{"⚖️ ARBITRATION"}:::arbitration
+    Arbitration -->|Winner Takes All| Winner["Winning Agent"]
     
     %% RESPONSE
-    Winner --> LLM_Generation[LLM Generation]
+    Winner --> LLM_Generation["LLM Generation"]
     VolitionalGating -.->|Directive| LLM_Generation
     Chemistry -.->|Style/Adverbs| LLM_Generation
     
-    LLM_Generation --> Response((Bot Response)):::output
+    LLM_Generation --> Response("Bot Response"):::output
 ```
 
 ## 🛠️ Development Setup
