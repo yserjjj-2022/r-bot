@@ -19,6 +19,10 @@ engine = create_async_engine(
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
+# Helper function needed for dashboard imports
+def get_async_session_maker():
+    return AsyncSessionLocal
+
 class Base(DeclarativeBase):
     pass
 
