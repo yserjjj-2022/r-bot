@@ -71,7 +71,7 @@ class Hippocampus:
         similarity_threshold: float = 0.85,  # порог для pgvector кластеризации
         max_cluster_size: int = 10,  # макс фактов в одном кластере
         episode_window_days: int = 30,  # окно для анализа эпизодов
-        min_theme_frequency: int = 3,  # мин. повторов для создания факта
+        min_theme_frequency: int = 1,  # FIX: lowered from 3 to 1 for testing
     ):
         self.llm = llm_client
         self.embedder = embedding_client
@@ -423,8 +423,8 @@ class Hippocampus:
 Пример:
 {{
     "themes": [
-        {{"subject": "User", "predicate": "INTERESTED_IN", "object": "Python", "confidence": 0.75}},
-        {{"subject": "User", "predicate": "DISLIKES", "object": "холодная погода", "confidence": 0.6}}
+        {{\"subject\": \"User\", \"predicate\": \"INTERESTED_IN\", \"object\": \"Python\", \"confidence\": 0.75}},
+        {{\"subject\": \"User\", \"predicate\": \"DISLIKES\", \"object\": \"холодная погода\", \"confidence\": 0.6}}
     ]
 }}
 
@@ -470,7 +470,8 @@ class Hippocampus:
             )
             episodes = result.scalars().all()
             
-            if len(episodes) < 5:
+            # FIX: Lowered threshold from 5 to 2 episodes for testing
+            if len(episodes) < 2:
                 return {"status": "skip", "reason": "too_few_episodes", "count": len(episodes)}
             
             patterns_updated = 0
