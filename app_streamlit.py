@@ -98,22 +98,38 @@ def extract_scores(metrics_data):
     # Пытаемся достать 'all_scores' - бывает внутри 'agent_scores' или просто 'all_scores'
     scores = metrics_data.get("all_scores")
     if not scores:
-        scores = metrics_data.get("agent_scores") # Fallback for some versions
+        scores = metrics_data.get("agent_scores") 
     
     if not scores:
         return {"Amygdala": 0, "Prefrontal": 0, "Striatum": 0, "Social": 0, "Intuition": 0}
         
-    # Нормализуем ключи (убираем эмодзи если есть)
+    # Нормализуем ключи (убираем эмодзи и суффиксы)
+    # Пример ключей: "social_cortex", "amygdala_safety"
     clean_scores = {}
+    
+    mapping = {
+        "amygdala": "Amygdala",
+        "prefrontal": "Prefrontal",
+        "striatum": "Striatum",
+        "social": "Social",
+        "intuition": "Intuition"
+    }
+    
+    # Сначала заполним нулями
+    for v in mapping.values(): clean_scores[v] = 0.0
+
     for k, v in scores.items():
-        clean_key = k.replace("🔴", "").replace("🔵", "").replace("🟢", "").replace("🟡", "").replace("🟣", "").strip()
-        # Маппинг имен
-        if "Amygdala" in clean_key: clean_scores["Amygdala"] = v
-        elif "Prefrontal" in clean_key: clean_scores["Prefrontal"] = v
-        elif "Striatum" in clean_key: clean_scores["Striatum"] = v
-        elif "Social" in clean_key: clean_scores["Social"] = v
-        elif "Intuition" in clean_key: clean_scores["Intuition"] = v
-        else: clean_scores[clean_key] = v
+        k_lower = k.lower()
+        found = False
+        for key_part, nice_name in mapping.items():
+            if key_part in k_lower:
+                clean_scores[nice_name] = float(v)
+                found = True
+                break
+        
+        # Если не нашли в маппинге, добавляем как есть (Capitalized)
+        if not found:
+            clean_scores[k.capitalize()] = float(v)
         
     return clean_scores
 
@@ -127,8 +143,9 @@ def extract_hormones(metrics_data):
         return h_map
 
     # 2. Если строка "NE:0.5 DA:0.3..."
-    if isinstance(h_str, str) and "NE:" in h_str:
-        parts = h_str.split(" ")
+    if isinstance(h_str, str):
+        # Очистка от лишних пробелов
+        parts = h_str.split()
         for p in parts:
             if ":" in p:
                 k, v = p.split(":")
@@ -140,24 +157,26 @@ def extract_hormones(metrics_data):
 
 def extract_mood(metrics_data):
     """Извлекает VAD (Mood) из метрик"""
-    mood_data = metrics_data.get("current_mood", "")
+    # Ищем 'mood_state' или 'current_mood'
+    mood_data = metrics_data.get("mood_state") or metrics_data.get("current_mood", "")
     vad = {"Valence": 0.0, "Arousal": 0.0, "Dominance": 0.0}
     
     if isinstance(mood_data, dict):
-        # Иногда ключи lowercase
         vad["Valence"] = mood_data.get("valence", mood_data.get("Valence", 0.0))
         vad["Arousal"] = mood_data.get("arousal", mood_data.get("Arousal", 0.0))
         vad["Dominance"] = mood_data.get("dominance", mood_data.get("Dominance", 0.0))
+        
     elif isinstance(mood_data, str):
-        # Парсим строку
+        # Парсим строку вида "V:0.04 A:-0.05 D:0.01" или "Valence:..."
         try:
-            parts = mood_data.split(",")
+            parts = mood_data.split() # split by space
             for p in parts:
                 if ":" in p:
-                    k, v = p.strip().split(":")
-                    k = k.strip().capitalize()
-                    if k in vad:
-                        vad[k] = float(v)
+                    k, v = p.split(":")
+                    k_upper = k.upper()
+                    if k_upper.startswith("V"): vad["Valence"] = float(v)
+                    elif k_upper.startswith("A"): vad["Arousal"] = float(v)
+                    elif k_upper.startswith("D"): vad["Dominance"] = float(v)
         except:
             pass
             
@@ -167,25 +186,25 @@ def get_mood_description(vad):
     v = vad.get("Valence", 0)
     a = vad.get("Arousal", 0)
     
-    if v > 0.5 and a > 0.5: return "Joyful / Excited"
-    if v > 0.5 and a < 0.5: return "Relaxed / Content"
-    if v < 0.5 and a > 0.5: return "Angry / Anxious"
-    if v < 0.5 and a < 0.5: return "Sad / Bored"
-    if v > 0.3 and v < 0.7 and a < 0.3: return "Calm / Neutral"
+    if v > 0.3 and a > 0.3: return "Joyful / Excited"
+    if v > 0.3 and a < -0.1: return "Relaxed / Content"
+    if v < -0.1 and a > 0.3: return "Angry / Anxious"
+    if v < -0.1 and a < -0.1: return "Sad / Bored"
     
-    return "Neutral"
+    return "Neutral / Calm"
 
 def get_winner_safe(metrics_data):
-    # Ищем победителя глубоким поиском
-    w = metrics_data.get("winner_agent")
-    if not w: w = metrics_data.get("winning_agent")
-    if not w: w = metrics_data.get("winner")
-    
-    # Иногда победитель лежит внутри вложенного dict (legacy logs)
-    if not w and "council_result" in metrics_data:
-         w = metrics_data["council_result"].get("winner")
-         
-    return w or "Unknown"
+    # 1. Явное поле
+    w = metrics_data.get("winner_agent") or metrics_data.get("winning_agent") or metrics_data.get("winner")
+    if w: return w
+
+    # 2. Вычисление по максимальному скору (если есть all_scores)
+    scores = extract_scores(metrics_data)
+    if scores and max(scores.values()) > 0:
+        winner = max(scores, key=scores.get)
+        return winner
+        
+    return "Unknown"
 
 # --- DB Operations for Agents ---
 async def get_all_agents():
