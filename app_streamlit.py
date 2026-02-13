@@ -2,12 +2,15 @@ import asyncio
 import streamlit as st
 import pandas as pd
 import altair as alt
-from typing import Dict, Any
-from sqlalchemy import select, delete
+import json
+import plotly.graph_objects as go
+from typing import Dict, Any, List
+from datetime import datetime
+from sqlalchemy import select, delete, text
 from src.r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from src.r_core.pipeline import RCoreKernel
 from src.r_core.memory import MemorySystem
-from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel
+from src.r_core.infrastructure.db import init_models, AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel, get_async_session_maker
 from src.r_core.config import settings
 
 # --- Setup Page ---
@@ -45,6 +48,63 @@ def run_async(coro):
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(coro)
 
+# --- ANALYTICS HELPERS ---
+async def load_session_data(limit=50):
+    """Загружает историю диалога и метрики, объединяя их по времени"""
+    SessionLocal = get_async_session_maker()
+    async with SessionLocal() as session:
+        msgs_result = await session.execute(
+            text("""
+                SELECT id, role, content, created_at, session_id, user_id
+                FROM chat_history 
+                ORDER BY created_at DESC 
+                LIMIT :limit
+            """),
+            {"limit": limit * 2}
+        )
+        messages = msgs_result.mappings().all()
+        
+        metrics_result = await session.execute(
+            text("""
+                SELECT session_id, created_at, metrics_json
+                FROM metrics_logs
+                ORDER BY created_at DESC
+                LIMIT :limit
+            """),
+            {"limit": limit}
+        )
+        metrics = metrics_result.mappings().all()
+    return messages, metrics
+
+def parse_metrics(metrics_row):
+    try:
+        data = metrics_row["metrics_json"]
+        if isinstance(data, str):
+            data = json.loads(data)
+        return data
+    except:
+        return {}
+
+def extract_scores(metrics_data):
+    scores = metrics_data.get("all_scores", {})
+    if not scores:
+        return {"Amygdala": 0, "Prefrontal": 0, "Striatum": 0, "Social": 0, "Intuition": 0}
+    return scores
+
+def extract_hormones(metrics_data):
+    h_str = metrics_data.get("hormonal_state", "")
+    h_map = {"NE": 0.5, "DA": 0.5, "5HT": 0.5, "CORT": 0.5}
+    if "NE:" in h_str:
+        parts = h_str.split(" ")
+        for p in parts:
+            if ":" in p:
+                k, v = p.split(":")
+                try:
+                    h_map[k] = float(v)
+                except:
+                    pass
+    return h_map
+
 # --- DB Operations for Agents ---
 async def get_all_agents():
     async with AsyncSessionLocal() as session:
@@ -62,442 +122,352 @@ async def create_agent(name: str, desc: str, gender: str, sliders: Dict):
         session.add(new_agent)
         await session.commit()
 
-async def delete_agent_by_name(name: str):
-    async with AsyncSessionLocal() as session:
-        stmt = delete(AgentProfileModel).where(AgentProfileModel.name == name)
-        await session.execute(stmt)
-        await session.commit()
-
-# ✨ NEW: Get Affective Memory (User's Emotional Preferences)
 async def get_affective_memory(user_id: int = 999):
-    """Получить список эмоционально окрашенных объектов из памяти"""
     async with AsyncSessionLocal() as session:
         stmt = select(SemanticModel).where(
             SemanticModel.user_id == user_id,
             SemanticModel.sentiment.isnot(None)
         ).order_by(SemanticModel.created_at.desc()).limit(20)
-        
         result = await session.execute(stmt)
         rows = result.scalars().all()
-        
-        return [
-            {
-                "subject": r.subject,
-                "predicate": r.predicate,
-                "object": r.object,
-                "sentiment": r.sentiment,
-                "created_at": r.created_at
-            }
-            for r in rows
-        ]
-
-# --- Sidebar ---
-st.sidebar.title("🧠 Cortex Controls")
-
-# --- Agent Selector ---
-st.sidebar.subheader("🤖 Bot Identity")
-
-try:
-    available_agents = run_async(get_all_agents())
-    agent_names = [a.name for a in available_agents]
-except Exception:
-    agent_names = []
-
-selected_agent_name = st.sidebar.selectbox(
-    "Select Persona", 
-    ["Default"] + agent_names
-)
-
-# Reset kernel if persona changes
-if "last_agent_name" not in st.session_state:
-    st.session_state.last_agent_name = selected_agent_name
-
-if st.session_state.last_agent_name != selected_agent_name:
-    st.session_state.kernel_instance = None # Force reset to clear mood
-    st.session_state.last_agent_name = selected_agent_name
-
-if selected_agent_name != "Default":
-    st.session_state.bot_name = selected_agent_name
-    agent_data = next((a for a in available_agents if a.name == selected_agent_name), None)
-    if agent_data:
-        st.session_state.bot_gender = agent_data.gender or "Neutral"
-        st.sidebar.caption(f"📝 {agent_data.description} | {st.session_state.bot_gender}")
-        preset = agent_data.sliders_preset
-        st.session_state.sliders = PersonalitySliders(
-            empathy_bias=preset.get("empathy_bias", 0.5),
-            risk_tolerance=preset.get("risk_tolerance", 0.5),
-            dominance_level=preset.get("dominance_level", 0.5),
-            pace_setting=preset.get("pace_setting", 0.5),
-            neuroticism=preset.get("neuroticism", 0.1)
-        )
-else:
-    st.session_state.bot_name = "R-Bot"
-    st.session_state.bot_gender = "Neutral"
-
-# --- Sliders Control ---
-st.sidebar.markdown("### Fine-tune Personality")
-
-empathy = st.sidebar.slider(
-    "❤️ Empathy (Social Cortex)", 
-    0.0, 1.0, st.session_state.sliders.empathy_bias,
-    help="High: Prioritizes feelings, politeness, and relationships.\nLow: Prioritizes facts and dry efficiency."
-)
-
-risk = st.sidebar.slider(
-    "🎲 Risk / Curiosity (Striatum)", 
-    0.0, 1.0, st.session_state.sliders.risk_tolerance,
-    help="High: Seeks novelty, fun, gamification. Playful.\nLow: Cautious, safe, predictable (Amygdala dominance)."
-)
-
-dominance = st.sidebar.slider(
-    "👑 Dominance (PFC/Amygdala)", 
-    0.0, 1.0, st.session_state.sliders.dominance_level,
-    help="High: Leader, assertive, directive.\nLow: Assistant, submissive, helpful."
-)
-
-pace = st.sidebar.slider(
-    "⚡ Thinking Style (Intuition ↔ Logic)", 
-    0.0, 1.0, st.session_state.sliders.pace_setting,
-    help="⚡ BALANCE: Intuition (System 1) ↔ Logic (System 2)\n\n"
-         "• Low (0.0): Intuition-heavy (1.5x), fast heuristic responses\n"
-         "• Mid (0.5): Balanced cognitive mix\n"
-         "• High (1.0): Logic-heavy (1.5x), deliberate analytical responses\n\n"
-         "📚 Based on Kahneman's dual-process theory.\n"
-         "⚙️ Works in both Legacy and Unified Council modes."
-)
-
-st.sidebar.divider()
-st.sidebar.markdown("### 🧪 Experimental Controls")
-
-use_unified_council = st.sidebar.checkbox(
-    "🔄 Unified Council (BETA)", 
-    value=False,
-    help="All agents (including Intuition) evaluated together by LLM.\n\n"
-         "• ON: Batch LLM evaluation (faster, experimental)\n"
-         "• OFF: Legacy mode (Intuition evaluated separately, proven stable)\n\n"
-         "Both modes respect 'Thinking Style' slider above."
-)
-
-st.session_state.sliders = PersonalitySliders(
-    empathy_bias=empathy,
-    risk_tolerance=risk,
-    dominance_level=dominance,
-    pace_setting=pace,
-    neuroticism=0.1
-)
-
-# --- Save New Agent Form ---
-with st.sidebar.expander("💾 Save as New Agent"):
-    with st.form("new_agent_form"):
-        new_name = st.text_input("Name (e.g. Jarvis)")
-        new_desc = st.text_input("Description (e.g. Polite Butler)")
-        new_gender = st.selectbox("Gender", ["Neutral", "Male", "Female"])
-        
-        if st.form_submit_button("Create"):
-            if new_name:
-                sliders_dict = {
-                    "empathy_bias": empathy,
-                    "risk_tolerance": risk,
-                    "dominance_level": dominance,
-                    "pace_setting": pace,
-                    "neuroticism": 0.1
-                }
-                run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))
-                st.success(f"Agent {new_name} saved!")
-                st.rerun()
-
-st.sidebar.divider()
-
-# ✨ NEW: Test Mode Switcher
-test_mode = st.sidebar.radio(
-    "🧪 Experiment Mode",
-    ["Standard (Cortical)", "A/B Test (Zombie vs Cortical)"],
-    help="A/B Test runs two models in parallel: Your sophisticated Cortical Brain vs a dumb Zombie LLM."
-)
-
-st.sidebar.divider()
-
-# --- User Profile Section ---
-st.sidebar.subheader("👤 User Identity")
-
-async def get_profile_data():
-    mem = MemorySystem()
-    return await mem.store.get_user_profile(999) 
+        return [{"subject": r.subject, "predicate": r.predicate, "object": r.object, "sentiment": r.sentiment} for r in rows]
 
 async def update_profile_data(data):
     mem = MemorySystem()
     await mem.update_user_profile(999, data)
 
-if "profile_loaded" not in st.session_state:
-    try:
-        data = run_async(get_profile_data())
-        st.session_state.user_profile_data = data or {}
-        st.session_state.profile_loaded = True
-    except Exception:
-        st.session_state.user_profile_data = {}
+async def get_profile_data():
+    mem = MemorySystem()
+    return await mem.store.get_user_profile(999) 
 
-with st.sidebar.expander("Edit User Profile", expanded=False):
-    with st.form("profile_form"):
-        p_name = st.text_input("Name", st.session_state.user_profile_data.get("name", ""))
-        
-        g_opts = ["", "Male", "Female", "Neutral"]
-        curr_g = st.session_state.user_profile_data.get("gender", "")
-        g_idx = g_opts.index(curr_g) if curr_g in g_opts else 0
-        p_gender = st.selectbox("Gender", g_opts, index=g_idx)
-        
-        m_opts = ["formal", "informal"]
-        curr_m = st.session_state.user_profile_data.get("preferred_mode", "formal")
-        m_idx = m_opts.index(curr_m) if curr_m in m_opts else 0
-        p_mode = st.selectbox("Address Style", m_opts, index=m_idx)
-        
-        if st.form_submit_button("Save Identity"):
-            new_data = {"name": p_name, "gender": p_gender, "preferred_mode": p_mode}
-            run_async(update_profile_data(new_data))
-            st.session_state.user_profile_data = new_data
-            st.success("Saved!")
 
+# ==========================================
+#              MAIN NAVIGATION
+# ==========================================
+st.sidebar.title("🧠 Cortex Controls")
+app_mode = st.sidebar.radio("Navigation", ["💬 Chat Interface", "📈 Encephalogram (Analytics)"])
 st.sidebar.divider()
 
-# ✨ NEW: Affective Memory Display in Sidebar
-st.sidebar.subheader("💚 Emotional Memory")
-with st.sidebar.expander("View User Preferences", expanded=False):
+if app_mode == "📈 Encephalogram (Analytics)":
+    # ==========================================
+    #           ANALYTICS DASHBOARD
+    # ==========================================
+    st.title("🧠 R-Bot Encephalogram: Timeline Analysis")
+    
+    st.markdown("""
+    <style>
+        .delta-pos { color: green; font-weight: bold; }
+        .delta-neg { color: red; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if st.sidebar.button("Refresh Data"):
+        st.rerun()
+
+    # Load Data
+    with st.spinner("Reading Synaptic Logs..."):
+        messages, metrics_logs = run_async(load_session_data(30))
+
+    if not messages:
+        st.warning("No data found.")
+        st.stop()
+
+    # Process Data
+    timeline = []
+    messages = sorted(messages, key=lambda x: x["created_at"])
+    metrics_logs = sorted(metrics_logs, key=lambda x: x["created_at"])
+
+    for i, msg in enumerate(messages):
+        if msg["role"] == "assistant":
+            user_text = messages[i-1]["content"] if i > 0 and messages[i-1]["role"] == "user" else "(No context)"
+            bot_text = msg["content"]
+            timestamp = msg["created_at"]
+            
+            matched_metric = None
+            for m in metrics_logs:
+                delta = (m["created_at"] - timestamp).total_seconds()
+                if abs(delta) < 5:
+                    matched_metric = parse_metrics(m)
+                    break
+            
+            if matched_metric:
+                timeline.append({
+                    "time": timestamp.strftime("%H:%M:%S"),
+                    "user": user_text,
+                    "bot": bot_text,
+                    "metrics": matched_metric,
+                    "scores": extract_scores(matched_metric),
+                    "hormones": extract_hormones(matched_metric),
+                    "winner": matched_metric.get("winner_agent", "Unknown")
+                })
+
+    # Global Charts
+    st.header("📈 Session Dynamics")
+    if timeline:
+        df_scores = pd.DataFrame([t["scores"] for t in timeline])
+        df_scores["time"] = [t["time"] for t in timeline]
+        df_hormones = pd.DataFrame([t["hormones"] for t in timeline])
+        df_hormones["time"] = [t["time"] for t in timeline]
+
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Agent Conflict")
+            st.line_chart(df_scores.set_index("time"))
+        with c2:
+            st.subheader("Biochemistry")
+            st.line_chart(df_hormones.set_index("time"))
+
+    # Timeline Cards
+    st.header("📅 Interaction History")
+    for i in range(len(timeline)-1, -1, -1):
+        item = timeline[i]
+        prev_item = timeline[i-1] if i > 0 else None
+        
+        with st.expander(f"⏰ {item['time']} | 🏆 Winner: {item.get('winner', 'Unknown')}", expanded=(i == len(timeline)-1)):
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.markdown(f"**👤 User:** {item['user']}")
+                st.markdown(f"**🤖 Bot:** {item['bot']}")
+                volition = item['metrics'].get("volition_selected")
+                if volition:
+                    st.success(f"🛡️ **Volition Active:** {volition}")
+            with c2:
+                # Scores
+                cols = st.columns(5)
+                agent_names = ["Amygdala", "Prefrontal", "Striatum", "Social", "Intuition"]
+                for idx, agent in enumerate(agent_names):
+                    val = item['scores'].get(agent, 0)
+                    delta_str = ""
+                    if prev_item:
+                        diff = val - prev_item['scores'].get(agent, 0)
+                        if abs(diff) > 0.1: delta_str = f"{diff:+.1f}"
+                    with cols[idx]:
+                        st.metric(label=agent[:4], value=f"{val:.1f}", delta=delta_str)
+                
+                # Hormones
+                st.markdown("---")
+                h_cols = st.columns(4)
+                for idx, (h_name, h_val) in enumerate(item['hormones'].items()):
+                    h_delta = ""
+                    if prev_item:
+                        diff = h_val - prev_item['hormones'].get(h_name, 0.5)
+                        if abs(diff) > 0.01: h_delta = f"{diff:+.2f}"
+                    with h_cols[idx]:
+                        st.metric(label=h_name, value=f"{h_val:.2f}", delta=h_delta)
+
+else:
+    # ==========================================
+    #              CHAT INTERFACE
+    # ==========================================
+    
+    # --- Sidebar Chat Controls ---
+    st.sidebar.subheader("🤖 Bot Identity")
+    try:
+        available_agents = run_async(get_all_agents())
+        agent_names = [a.name for a in available_agents]
+    except Exception:
+        agent_names = []
+
+    selected_agent_name = st.sidebar.selectbox("Select Persona", ["Default"] + agent_names)
+
+    # Reset kernel if persona changes
+    if "last_agent_name" not in st.session_state:
+        st.session_state.last_agent_name = selected_agent_name
+
+    if st.session_state.last_agent_name != selected_agent_name:
+        st.session_state.kernel_instance = None
+        st.session_state.last_agent_name = selected_agent_name
+
+    if selected_agent_name != "Default":
+        st.session_state.bot_name = selected_agent_name
+        agent_data = next((a for a in available_agents if a.name == selected_agent_name), None)
+        if agent_data:
+            st.session_state.bot_gender = agent_data.gender or "Neutral"
+            st.sidebar.caption(f"📝 {agent_data.description} | {st.session_state.bot_gender}")
+            preset = agent_data.sliders_preset
+            st.session_state.sliders = PersonalitySliders(
+                empathy_bias=preset.get("empathy_bias", 0.5),
+                risk_tolerance=preset.get("risk_tolerance", 0.5),
+                dominance_level=preset.get("dominance_level", 0.5),
+                pace_setting=preset.get("pace_setting", 0.5),
+                neuroticism=preset.get("neuroticism", 0.1)
+            )
+    else:
+        st.session_state.bot_name = "R-Bot"
+        st.session_state.bot_gender = "Neutral"
+
+    # --- Sliders Control ---
+    with st.sidebar.expander("Personality Tuner", expanded=False):
+        empathy = st.slider("❤️ Empathy", 0.0, 1.0, st.session_state.sliders.empathy_bias)
+        risk = st.slider("🎲 Risk / Curiosity", 0.0, 1.0, st.session_state.sliders.risk_tolerance)
+        dominance = st.slider("👑 Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
+        pace = st.slider("⚡ Thinking Style", 0.0, 1.0, st.session_state.sliders.pace_setting)
+        
+        use_unified_council = st.checkbox("🔄 Unified Council", value=False)
+
+        st.session_state.sliders = PersonalitySliders(
+            empathy_bias=empathy,
+            risk_tolerance=risk,
+            dominance_level=dominance,
+            pace_setting=pace,
+            neuroticism=0.1
+        )
+
+    # --- Save Agent ---
+    with st.sidebar.expander("💾 Save New Persona"):
+        with st.form("new_agent_form"):
+            new_name = st.text_input("Name")
+            new_desc = st.text_input("Description")
+            new_gender = st.selectbox("Gender", ["Neutral", "Male", "Female"])
+            if st.form_submit_button("Create"):
+                if new_name:
+                    sliders_dict = {
+                        "empathy_bias": empathy, "risk_tolerance": risk,
+                        "dominance_level": dominance, "pace_setting": pace, "neuroticism": 0.1
+                    }
+                    run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))
+                    st.success(f"Agent {new_name} saved!")
+                    st.rerun()
+
+    test_mode = st.sidebar.radio("🧪 Mode", ["Standard", "A/B Test"])
+    
+    # --- User Profile ---
+    st.sidebar.divider()
+    if "profile_loaded" not in st.session_state:
+        try:
+            data = run_async(get_profile_data())
+            st.session_state.user_profile_data = data or {}
+            st.session_state.profile_loaded = True
+        except Exception:
+            st.session_state.user_profile_data = {}
+
+    with st.sidebar.expander("👤 User Identity"):
+        with st.form("profile_form"):
+            p_name = st.text_input("Name", st.session_state.user_profile_data.get("name", ""))
+            curr_mode = st.session_state.user_profile_data.get("preferred_mode", "formal")
+            p_mode = st.selectbox("Style", ["formal", "informal"], index=0 if curr_mode=="formal" else 1)
+            if st.form_submit_button("Save"):
+                run_async(update_profile_data({"name": p_name, "preferred_mode": p_mode}))
+                st.session_state.user_profile_data.update({"name": p_name, "preferred_mode": p_mode})
+                st.success("Saved!")
+
+    # --- Affective Memory ---
+    st.sidebar.subheader("💚 Emotional Memory")
     try:
         affective_data = run_async(get_affective_memory(999))
-        
         if affective_data:
             for item in affective_data:
-                sentiment = item["sentiment"]
-                valence = sentiment.get("valence", 0.0)
-                
-                # Эмодзи на основе predicate и valence
-                if item["predicate"] in ["HATES", "DESPISES"]:
-                    emoji = "🔴"
-                elif item["predicate"] == "FEARS":
-                    emoji = "😨"
-                elif item["predicate"] in ["LOVES", "ADORES"]:
-                    emoji = "💚"
-                elif item["predicate"] == "ENJOYS":
-                    emoji = "😊"
-                else:
-                    emoji = "⚪"
-                
-                st.caption(f"{emoji} **{item['predicate']}** {item['object']} (V: {valence:.2f})")
+                pred = item["predicate"]
+                emoji = "🔴" if pred in ["HATES", "DESPISES"] else "💚" if pred in ["LOVES", "ADORES"] else "⚪"
+                st.sidebar.caption(f"{emoji} {pred} {item['object']}")
         else:
-            st.info("No emotional preferences stored yet.\nTry saying 'I hate X' or 'I love Y'")
-    except Exception as e:
-        st.error(f"Error loading affective memory: {e}")
+            st.sidebar.caption("No emotional data yet.")
+    except Exception:
+        pass
 
-st.sidebar.divider()
+    if st.sidebar.button("Clear Chat"):
+        st.session_state.messages = []
+        st.session_state.kernel_instance = None
+        st.rerun()
 
-if st.sidebar.button("Initialize DB"):
-    with st.spinner("Creating tables..."):
-        try:
-            run_async(init_models())
-            st.sidebar.success("DB Ready!")
-        except Exception as e:
-            st.sidebar.error(f"DB Error: {e}")
+    # --- CHAT AREA ---
+    st.title("R-Bot: Cognitive Architecture Debugger")
+    st.markdown(f"Current Agent: **{st.session_state.bot_name}**")
 
-if st.sidebar.button("Clear Memory & Chat"):
-    st.session_state.messages = []
-    st.session_state.kernel_instance = None # RESET KERNEL MOOD
-    st.rerun()
-
-# --- Main Chat Area ---
-
-st.title("R-Bot: Cognitive Architecture Debugger")
-st.markdown(f"Current Agent: **{st.session_state.bot_name}** ({st.session_state.bot_gender})")
-
-# --- Mood Dashboard (Top) ---
-if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
-    m = st.session_state.kernel_instance.current_mood
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Valence (Joy)", f"{m.valence:.2f}", delta_color="normal", help="Pos: Happy/Warm\nNeg: Sad/Cold")
-    with col2:
-        st.metric("Arousal (Energy)", f"{m.arousal:.2f}", delta_color="normal", help="High: Excited/Angry\nLow: Calm/Bored")
-    with col3:
-        st.metric("Dominance (Control)", f"{m.dominance:.2f}", delta_color="normal", help="High: Leader\nLow: Follower")
-    st.divider()
-
-# Display history
-for msg in st.session_state.messages:
-    if msg.get("type") == "ab_test":
-        # A/B TEST DISPLAY
-        with st.chat_message(msg["role"]):
-            st.write(f"**User:** {msg['content']}") # User input repetition
-        
-        col_c, col_z = st.columns(2)
-        with col_c:
-            st.info("🧠 **Cortical (R-Bot)**")
-            st.write(msg["cortical_text"])
-            st.caption(f"Latency: {msg['cortical_latency']}ms")
-        with col_z:
-            st.warning("🧟 **Zombie Mode**")
-            st.write(msg["zombie_text"])
-            st.caption(f"Latency: {msg['zombie_latency']}ms")
+    # Mood Dashboard
+    if st.session_state.kernel_instance and hasattr(st.session_state.kernel_instance, 'current_mood'):
+        m = st.session_state.kernel_instance.current_mood
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Valence", f"{m.valence:.2f}")
+        c2.metric("Arousal", f"{m.arousal:.2f}")
+        c3.metric("Dominance", f"{m.dominance:.2f}")
         st.divider()
-        
-    else:
-        # STANDARD DISPLAY
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-            
-            if msg["role"] == "assistant" and "meta" in msg:
-                stats = msg["meta"]
-                
-                # ✨ NEW: Highlight affective context usage
-                affective_triggers = stats.get("affective_triggers_detected", 0)
-                sentiment_used = stats.get("sentiment_context_used", False)
-                
-                winner_caption = f"🏆 Winner: **{msg['winner']}** ({stats['winner_score']}/10)"
-                
-                if sentiment_used:
-                    winner_caption += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
-                
-                # Show active style if available
-                active_style = stats.get("active_style", "")
-                tooltip_text = f"Winner: {msg['winner']}"
-                if active_style:
-                    tooltip_text += f"\n\nStyle Instructions:\n{active_style}"
 
-                st.caption(winner_caption, help=tooltip_text)
-                
-                if "all_scores" in stats:
-                    scores_df = pd.DataFrame([
-                        {"Agent": k, "Score": v} 
-                        for k, v in stats["all_scores"].items()
-                    ])
-                    chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                        x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
-                        y=alt.Y('Agent', sort='-x'),
-                        color=alt.condition(
-                            alt.datum.Agent == msg['winner'],
-                            alt.value('orange'),
-                            alt.value('lightgray')
-                        ),
-                        tooltip=['Agent', 'Score']
-                    ).properties(height=150)
-                    st.altair_chart(chart, use_container_width=True)
-                
-                with st.expander("Technical Details"):
-                    st.json(stats)
-
-# Input
-user_input = st.chat_input("Say something...")
-
-if user_input:
-    
-    # Initialize Kernel
-    if st.session_state.kernel_instance is None:
-        config = BotConfig(
-            character_id="streamlit_user", 
-            name=st.session_state.bot_name, 
-            sliders=st.session_state.sliders, 
-            core_values=[],
-            use_unified_council=use_unified_council
-        )
-        config.gender = st.session_state.bot_gender
-        st.session_state.kernel_instance = RCoreKernel(config)
-    else:
-        st.session_state.kernel_instance.config.name = st.session_state.bot_name
-        st.session_state.kernel_instance.config.gender = st.session_state.bot_gender
-        st.session_state.kernel_instance.config.sliders = st.session_state.sliders
-        st.session_state.kernel_instance.config.use_unified_council = use_unified_council
-
-    kernel = st.session_state.kernel_instance
-    incoming = IncomingMessage(
-        user_id=999, 
-        session_id="streamlit_session",
-        text=user_input
-    )
-
-    if test_mode == "A/B Test (Zombie vs Cortical)":
-        # --- A/B LOGIC ---
-        with st.chat_message("user"):
-            st.write(user_input)
-            
-        col_cortical, col_zombie = st.columns(2)
-        
-        with col_cortical:
-            with st.spinner("🧠 Cortical Thinking..."):
-                resp_cortical = run_async(kernel.process_message(incoming, mode="CORTICAL"))
-                st.info("🧠 **Cortical (R-Bot)**")
-                st.write(resp_cortical.actions[0].payload['text'])
-                st.caption(f"Latency: {resp_cortical.internal_stats['latency_ms']}ms")
-        
-        with col_zombie:
-            with st.spinner("🧟 Zombie Generating..."):
-                resp_zombie = run_async(kernel.process_message(incoming, mode="ZOMBIE"))
-                st.warning("🧟 **Zombie Mode**")
-                st.write(resp_zombie.actions[0].payload['text'])
-                st.caption(f"Latency: {resp_zombie.internal_stats['latency_ms']}ms")
-        
-        # Save composite message for history display
-        st.session_state.messages.append({
-            "type": "ab_test",
-            "role": "user", # display hack
-            "content": user_input,
-            "cortical_text": resp_cortical.actions[0].payload['text'],
-            "cortical_latency": resp_cortical.internal_stats['latency_ms'],
-            "zombie_text": resp_zombie.actions[0].payload['text'],
-            "zombie_latency": resp_zombie.internal_stats['latency_ms']
-        })
-        
-    else:
-        # --- STANDARD LOGIC ---
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"):
-            st.write(user_input)
-
-        with st.spinner(f"{st.session_state.bot_name} is thinking..."):
-            try:
-                response = run_async(kernel.process_message(incoming, mode="CORTICAL"))
-                
-                bot_text = response.actions[0].payload['text']
-                stats = response.internal_stats
-                winner_name = response.winning_agent.value
-
-                with st.chat_message("assistant"):
-                    st.write(bot_text)
+    # Chat History
+    for msg in st.session_state.messages:
+        if msg.get("type") == "ab_test":
+            with st.chat_message(msg["role"]): st.write(f"**User:** {msg['content']}")
+            c_c, c_z = st.columns(2)
+            with c_c:
+                st.info("🧠 Cortical"); st.write(msg["cortical_text"]); st.caption(f"{msg['cortical_latency']}ms")
+            with c_z:
+                st.warning("🧟 Zombie"); st.write(msg["zombie_text"]); st.caption(f"{msg['zombie_latency']}ms")
+            st.divider()
+        else:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+                if msg["role"] == "assistant" and "meta" in msg:
+                    stats = msg["meta"]
+                    w_name = msg.get("winner", "Unknown")
+                    caption = f"🏆 Winner: **{w_name}**"
+                    if stats.get("sentiment_context_used"): caption += " | 💚 Sentiment Used"
+                    st.caption(caption)
                     
-                    # ✨ NEW: Show affective context indicator
-                    affective_triggers = stats.get("affective_triggers_detected", 0)
-                    sentiment_used = stats.get("sentiment_context_used", False)
-                    
-                    caption_text = f"🏆 Winner: **{winner_name}**"
-                    if sentiment_used:
-                        caption_text += f" | 💚 Sentiment Context Used ({affective_triggers} triggers)"
-                    
-                    st.caption(caption_text)
-                    
-                    # Show Chart
                     if "all_scores" in stats:
-                        scores_df = pd.DataFrame([
-                            {"Agent": k, "Score": v} 
-                            for k, v in stats["all_scores"].items()
-                        ])
+                        scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
-                            y=alt.Y('Agent', sort='-x'),
-                            color=alt.condition(
-                                alt.datum.Agent == winner_name,
-                                alt.value('orange'),
-                                alt.value('lightgray')
-                            )
+                            x=alt.X('Score', domain=[0, 10]), y=alt.Y('Agent', sort='-x'),
+                            color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))
                         ).properties(height=150)
                         st.altair_chart(chart, use_container_width=True)
 
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": bot_text, 
-                    "meta": stats,
-                    "winner": winner_name
-                })
-                
-                # Force UI update to show new mood metrics at top
-                st.rerun() 
-                
-            except Exception as e:
-                st.error(f"Kernel Panic: {e}")
-                st.error("Please check console logs.")
+    # Input
+    user_input = st.chat_input("Say something...")
+    if user_input:
+        # Init Kernel
+        if st.session_state.kernel_instance is None:
+            config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
+            config.gender = st.session_state.bot_gender
+            st.session_state.kernel_instance = RCoreKernel(config)
+        else:
+            st.session_state.kernel_instance.config.name = st.session_state.bot_name
+            st.session_state.kernel_instance.config.sliders = st.session_state.sliders
+            st.session_state.kernel_instance.config.use_unified_council = use_unified_council
+
+        kernel = st.session_state.kernel_instance
+        incoming = IncomingMessage(user_id=999, session_id="streamlit_session", text=user_input)
+
+        if test_mode == "A/B Test":
+            with st.chat_message("user"): st.write(user_input)
+            c1, c2 = st.columns(2)
+            with c1, st.spinner("🧠 Cortical..."):
+                resp_c = run_async(kernel.process_message(incoming, mode="CORTICAL"))
+                st.info("Cortical"); st.write(resp_c.actions[0].payload['text'])
+            with c2, st.spinner("🧟 Zombie..."):
+                resp_z = run_async(kernel.process_message(incoming, mode="ZOMBIE"))
+                st.warning("Zombie"); st.write(resp_z.actions[0].payload['text'])
+            
+            st.session_state.messages.append({
+                "type": "ab_test", "role": "user", "content": user_input,
+                "cortical_text": resp_c.actions[0].payload['text'], "cortical_latency": resp_c.internal_stats['latency_ms'],
+                "zombie_text": resp_z.actions[0].payload['text'], "zombie_latency": resp_z.internal_stats['latency_ms']
+            })
+        else:
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"): st.write(user_input)
+            
+            with st.spinner("Thinking..."):
+                try:
+                    response = run_async(kernel.process_message(incoming, mode="CORTICAL"))
+                    bot_text = response.actions[0].payload['text']
+                    stats = response.internal_stats
+                    
+                    with st.chat_message("assistant"):
+                        st.write(bot_text)
+                        st.caption(f"🏆 Winner: {response.winning_agent.value}")
+                        
+                        if "all_scores" in stats:
+                            scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
+                            chart = alt.Chart(scores_df).mark_bar(size=15).encode(
+                                x=alt.X('Score', domain=[0, 10]), y=alt.Y('Agent', sort='-x'),
+                                color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
+                            ).properties(height=150)
+                            st.altair_chart(chart, use_container_width=True)
+
+                    st.session_state.messages.append({
+                        "role": "assistant", "content": bot_text,
+                        "meta": stats, "winner": response.winning_agent.value
+                    })
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
