@@ -4,6 +4,7 @@ import pandas as pd
 import altair as alt
 import json
 import plotly.graph_objects as go
+import plotly.express as px
 from typing import Dict, Any, List
 from datetime import datetime
 from sqlalchemy import select, delete, text
@@ -58,7 +59,7 @@ def run_async(coro):
 
 
 # --- ANALYTICS HELPERS ---
-async def load_session_data(limit=50):
+async def load_session_data(limit=100):
     """Загружает историю диалога и метрики, объединяя их по времени"""
     # FIX: Use AsyncSessionLocal directly
     async with AsyncSessionLocal() as session:
@@ -180,7 +181,7 @@ def extract_hormones(metrics_data):
 
 def extract_mood(metrics_data):
     """Извлекает VAD (Mood) из метрик"""
-    # Ищем 'mood_state' или 'current_mood'
+    # Ищем 'mood_state' or 'current_mood'
     mood_data = metrics_data.get("mood_state") or metrics_data.get("current_mood", "")
     vad = {"Valence": 0.0, "Arousal": 0.0, "Dominance": 0.0}
     
@@ -333,7 +334,8 @@ if app_mode == "📈 Encephalogram (Analytics)":
 
     # Load Data
     with st.spinner("Reading Synaptic Logs..."):
-        messages, metrics_logs = run_async(load_session_data(30))
+        # FIX: Increased limit to 100 to show more history
+        messages, metrics_logs = run_async(load_session_data(100))
 
 
     if not messages:
@@ -365,7 +367,8 @@ if app_mode == "📈 Encephalogram (Analytics)":
             if matched_metric:
                 vad = extract_mood(matched_metric)
                 timeline.append({
-                    "time": timestamp.strftime("%H:%M:%S"),
+                    "time_str": timestamp.strftime("%H:%M:%S\"),
+                    "timestamp": timestamp, # Raw timestamp for plotting
                     "user": user_text,
                     "bot": bot_text,
                     "metrics": matched_metric,
@@ -377,23 +380,44 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 })
 
 
-    # Global Charts
+    # Global Charts (Interactive Plotly)
     st.header("📈 Session Dynamics")
     if timeline:
         df_scores = pd.DataFrame([t["scores"] for t in timeline])
-        df_scores["time"] = [t["time"] for t in timeline]
+        df_scores["timestamp"] = [t["timestamp"] for t in timeline]
         
         df_hormones = pd.DataFrame([t["hormones"] for t in timeline])
-        df_hormones["time"] = [t["time"] for t in timeline]
-
+        df_hormones["timestamp"] = [t["timestamp"] for t in timeline]
 
         c1, c2 = st.columns(2)
         with c1:
-            st.subheader("Agent Conflict")
-            st.line_chart(df_scores.set_index("time"))
+            st.subheader("Agent Activation Levels Over Time")
+            # Convert to long format for Plotly Express
+            df_scores_long = df_scores.melt(id_vars=["timestamp"], var_name="Agent", value_name="Score")
+            fig_scores = px.line(
+                df_scores_long, 
+                x="timestamp", 
+                y="Score", 
+                color="Agent",
+                # title="Agent Activation Levels Over Time",
+                markers=True
+            )
+            fig_scores.update_layout(xaxis_title="Time", yaxis_title="Activation Score", hovermode="x unified")
+            st.plotly_chart(fig_scores, use_container_width=True)
+            
         with c2:
-            st.subheader("Biochemistry (Hormones)")
-            st.line_chart(df_hormones.set_index("time"))
+            st.subheader("Hormonal Levels Over Time")
+            df_hormones_long = df_hormones.melt(id_vars=["timestamp"], var_name="Hormone", value_name="Level")
+            fig_hormones = px.line(
+                df_hormones_long, 
+                x="timestamp", 
+                y="Level", 
+                color="Hormone",
+                # title="Hormonal Levels Over Time",
+                markers=True
+            )
+            fig_hormones.update_layout(xaxis_title="Time", yaxis_title="Concentration", hovermode="x unified")
+            st.plotly_chart(fig_hormones, use_container_width=True)
 
 
     # Timeline Cards
@@ -407,7 +431,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
         if winner_display == "Unknown": winner_display = "⚠️ Log Missing"
 
 
-        with st.expander(f"⏰ {item['time']} | 🏆 {winner_display}", expanded=(i == len(timeline)-1)):
+        with st.expander(f"⏰ {item['time_str']} | 🏆 {winner_display}", expanded=(i == len(timeline)-1)):
             c1, c2 = st.columns([1, 1])
             with c1:
                 st.markdown(f"**👤 User:** {item['user']}")
@@ -598,8 +622,7 @@ else:
         # Init Kernel
         if st.session_state.kernel_instance is None:
             config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
-            config.gender = st.session_state.bot_gender
-            st.session_state.kernel_instance = RCoreKernel(config)
+            config.gender = st.session_state.bot_gender\n            st.session_state.kernel_instance = RCoreKernel(config)
         else:
             st.session_state.kernel_instance.config.name = st.session_state.bot_name
             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
