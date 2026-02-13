@@ -94,7 +94,7 @@ class RCoreKernel:
             # 1. Список активных агентов (какие классы реально загружены)
             "active_agents": [
                 {
-                    "name": agent.name.value,
+                    "name": agent.agent_type.value if hasattr(agent, 'agent_type') else "Unknown",
                     "class": agent.__class__.__name__,
                     "description": agent.__doc__.strip().split('\n')[0] if agent.__doc__ else "No docstring"
                 }
