@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import math
 from typing import Dict, Tuple
 
-from src.r_core.schemas import HormonalState, AgentType
+from src.r_core.schemas import HormonalState, AgentType, PersonalitySliders
 from src.r_core.utils import sigmoid  # ✨ NEW: Import sigmoid
 
 class NeuroModulationSystem:
@@ -82,10 +82,11 @@ class NeuroModulationSystem:
         """
         return sigmoid(raw_pe, k=self.SURPRISE_STEEPNESS, mu=self.SURPRISE_MIDPOINT)
 
-    def update_from_stimuli(self, implied_pe: float, winner_agent: AgentType):
+    def update_from_stimuli(self, implied_pe: float, winner_agent: AgentType, sliders: PersonalitySliders = None):
         """
         Reactive update based on current turn processing.
         implied_pe: Already processed biological impact (0.0 - 1.0) calculated via compute_surprise_impact.
+        sliders: PersonalitySliders (optional) to tune DA reward curve.
         """
         # 1. Norepinephrine (Surprise / Vigilance)
         # Driven by biological surprise impact
@@ -95,11 +96,24 @@ class NeuroModulationSystem:
             spike = implied_pe * 0.5 
             self.state.ne = min(1.0, self.state.ne + spike)
         
-        # 2. Dopamine (Reward)
-        if winner_agent == AgentType.STRIATUM:
-            self.state.da = min(1.0, self.state.da + 0.2)
-        elif winner_agent == AgentType.SOCIAL:
-             self.state.da = min(1.0, self.state.da + 0.05)
+        # 2. Dopamine (Reward from Prediction Accuracy)
+        # Если есть слайдеры, используем сигмоиду для точного расчета награды от ошибки
+        if sliders:
+            # Инвертированная сигмоида: чем меньше ошибка (implied_pe), тем больше награда
+            # k отрицательный, чтобы развернуть график
+            da_reward = sigmoid(
+                implied_pe, 
+                k = -sliders.pred_sensitivity, 
+                mu = sliders.pred_threshold
+            )
+            # Прибавляем часть награды (масштабируем, чтобы не переполнить сразу)
+            self.state.da = min(1.0, self.state.da + (da_reward * 0.3))
+        else:
+            # Fallback legacy logic
+            if winner_agent == AgentType.STRIATUM:
+                self.state.da = min(1.0, self.state.da + 0.2)
+            elif winner_agent == AgentType.SOCIAL:
+                self.state.da = min(1.0, self.state.da + 0.05)
             
         # 3. Serotonin (Consumption vs Recovery)
         # Social interactions CONSUME serotonin (emotional labor)
