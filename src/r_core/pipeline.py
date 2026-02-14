@@ -1,5 +1,3 @@
-# src/r_core/pipeline.py
-
 import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
@@ -282,13 +280,9 @@ class RCoreKernel:
         self._update_mood(winner)
         
         # Hormonal Reactive Update
-        # ✨ SENSORY LAYER ACTIVATION
-        # Pass Raw PE to Neuromodulation, get Biological Impact back
-        implied_pe = self.neuromodulation.compute_surprise_impact(prediction_error)
-        
+        implied_pe = prediction_error # ✨ Use REAL PE instead of hardcoded
         # Or bias it by agent type if PE is low
-        # Note: If implied_pe is very low (e.g. 0.01 due to sigmoid), we treat it as Flow State
-        if implied_pe < 0.1: 
+        if implied_pe < 0.3:
             if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
             elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 
@@ -358,7 +352,8 @@ class RCoreKernel:
             response_text
         )
         
-        latency = (datetime.now() - start_time).total_seconds() * 1000        
+        latency = (datetime.now() - start_time).total_seconds() * 1000
+        
         internal_stats = {
             "latency_ms": int(latency),
             "winner_score": winner.score,
@@ -375,9 +370,8 @@ class RCoreKernel:
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
             "council_mode": "FULL" if has_affective else "LIGHT",
-            "prediction_error": prediction_error, # Raw PE
-            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)
-            "next_prediction": predicted_reaction 
+            "prediction_error": prediction_error, # ✨ Stats
+            "next_prediction": predicted_reaction # ✨ Stats
         }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
