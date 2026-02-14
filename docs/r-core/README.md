@@ -113,7 +113,7 @@
 
 ---
 
-### 🛡️ **Том 8: [Emotional Safety & User Protection](./emotional-safety.md)** *(🆕 New)*
+### 🛡️ **Том 8: [Emotional Safety & User Protection](./emotional-safety.md)**
 **Этические гарантии безопасности собеседника**
 
 Как эмпатия и прозрачность защищают юзера от манипуляций:
@@ -133,29 +133,57 @@
 
 ---
 
-## 📊 Roadmap
+## 📊 Consolidated Master Roadmap
 
-### ✅ Завершено
-- **Этап 1**: Core Architecture (Council, Mood, Memory)
-- **Этап 2.1**: Affective Theory of Mind + Smart Profiling
-  - ✅ Explicit Trait Extraction ("I am skeptical")
-  - ✅ Affective Relations ("I love Yennefer")
-  - ✅ Neuro-Modulation (Adverb Injection style)
-  - ✅ SQL-Metrics Logging (`rcore_metrics`)
-  - ✅ A/B Zombie Mode Switcher
+Полный план развития на 2026 год, синхронизированный между всеми модулями (Architecture, ToM, Narrative, Security).
 
-### 🚧 В процессе
-- **Этап 2.2**: Optimization & Deep Memory
-  - ⏳ **Hormonal Physics**: Внедрение NE, DA, 5-HT, CORT в ядро
-  - ⏳ **Latency Reduction**: Parallel agent execution (`asyncio.gather`)
-  - ⏳ **Vector Traits**: Fuzzy matching для профиля через эмбеддинги
-  - ⏳ **Deep Episodic**: Использование эпизодической памяти для формирования мнений
+### ✅ Phase 1: Core Architecture (Foundation)
+**Status: DONE**
+- **Cognitive Parliament**: 5 agents (Amygdala, Striatum, etc.) voting on action.
+- **Mood System (v1)**: Basic VAD vectors.
+- **Memory**: Basic semantic facts + Chat history.
+- **Infrastructure**: Streamlit UI, SQLite DB.
 
-### ⏳ Запланировано
-- **Этап 3**: Predictive Processing (Empathy Feedback Loop)
-- **Этап 4**: Self & Other Model (Self-awareness + Theory of Mind)
-- **Этап 5**: Narrative Identity (Imprinting & Drives)
-- **Этап 6**: Strategic Protocols (неискренность)
+### ✅ Phase 2.1: The Empath (Affective ToM)
+**Status: DONE**
+- **Affective Extraction**: Detecting LOVES/HATES/FEARS.
+- **Smart Profiling**: User traits extraction ("Criticism Sensitivity").
+- **Neuro-Modulation (v1)**: Adverb injection from losing agents.
+- **Observability**: `rcore_metrics` logging.
+- **A/B Testing**: Zombie Mode switcher.
+
+### 🚧 Phase 2.2: The Predictor (Deep Optimization)
+**Status: IN PROGRESS** (См. [Том 3](./predictive-processing.md))
+- ⏳ **Predictive Processing**: Calculating Prediction Error (PE) & Empathy Alignment.
+- ⏳ **Hormonal Physics**: NE/DA/5-HT/CORT metabolic decay & cross-effects.
+- ⏳ **Latency Reduction**: Parallel execution of agents (`asyncio`).
+- ⏳ **Vector Traits**: Fuzzy matching for user profile via embeddings.
+
+### ⏳ Phase 2.3: The Chronicler (Narrative Memory)
+**Status: PLANNED** (См. [Том 5](./narrative-identity.md))
+- **Monomyth Structure**: `formative_arc.json` (Origin Story).
+- **Emotional Memory**: Indexing episodes by `amygdala_intensity`.
+- **Adaptive Context**: Autopilot (cheap) vs Flashback (deep) modes.
+- **Quote Extraction**: Saving specific "burned in" phrases.
+
+### ⏳ Phase 2.4: The Strategist (Volition & Silence)
+**Status: PLANNED** (См. [Том 1](./architecture.md))
+- **Strategic Silence**: Ability to output `[SILENCE]` token.
+- **Volitional Patterns**: Persistent goals ("Teach Python") that survive context switch.
+- **Shadow Profile**: Advanced hypothesis about user's hidden motives.
+
+### ⏳ Phase 2.5: The Guardian (Cognitive Security)
+**Status: DESIGNED** (См. [Том 8](./emotional-safety.md))
+- **Amygdala Veto**: Hard block on dangerous actions (Score > 0.8).
+- **Transparency Dashboard**: UI for user to edit/delete memories.
+- **Code-Level Constraints**: Python logic overriding LLM hallucinations.
+- **Ethical Axioms**: "Sovereignty of the Other" hardcoded rules.
+
+### ⏳ Phase 3: The Dreamer (Self-Supervised Learning)
+**Status: CONCEPT** (См. [Том 5](./narrative-identity.md))
+- **Dream Cycle**: Offline analysis of daily conflicts.
+- **Emergent Abyss**: Detecting new formative traumas in real-time.
+- **Awakening**: Proactive insights ("I was thinking while I slept...").
 
 ---
 
