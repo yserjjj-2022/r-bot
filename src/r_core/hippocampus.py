@@ -400,7 +400,27 @@ class Hippocampus:
                 return {"status": "skip", "reason": "no_themes_found", "episodes_checked": len(episodes)}
             
             # Сохраняем новые факты
+            duplicates_skipped = 0
+            facts_added = 0
+            
             for theme in themes:
+                # ✨ Fix: Check duplicates before adding
+                # Мы проверяем точное совпадение (или ILIKE) для subject/predicate/object
+                # Чтобы не создавать вечный цикл extraction -> consolidation
+                existing = await session.execute(
+                    select(SemanticModel).where(
+                        and_(
+                            SemanticModel.user_id == user_id,
+                            SemanticModel.subject.ilike(theme["subject"]),
+                            SemanticModel.predicate.ilike(theme["predicate"]),
+                            SemanticModel.object.ilike(theme["object"])
+                        )
+                    ).limit(1)
+                )
+                if existing.scalar_one_or_none():
+                    duplicates_skipped += 1
+                    continue
+
                 fact_text = f"{theme['subject']} {theme['predicate']} {theme['object']}"
                 embedding = await self.embedder.embed(fact_text)
                 
@@ -414,13 +434,16 @@ class Hippocampus:
                     source_message_id="hippocampus_episode_extraction"
                 )
                 session.add(new_fact)
+                facts_added += 1
             
             await session.commit()
             
             return {
                 "status": "ok",
                 "episodes_analyzed": len(episodes),
-                "themes_extracted": len(themes)
+                "themes_found": len(themes),
+                "facts_added": facts_added,
+                "duplicates_skipped": duplicates_skipped
             }
     
     async def _llm_extract_themes(self, episodes: List[EpisodicModel]) -> List[Dict[str, Any]]:
@@ -610,7 +633,8 @@ class Hippocampus:
                     SET short_term_memory_load = 0,
                         last_consolidation_at = NOW()
                     WHERE user_id = :user_id
-                """),
+                """)
+            ,
                 {"user_id": user_id}
             )
             await session.commit()
