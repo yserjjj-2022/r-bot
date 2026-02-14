@@ -180,28 +180,23 @@ class RCoreKernel:
                     try:
                         predicted_vec = j_loader.loads(predicted_vec)
                     except:
-                        predicted_vec = None # predicted_vec remains str or becomes None
+                        predicted_vec = None
 
                 if predicted_vec and current_embedding:
                     # FIX: Use internal cosine_distance instead of scipy
                     dist = cosine_distance(predicted_vec, current_embedding)
                     prediction_error = float(dist)
+                    
+                    # Verify in DB
+                    await self.hippocampus.verify_prediction(
+                        prediction_id=last_prediction["id"],
+                        actual_message=message.text,
+                        actual_embedding=current_embedding,
+                        prediction_error=prediction_error
+                    )
                     print(f"[Predictive] Error Calculated: {prediction_error:.4f} (Prev: '{last_prediction['predicted_reaction']}' vs Real: '{message.text}')")
                 else:
-                    print("[Predictive] Embeddings missing, defaulting error to 0.5 (Surprise).")
-                    prediction_error = 0.5 
-
-            # FIX: ALWAYS verify/close the prediction row, even if calculation failed
-            # This ensures 'actual_message' is saved and row is not left hanging.
-            try:
-                await self.hippocampus.verify_prediction(
-                    prediction_id=last_prediction["id"],
-                    actual_message=message.text,
-                    actual_embedding=current_embedding,
-                    prediction_error=prediction_error
-                )
-            except Exception as e:
-                print(f"[Pipeline] Critical: Verify prediction failed: {e}")
+                    print("[Predictive] Embeddings missing, cannot calc error.")
 
         # 2. Retrieval 
         context = await self.memory.recall_context(
@@ -373,18 +368,11 @@ class RCoreKernel:
             "mood_state": str(self.current_mood),
             "hormonal_state": str(self.neuromodulation.state), 
             "hormonal_archetype": self.neuromodulation.get_archetype(),
-            "active_style": final_style_instructions,
-            "affective_triggers_detected": affective_triggers_count,
+            "active_style": final_style_instructions,\n            "affective_triggers_detected": affective_triggers_count,
             "sentiment_context_used": bool(affective_warnings),
             "volition_selected": dominant_volition.get("impulse") if dominant_volition else None,
             "volition_persistence_active": self.active_focus["turns_remaining"] > 0,
-            "modulators": [s.agent_name.value for s in strong_losers],
-            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
-            "council_mode": "FULL" if has_affective else "LIGHT",
-            "prediction_error": prediction_error, # Raw PE
-            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)
-            "next_prediction": predicted_reaction 
-        }
+            "modulators": [s.agent_name.value for s in strong_losers],\n            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",\n            "council_mode": "FULL" if has_affective else "LIGHT",\n            "prediction_error": prediction_error, # Raw PE\n            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)\n            "next_prediction": predicted_reaction \n        }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
         
@@ -434,7 +422,8 @@ class RCoreKernel:
             
             # Affective Filter
             if self.current_mood.arousal > 0.7 and self.current_mood.dominance < -0.3: score *= 0.2
-            if self.current_mood.arousal > 0.7 and self.current_mood.dominance > 0.5: score *= 1.2\n            
+            if self.current_mood.arousal > 0.7 and self.current_mood.dominance > 0.5: score *= 1.2
+            
             candidates.append({**p, "effective_score": score})
             
         if not candidates: return None
@@ -535,8 +524,7 @@ class RCoreKernel:
         signals = []
         agent_map = {
             "intuition": (self.agents[0], AgentType.INTUITION),
-            "amygdala": (self.agents[1], AgentType.AMYGDALA),
-            "prefrontal": (self.agents[2], AgentType.PREFRONTAL),
+            "amygdala": (self.agents[1], AgentType.AMYGDALA),\n            "prefrontal": (self.agents[2], AgentType.PREFRONTAL),
             "social": (self.agents[3], AgentType.SOCIAL),
             "striatum": (self.agents[4], AgentType.STRIATUM)
         }
@@ -553,8 +541,7 @@ class RCoreKernel:
             report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal", "confidence": 0.5})
             base_score = report_data.get("score", 0.0)
             final_score = base_score * self.config.intuition_gain if key == "intuition" else base_score
-            final_score = max(0.0, min(10.0, final_score))
-            signal = agent.process_from_report(report_data, self.config.sliders)
+            final_score = max(0.0, min(10.0, final_score))\n            signal = agent.process_from_report(report_data, self.config.sliders)
             signal.score = final_score
             signals.append(signal)
             
