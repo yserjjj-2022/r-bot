@@ -358,8 +358,7 @@ class RCoreKernel:
             response_text
         )
         
-        latency = (datetime.now() - start_time).total_seconds() * 1000
-        
+        latency = (datetime.now() - start_time).total_seconds() * 1000\n        
         internal_stats = {
             "latency_ms": int(latency),
             "winner_score": winner.score,
@@ -368,11 +367,18 @@ class RCoreKernel:
             "mood_state": str(self.current_mood),
             "hormonal_state": str(self.neuromodulation.state), 
             "hormonal_archetype": self.neuromodulation.get_archetype(),
-            "active_style": final_style_instructions,\n            "affective_triggers_detected": affective_triggers_count,
+            "active_style": final_style_instructions,
+            "affective_triggers_detected": affective_triggers_count,
             "sentiment_context_used": bool(affective_warnings),
             "volition_selected": dominant_volition.get("impulse") if dominant_volition else None,
             "volition_persistence_active": self.active_focus["turns_remaining"] > 0,
-            "modulators": [s.agent_name.value for s in strong_losers],\n            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",\n            "council_mode": "FULL" if has_affective else "LIGHT",\n            "prediction_error": prediction_error, # Raw PE\n            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)\n            "next_prediction": predicted_reaction \n        }
+            "modulators": [s.agent_name.value for s in strong_losers],
+            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
+            "council_mode": "FULL" if has_affective else "LIGHT",
+            "prediction_error": prediction_error, # Raw PE
+            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)
+            "next_prediction": predicted_reaction 
+        }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
         
@@ -514,7 +520,8 @@ class RCoreKernel:
         print(f"[Hormonal Override] {archetype} is modulating agent scores")
         
         modifiers = MODULATION_MAP[archetype]
-        default_mod = 0.8 if archetype == "SHAME" else 1.0\n        
+        default_mod = 0.8 if archetype == "SHAME" else 1.0
+        
         for signal in signals:
             mod = modifiers.get(signal.agent_name, default_mod)
             signal.score = max(0.0, min(10.0, signal.score * mod))
@@ -524,7 +531,8 @@ class RCoreKernel:
         signals = []
         agent_map = {
             "intuition": (self.agents[0], AgentType.INTUITION),
-            "amygdala": (self.agents[1], AgentType.AMYGDALA),\n            "prefrontal": (self.agents[2], AgentType.PREFRONTAL),
+            "amygdala": (self.agents[1], AgentType.AMYGDALA),
+            "prefrontal": (self.agents[2], AgentType.PREFRONTAL),
             "social": (self.agents[3], AgentType.SOCIAL),
             "striatum": (self.agents[4], AgentType.STRIATUM)
         }
@@ -541,7 +549,8 @@ class RCoreKernel:
             report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal", "confidence": 0.5})
             base_score = report_data.get("score", 0.0)
             final_score = base_score * self.config.intuition_gain if key == "intuition" else base_score
-            final_score = max(0.0, min(10.0, final_score))\n            signal = agent.process_from_report(report_data, self.config.sliders)
+            final_score = max(0.0, min(10.0, final_score))
+            signal = agent.process_from_report(report_data, self.config.sliders)
             signal.score = final_score
             signals.append(signal)
             
