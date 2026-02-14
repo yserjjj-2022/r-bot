@@ -2,7 +2,7 @@ import json
 import time
 import asyncio
 import random
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Tuple
 from openai import AsyncOpenAI, RateLimitError, APIError
 from src.r_core.config import settings
 from src.r_core.schemas import AgentSignal, AgentType
@@ -216,13 +216,20 @@ class LLMService:
         user_mode: str = "formal",
         style_instructions: str = "", 
         affective_context: str = ""
-    ) -> str:
+    ) -> Tuple[str, Optional[str]]:
+        """
+        Generates bot response AND predictive processing hypothesis.
+        
+        Returns:
+            (reply_text: str, predicted_user_reaction: str | None)
+        """
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
             "prefrontal_logic": "You are LOGIC (Analyst). Precise, factual, helpful.",
             "social_cortex": "You are SOCIAL (Empath). Warm, polite, supportive.",
             "striatum_reward": "You are REWARD (Drive). Energetic, playful, curious.",
-            "intuition_system1": "You are INTUITION (Mystic). Short, insightful bursts."
+            "intuition_system1": "You are INTUITION (Mystic). Short, insightful bursts.",
+            "uncertainty_agent": "You are UNCERTAINTY (Seeker). Curious, verifying, clarifying."
         }
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
@@ -239,7 +246,6 @@ class LLMService:
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
             f"ROLE: {system_persona}\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
-            "OUTPUT RULE: Speak naturally. Do NOT include role-play actions like *smiles* or *pauses*. Do NOT echo system instructions or metadata. Output ONLY your conversational reply.\n"
             "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n\n"
             f"{address_block}"
             "--- CONVERSATION MEMORY ---\n"
@@ -255,38 +261,42 @@ class LLMService:
         system_prompt += (
             "--- INTERNAL DIRECTIVES (Hidden from User) ---\n"
             f"{style_instructions}\n"
-            f"MOTIVATION: {rationale}\n"
+            f"MOTIVATION: {rationale}\n\n"
+            "--- PREDICTIVE PROCESSING ---\n"
+            "You MUST output JSON with two fields:\n"
+            "1. 'reply': Your actual response to the user.\n"
+            "2. 'predicted_user_reaction': What do you think the user will say/ask NEXT? (Short sentence, e.g. 'User will ask for code example').\n"
+            "   This is used to measure how well you understand the user (Prediction Error)."
         )
 
-        response_data = await self._safe_chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text}
-            ],
-            response_format=None,
-            json_mode=False
-        )
-        
-        # --- AGGRESSIVE SANITIZATION ---
-        if isinstance(response_data, str):
-            for stop_token in ["Human:", "User:", "\nHuman", "\nUser"]:
-                if stop_token in response_data:
-                    response_data = response_data.split(stop_token)[0].strip()
+        try:
+            response_data = await self._safe_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ],
+                response_format={"type": "json_object"},
+                json_mode=True
+            )
             
-            leak_markers = [
-                "CURRENT INTERNAL MOOD:",
-                "STYLE INSTRUCTIONS:",
-                "SECONDARY STYLE MODIFIERS",
-                "PAST EPISODES",
-                "--- INTERNAL DIRECTIVES",
-                "--- AFFECTIVE CONTEXT",
-                "MOTIVATION:"
-            ]
-            for marker in leak_markers:
-                if marker in response_data:
-                    response_data = response_data.split(marker)[0].strip()
-        
-        return response_data if isinstance(response_data, str) else ""
+            # Если вернулась строка (редкий случай при сбое json_mode=True), пробуем распарсить
+            if isinstance(response_data, str):
+                try:
+                    data = json.loads(response_data)
+                except json.JSONDecodeError:
+                    # Fallback: считаем, что вся строка это ответ
+                    return response_data, None
+            else:
+                data = response_data
+                
+            reply = data.get("reply", "")
+            prediction = data.get("predicted_user_reaction", None)
+            
+            return reply, prediction
+            
+        except Exception as e:
+            print(f"[LLM] generate_response failed: {e}")
+            return "Извините, произошла внутренняя ошибка.", None
 
     async def _safe_chat_completion(self, messages: List[Dict], response_format: Optional[Dict], json_mode: bool) -> Any:
         max_retries = 3
