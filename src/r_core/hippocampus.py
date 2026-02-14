@@ -659,41 +659,61 @@ class Hippocampus:
     async def get_last_prediction(self, session_id: str) -> Optional[Dict]:
         """
         Get the most recent UNVERIFIED prediction for this session.
+        
+        FIX: Matches prediction to the last bot message from chat_history.
+        This prevents matching user responses to old/wrong bot messages.
         """
         print(f"[Hippocampus] DEBUG: Fetching last prediction for Session={session_id}")
         
         try:
             async with AsyncSessionLocal() as session:
-                # FIX: Explicitly ignore verified rows
-                result = await session.execute(
+                # Step 1: Get last bot message from chat_history
+                last_bot_result = await session.execute(
                     text("""
-                        SELECT * FROM prediction_history 
-                        WHERE session_id = :session_id 
-                          AND (actual_message IS NULL OR actual_message = '')
-                        ORDER BY created_at DESC 
+                        SELECT content FROM chat_history
+                        WHERE session_id = :session_id
+                          AND role = 'assistant'
+                        ORDER BY created_at DESC
                         LIMIT 1
                     """),
                     {"session_id": session_id}
                 )
+                last_bot_row = last_bot_result.fetchone()
                 
-                # SQLAlchemy returns Row objects, convert to dict
+                if not last_bot_row:
+                    print("[Hippocampus] DEBUG: No assistant messages found in chat_history. Skipping prediction lookup.")
+                    return None
+                
+                last_bot_message = last_bot_row[0]  # content column
+                print(f"[Hippocampus] DEBUG: Last bot message: '{last_bot_message[:60]}...'")
+                
+                # Step 2: Find prediction tied to this bot message
+                result = await session.execute(
+                    text("""
+                        SELECT * FROM prediction_history 
+                        WHERE session_id = :session_id 
+                          AND bot_message = :bot_message
+                          AND (actual_message IS NULL OR actual_message = '')
+                        ORDER BY created_at DESC 
+                        LIMIT 1
+                    """),
+                    {"session_id": session_id, "bot_message": last_bot_message}
+                )
+                
                 row = result.fetchone()
                 if not row:
-                    print("[Hippocampus] DEBUG: No rows found for this session (No unverified predictions).")
+                    print("[Hippocampus] DEBUG: No unverified predictions found for this bot message.")
                     return None
                     
-                # Accessing row columns by index or name depends on driver, 
-                # assuming name access or mapping.
-                # Convert row to dict safely
+                # Convert row to dict
                 try:
                     data = row._mapping
                     data = dict(data)
                 except AttributeError:
-                    # Fallback for older alchemy
                     keys = result.keys()
                     data = dict(zip(keys, row))
                 
-                print(f"[Hippocampus] DEBUG: Row found. ID={data.get('id')}, ActualMsg={data.get('actual_message')}")
+                print(f"[Hippocampus] DEBUG: ✅ Matched Prediction. ID={data.get('id')}, Predicted='{data.get('predicted_reaction')[:50]}...'")
                 return data
                 
         except Exception as e:
