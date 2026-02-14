@@ -4,6 +4,8 @@ import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
 from sqlalchemy import text
+# FIX: Removed scipy import
+# from scipy.spatial.distance import cosine
 
 from .schemas import (
     IncomingMessage, 
@@ -31,7 +33,7 @@ from .agents import (
 from .neuromodulation import NeuroModulationSystem
 from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
-from .utils import is_phatic_message, cosine_distance
+from .utils import is_phatic_message, cosine_distance  # ✨ NEW: Imported from utils
 
 class RCoreKernel:
     # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
@@ -44,11 +46,11 @@ class RCoreKernel:
     ]
     
     # === VOLITIONAL CONSTANTS ===
-    VOLITION_PERSISTENCE_BONUS = 0.3
-    VOLITION_DECAY_PER_DAY = 0.1
-    VOLITION_FOCUS_DURATION = 3
+    VOLITION_PERSISTENCE_BONUS = 0.3  # Бонус для текущего фокуса
+    VOLITION_DECAY_PER_DAY = 0.1      # Штраф за давность (если decay_rate не задан)
+    VOLITION_FOCUS_DURATION = 3       # Сколько ходов длится фокус по умолчанию
 
-    # === HORMONAL MODULATION RULES ===
+    # === HORMONAL MODULATION RULES (Introspection Exposed) ===
     HORMONAL_MODULATION_RULES = {
         "RAGE": {AgentType.AMYGDALA: 1.6, AgentType.PREFRONTAL: 0.6, AgentType.SOCIAL: 0.8},
         "FEAR": {AgentType.AMYGDALA: 1.8, AgentType.STRIATUM: 0.4, AgentType.PREFRONTAL: 0.7},
@@ -65,10 +67,10 @@ class RCoreKernel:
         # --- EHS: Internal State ---
         self.current_mood = MoodVector(valence=0.1, arousal=0.1, dominance=0.0) 
         
-        # --- Neuro-Modulation System ---
+        # --- Neuro-Modulation System (Hormonal Physics) ---
         self.neuromodulation = NeuroModulationSystem()
         
-        # --- Hippocampus ---
+        # --- Hippocampus (Lazy Consolidation) ---
         self.hippocampus = Hippocampus(
             llm_client=self.llm,
             embedding_client=self.llm
@@ -81,14 +83,44 @@ class RCoreKernel:
             PrefrontalAgent(self.llm),
             SocialAgent(self.llm),
             StriatumAgent(self.llm),
-            UncertaintyAgent(self.llm)
+            UncertaintyAgent(self.llm)  # ✨ NEW: Uncertainty Agent (Index 5)
         ]
         
-        # Volitional State
+        # Volitional State (In-memory cache for session persistence)
         self.active_focus = {
             "pattern_id": None,
             "turns_remaining": 0,
             "user_id": None
+        }
+
+    def get_architecture_snapshot(self) -> Dict:
+        """
+        Возвращает текущую структуру управления для визуализации.
+        Динамически считывает загруженных агентов и настройки.
+        """
+        return {
+            # 1. Список активных агентов (какие классы реально загружены)
+            "active_agents": [
+                {
+                    "name": agent.agent_type.value if hasattr(agent, 'agent_type') else "Unknown",
+                    "class": agent.__class__.__name__,
+                    "description": agent.__doc__.strip().split('\n')[0] if agent.__doc__ else "No docstring"
+                }
+                for agent in self.agents
+            ],
+            
+            # 2. Текущая конфигурация слайдеров (весов)
+            "control_sliders": self.config.sliders.dict(),
+            
+            # 3. Карта гормональной модуляции (правила)
+            "modulation_rules": self.HORMONAL_MODULATION_RULES,
+            
+            # 4. Активные системы
+            "subsystems": {
+                "hippocampus": "Active" if self.hippocampus else "Disabled",
+                "council_mode": "Unified" if self.config.use_unified_council else "Legacy",
+                "predictive_processing": "Active" # ✨
+            }
         }
 
     async def process_message(self, message: IncomingMessage, mode: str = "CORTICAL") -> CoreResponse:
@@ -97,17 +129,18 @@ class RCoreKernel:
         """
         start_time = datetime.now()
         
-        # --- 0. Temporal Metabolism ---
+        # --- 0. Temporal Metabolism (Sense of Time) ---
         delta_minutes = self.neuromodulation.metabolize_time(message.timestamp)
         print(f"[Neuro] Time passed: {delta_minutes:.1f} min. New State: {self.neuromodulation.state}")
         
         # --- ZOMBIE MODE ---
         if mode == "ZOMBIE":
-            # (Simplified zombie logic omitted for brevity, identical to original)
-            simple_response, _ = await self.llm.generate_response(
+            simple_response, _ = await self.llm.generate_response( # Mock tuple return
                  "prefrontal_logic", message.text, "", "", user_mode="formal"
             )
+            # Fix if generate_response returns string in mock scenarios, but here we assume updated llm.py
             latency = (datetime.now() - start_time).total_seconds() * 1000
+            
             return CoreResponse(
                 actions=[CoreAction(type="send_text", payload={"text": str(simple_response)})],
                 winning_agent=AgentType.PREFRONTAL,
@@ -118,7 +151,7 @@ class RCoreKernel:
 
         # --- CORTICAL MODE (Full Architecture) ---
         
-        # 0. Precompute Embedding
+        # 0. Precompute Embedding (used for Search AND Prediction Verification)
         current_embedding = None
         try:
             current_embedding = await self.llm.get_embedding(message.text)
@@ -136,26 +169,25 @@ class RCoreKernel:
             # Check if phatic
             if is_phatic_message(message.text):
                 print(f"[Predictive] Phatic message detected ('{message.text}'). Skipping PE update.")
-                prediction_error = 0.0
+                prediction_error = 0.0 # Neutral
             else:
-                # Calculate Error logic
+                # Calculate Error
                 predicted_vec = last_prediction.get("predicted_embedding")
                 
-                # Handle pgvector text format if needed (though now we use robust JSON)
+                # pgvector returns list or str, handle parsing if needed
                 if isinstance(predicted_vec, str):
                     import json as j_loader
                     try:
                         predicted_vec = j_loader.loads(predicted_vec)
                     except:
-                        pass # predicted_vec remains str or becomes None
+                        predicted_vec = None # predicted_vec remains str or becomes None
 
-                # Compute Distance if possible
                 if predicted_vec and current_embedding:
+                    # FIX: Use internal cosine_distance instead of scipy
                     dist = cosine_distance(predicted_vec, current_embedding)
                     prediction_error = float(dist)
-                    print(f"[Predictive] Error Calculated: {prediction_error:.4f}")
+                    print(f"[Predictive] Error Calculated: {prediction_error:.4f} (Prev: '{last_prediction['predicted_reaction']}' vs Real: '{message.text}')")
                 else:
-                    # Fallback if embeddings missing (e.g. old rows or API fail)
                     print("[Predictive] Embeddings missing, defaulting error to 0.5 (Surprise).")
                     prediction_error = 0.5 
 
@@ -179,11 +211,17 @@ class RCoreKernel:
             precomputed_embedding=current_embedding
         )
         
+        # Inject Prediction Error into Context for Agents
         context["prediction_error"] = prediction_error
         
         user_profile = context.get("user_profile", {})
+        
+        # Normalize user mode
         raw_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
-        preferred_mode = "informal" if raw_mode.lower() in ["ты", "informal", "casual", "friendly"] else "formal"
+        if raw_mode and raw_mode.lower() in ["ты", "informal", "casual", "friendly"]:
+            preferred_mode = "informal"
+        else:
+            preferred_mode = "formal"
 
         # Save memory
         await self.memory.memorize_event(
@@ -203,6 +241,7 @@ class RCoreKernel:
             exclude_semantic=True    
         )
         
+        # ✨ Conditional Council Mode
         has_affective = any(keyword in message.text.lower() for keyword in self.AFFECTIVE_KEYWORDS)
         
         if has_affective:
@@ -212,25 +251,28 @@ class RCoreKernel:
             print("[Council] Using LIGHT mode (agents only)")
             council_report = await self.llm.generate_council_report_light(message.text, council_context_str)
         
-        # Affective Processing
+        # ✨ Affective Extraction Processing
         affective_extracts = council_report.get("affective_extraction", [])
+        affective_triggers_count = 0
         if affective_extracts:
             await self._process_affective_extraction(message, affective_extracts)
+            affective_triggers_count = len(affective_extracts)
         
-        # Council Processing
+        # ✨ Unified Council + Uncertainty Agent
         if self.config.use_unified_council:
-            signals = await self._process_unified_council(council_report, message, context)
+            signals = await self._process_unified_council(council_report, message, context) # FIX: Added await
             print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
         else:
             signals = await self._process_legacy_council(council_report, message, context)
             print(f"[Pipeline] Using LEGACY mode")
 
-        # Hormonal Modulation
+        # ✨ Apply Hormonal Modulation BEFORE arbitration
         signals = self._apply_hormonal_modulation(signals)
 
-        # 4. Arbitration
+        # 4. Arbitration & Mood Update
         signals.sort(key=lambda s: s.score, reverse=True)
         winner = signals[0]
+        
         strong_losers = [s for s in signals if s.score > 5.0 and s.agent_name != winner.agent_name]
         
         adverb_instructions = []
@@ -244,9 +286,13 @@ class RCoreKernel:
         
         self._update_mood(winner)
         
-        # Hormonal Reactive Update (Surprise)
+        # Hormonal Reactive Update
+        # ✨ SENSORY LAYER ACTIVATION
+        # Pass Raw PE to Neuromodulation, get Biological Impact back
         implied_pe = self.neuromodulation.compute_surprise_impact(prediction_error)
         
+        # Or bias it by agent type if PE is low
+        # Note: If implied_pe is very low (e.g. 0.01 due to sigmoid), we treat it as Flow State
         if implied_pe < 0.1: 
             if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
@@ -254,7 +300,7 @@ class RCoreKernel:
         
         self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name)
         
-        # === VOLITIONAL GATING ===
+        # === ✨ VOLITIONAL GATING ===
         volitional_patterns = context.get("volitional_patterns", [])
         dominant_volition = self._select_dominant_volition(volitional_patterns, message.user_id)
         
@@ -265,32 +311,40 @@ class RCoreKernel:
                 f"- TRIGGER: {dominant_volition.get('trigger')}\\n"
                 f"- IMPULSE: {dominant_volition.get('impulse')}\\n"
                 f"- STRATEGY: {dominant_volition.get('resolution_strategy')}\\n"
+                f"- NOTE: {dominant_volition.get('action_taken')}\\n"
             )
+            print(f"[Volition] Selected dominant pattern: {dominant_volition.get('impulse')} (score={dominant_volition.get('effective_score', 0):.2f})")
         
-        # 5. Response Generation
+        # 5. Response Generation (NOW RETURNS TUPLE)
         response_context_str = self._format_context_for_llm(context)
-        mechanical_style = self.neuromodulation.get_style_instruction()
-        final_style = mechanical_style + "\\n" + adverb_context_str + volitional_instruction
+        bot_gender = getattr(self.config, "gender", "Neutral")
         
+        mechanical_style_instruction = self.neuromodulation.get_style_instruction()
+        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str + volitional_instruction
+        
+        # Affective Context for LLM
         affective_warnings = context.get("affective_context", [])
         affective_context_str = self._format_affective_context(affective_warnings)
         
+        # ✨ Generate Response + Prediction
         response_text, predicted_reaction = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
             context_str=response_context_str, 
             rationale=winner.rationale_short,
             bot_name=self.config.name,
-            bot_gender=getattr(self.config, "gender", "Neutral"),
+            bot_gender=bot_gender,
             user_mode=preferred_mode,
-            style_instructions=final_style, 
+            style_instructions=final_style_instructions, 
             affective_context=affective_context_str
         )
         
         # ✨ Save NEW Prediction (Step 2)
         if predicted_reaction:
             try:
+                # Embed the prediction for future comparison
                 pred_emb = await self.llm.get_embedding(predicted_reaction)
+                
                 await self.hippocampus.save_prediction(
                     user_id=message.user_id,
                     session_id=message.session_id,
@@ -302,18 +356,36 @@ class RCoreKernel:
             except Exception as e:
                 print(f"[Predictive] Failed to save prediction: {e}")
 
+        
         await self.memory.memorize_bot_response(
-            message.user_id, message.session_id, response_text
+            message.user_id, 
+            message.session_id, 
+            response_text
         )
         
         latency = (datetime.now() - start_time).total_seconds() * 1000
+        
         internal_stats = {
             "latency_ms": int(latency),
             "winner_score": winner.score,
+            "winner_reason": winner.rationale_short,
+            "all_scores": {s.agent_name.value: round(s.score, 2) for s in signals},
             "mood_state": str(self.current_mood),
             "hormonal_state": str(self.neuromodulation.state), 
-            "prediction_error": prediction_error
+            "hormonal_archetype": self.neuromodulation.get_archetype(),
+            "active_style": final_style_instructions,
+            "affective_triggers_detected": affective_triggers_count,
+            "sentiment_context_used": bool(affective_warnings),
+            "volition_selected": dominant_volition.get("impulse") if dominant_volition else None,
+            "volition_persistence_active": self.active_focus["turns_remaining"] > 0,
+            "modulators": [s.agent_name.value for s in strong_losers],
+            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
+            "council_mode": "FULL" if has_affective else "LIGHT",
+            "prediction_error": prediction_error, # Raw PE
+            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)
+            "next_prediction": predicted_reaction 
         }
+
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
         
         return CoreResponse(
@@ -325,12 +397,18 @@ class RCoreKernel:
             internal_stats=internal_stats
         )
 
-    # ... (Helper methods omitted for brevity, unchanged) ...
+    # === HELPER METHODS ===
+    
     def _select_dominant_volition(self, patterns: List[Dict], user_id: int) -> Optional[Dict]:
+        """
+        Winner-Takes-Volition mechanism.
+        """
         if not patterns: return None
         now = datetime.utcnow()
         candidates = []
         current_focus_id = None
+        
+        # Check focus persistence
         if self.active_focus["user_id"] == user_id and self.active_focus["turns_remaining"] > 0:
             current_focus_id = self.active_focus["pattern_id"]
             self.active_focus["turns_remaining"] -= 1
@@ -339,49 +417,121 @@ class RCoreKernel:
         
         for p in patterns:
             if not p.get("is_active", True): continue
+            
+            # Base Score
             score = p.get("intensity", 0.5) + p.get("learned_delta", 0.0)
+            
+            # Decay
+            last_active = p.get("last_activated_at")
+            if last_active and isinstance(last_active, datetime):
+                days_passed = (now - last_active).days
+                decay_rate = p.get("decay_rate") or self.VOLITION_DECAY_PER_DAY
+                decay_penalty = days_passed * decay_rate
+                score -= decay_penalty
+            
+            # Persistence Bonus
             if p["id"] == current_focus_id: score += self.VOLITION_PERSISTENCE_BONUS
+            
+            # Affective Filter
+            if self.current_mood.arousal > 0.7 and self.current_mood.dominance < -0.3: score *= 0.2
+            if self.current_mood.arousal > 0.7 and self.current_mood.dominance > 0.5: score *= 1.2\n            
             candidates.append({**p, "effective_score": score})
             
         if not candidates: return None
         candidates.sort(key=lambda x: x["effective_score"], reverse=True)
-        return candidates[0] if candidates[0]["effective_score"] > 0.6 else None
+        winner = candidates[0]
+        
+        # Set new focus if strong enough
+        if winner["effective_score"] > 0.6:
+            if winner["id"] != current_focus_id:
+                self.active_focus["pattern_id"] = winner["id"]
+                self.active_focus["turns_remaining"] = self.VOLITION_FOCUS_DURATION
+                print(f"[Volition] New Focus Acquired: {winner['impulse']} (for {self.VOLITION_FOCUS_DURATION} turns)")
+        
+        return winner
 
     async def _process_affective_extraction(self, message: IncomingMessage, extracts: List[Dict]):
+        """Helper to process extracted emotions"""
         for item in extracts:
+            intensity = item.get("intensity", 0.5)
+            predicate = item.get("predicate", "UNKNOWN")
+            
+            if predicate in ["HATES", "DESPISES", "FEARS"]: valence = -intensity
+            elif predicate in ["LOVES", "ENJOYS", "ADORES"]: valence = intensity
+            else: valence = 0.0
+            
+            sentiment_vad = {
+                "valence": valence,
+                "arousal": 0.5 if predicate == "FEARS" else 0.3,
+                "dominance": -0.2 if predicate == "FEARS" else 0.0
+            }
+            
             triple = SemanticTriple(
                 subject=item.get("subject", "User"),
-                predicate=item.get("predicate", "UNKNOWN"),
+                predicate=predicate,
                 object=item.get("object", ""),
-                confidence=item.get("intensity", 0.5),
-                source_message_id=message.message_id
+                confidence=intensity,
+                source_message_id=message.message_id,
+                sentiment=sentiment_vad
             )
+            
             await self.memory.store.save_semantic(message.user_id, triple)
+            print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object}")
 
     def _format_affective_context(self, warnings: List[Dict]) -> str:
         if not warnings: return ""
-        s = "⚠️ EMOTIONAL RELATIONS:\\n"
-        for w in warnings: s += f"- User {w['predicate']} {w['entity']}\\n"
+        s = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\\n"
+        for warn in warnings:
+            entity = warn["entity"]
+            predicate = warn["predicate"]
+            feeling = warn["user_feeling"]
+            intensity = warn["intensity"]
+            if feeling == "NEGATIVE":
+                s += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}).\\n"
+            else:
+                s += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}).\\n"
         return s
 
     async def _check_and_trigger_hippocampus(self, user_id: int):
         try:
             async with AsyncSessionLocal() as session:
-                await session.execute(text("UPDATE user_profiles SET short_term_memory_load = short_term_memory_load + 1 WHERE user_id = :uid"), {"uid": user_id})
+                await session.execute(
+                    text("UPDATE user_profiles SET short_term_memory_load = short_term_memory_load + 1 WHERE user_id = :uid"),
+                    {"uid": user_id}
+                )
                 await session.commit()
-                r = await session.execute(text("SELECT short_term_memory_load FROM user_profiles WHERE user_id = :uid"), {"uid": user_id})
-                if (r.scalar() or 0) >= 10: await self.hippocampus.consolidate(user_id)
-        except Exception: pass
+                result = await session.execute(
+                    text("SELECT short_term_memory_load FROM user_profiles WHERE user_id = :uid"),
+                    {"uid": user_id}
+                )
+                load = result.scalar() or 0
+                
+                # FIX: Set threshold to 10
+                THRESHOLD = 10 
+                
+                if load >= THRESHOLD:
+                    print(f"[Hippocampus] Triggered consolidation for user {user_id} (load={load})")
+                    await self.hippocampus.consolidate(user_id)
+        except Exception as e:
+            print(f"[Pipeline] Hippocampus trigger failed: {e}")
 
     def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         archetype = self.neuromodulation.get_archetype()
-        modifiers = self.HORMONAL_MODULATION_RULES.get(archetype)
-        if not modifiers: return signals
-        for s in signals:
-            s.score = max(0.0, min(10.0, s.score * modifiers.get(s.agent_name, 1.0)))
+        
+        # Use class constant for rules
+        MODULATION_MAP = self.HORMONAL_MODULATION_RULES
+        
+        if archetype not in MODULATION_MAP: return signals
+        print(f"[Hormonal Override] {archetype} is modulating agent scores")
+        
+        modifiers = MODULATION_MAP[archetype]
+        default_mod = 0.8 if archetype == "SHAME" else 1.0\n        
+        for signal in signals:
+            mod = modifiers.get(signal.agent_name, default_mod)
+            signal.score = max(0.0, min(10.0, signal.score * mod))
         return signals
 
-    async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
+    async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]: # FIX: Made async
         signals = []
         agent_map = {
             "intuition": (self.agents[0], AgentType.INTUITION),
@@ -390,36 +540,104 @@ class RCoreKernel:
             "social": (self.agents[3], AgentType.SOCIAL),
             "striatum": (self.agents[4], AgentType.STRIATUM)
         }
-        u_signal = await self.agents[5].process(message, context, self.config.sliders)
-        if u_signal: signals.append(u_signal)
+        
+        # ✨ NEW: Process Uncertainty Agent
+        # It's NOT in the council report (yet), it runs its own logic based on context data (PE)
+        uncertainty_agent = self.agents[5] # Index 5
+        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) # FIX: Added await
+        if u_signal:
+             # Manually add to signals if it decided to run (score > 0)
+             signals.append(u_signal)
 
-        for key, (agent, _) in agent_map.items():
-            report_data = council_report.get(key, {"score": 0.0})
-            final_score = report_data.get("score", 0.0) * (self.config.intuition_gain if key == "intuition" else 1.0)
+        for key, (agent, agent_type) in agent_map.items():
+            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal", "confidence": 0.5})
+            base_score = report_data.get("score", 0.0)
+            final_score = base_score * self.config.intuition_gain if key == "intuition" else base_score
+            final_score = max(0.0, min(10.0, final_score))
             signal = agent.process_from_report(report_data, self.config.sliders)
-            signal.score = max(0.0, min(10.0, final_score))
+            signal.score = final_score
             signals.append(signal)
+            
         return signals
 
     async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
-        signals = [await self.agents[0].process(message, context, self.config.sliders)]
-        agent_map = {"amygdala": self.agents[1], "prefrontal": self.agents[2], "social": self.agents[3], "striatum": self.agents[4]}
+        intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
+        signals = [intuition_signal]
+        agent_map = {
+            "amygdala": self.agents[1],
+            "prefrontal": self.agents[2],
+            "social": self.agents[3],
+            "striatum": self.agents[4]
+        }
         for key, agent in agent_map.items():
-            signals.append(agent.process_from_report(council_report.get(key, {}), self.config.sliders))
-        u_signal = await self.agents[5].process(message, context, self.config.sliders)
-        if u_signal: signals.append(u_signal)
+            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
+            signals.append(agent.process_from_report(report_data, self.config.sliders))
+            
+        # ✨ Add Uncertainty Agent for legacy mode too
+        uncertainty_agent = self.agents[5]
+        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) # FIX: Added await
+        if u_signal:
+             signals.append(u_signal)
+             
         return signals
 
     def _update_mood(self, winner_signal):
-        pass # Simplified for update, logic remains
+        INERTIA = 0.7
+        SENSITIVITY = 0.3
+        impact_map = {
+            AgentType.AMYGDALA:  MoodVector(valence=-0.8, arousal=0.9, dominance=0.8),
+            AgentType.STRIATUM:  MoodVector(valence=0.8, arousal=0.7, dominance=0.3),
+            AgentType.SOCIAL:    MoodVector(valence=0.5, arousal=-0.2, dominance=-0.1),
+            AgentType.PREFRONTAL:MoodVector(valence=0.0, arousal=-0.5, dominance=0.1),
+            AgentType.INTUITION: MoodVector(valence=0.0, arousal=0.1, dominance=0.0),
+            AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) # ✨ NEW
+        }
+        impact = impact_map.get(winner_signal.agent_name, MoodVector())
+        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
+        
+        self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
+        self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
+        self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
 
     def _format_context_for_llm(self, context: Dict, limit_history: Optional[int] = None, exclude_episodic: bool = False, exclude_semantic: bool = False) -> str:
-        # Simplified reconstruction to save tokens in this update, core logic is preserved
         lines = []
+        profile = context.get("user_profile")
+        if profile:
+            lines.append("USER PROFILE (Core Identity):")
+            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
+            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
+            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
+            lines.append("")
+
         if context.get("chat_history"):
-            hist = context["chat_history"][-limit_history:] if limit_history else context["chat_history"]
-            for m in hist: lines.append(f"{m['role']}: {m['content']}")
-        return "\\n".join(lines)
-    
+            chat_history = context["chat_history"]
+            if limit_history is not None:
+                chat_history = chat_history[-limit_history:]
+            if chat_history:
+                lines.append("RECENT DIALOGUE:")
+                for msg in chat_history:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    lines.append(f"{role}: {msg['content']}")
+                lines.append("") 
+        
+        if not exclude_episodic and context.get("episodic_memory"):
+            lines.append("PAST EPISODES (Long-term memory):")
+            for ep in context["episodic_memory"]:
+                lines.append(f"- {ep.get('raw_text', '')}")
+            lines.append("")
+        
+        if not exclude_semantic and context.get("semantic_facts"):
+            lines.append("KNOWN FACTS:")
+            for fact in context["semantic_facts"]:
+                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+            lines.append("")
+                
+        return "\\n".join(lines) if lines else "No prior context."
+
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
-        return {"triples": [], "anchors": [], "volitional_pattern": None}
+        await asyncio.sleep(0.05)
+        return {
+            "triples": [], 
+            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
+            "volitional_pattern": None
+        }
