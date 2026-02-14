@@ -1,3 +1,5 @@
+# src/r_core/infrastructure/llm.py
+
 import json
 import time
 import asyncio
@@ -15,8 +17,6 @@ class LLMService:
             base_url=settings.OPENAI_BASE_URL
         )
         self.model_name = settings.LLM_MODEL_NAME
-        
-        # Кэш последнего валидного Council Report
         self.last_valid_council_report = None
 
     async def get_embedding(self, text: str) -> List[float]:
@@ -31,11 +31,9 @@ class LLMService:
             raise e
             
     async def embed(self, text: str) -> List[float]:
-        """Alias for get_embedding to satisfy Hippocampus protocol"""
         return await self.get_embedding(text)
 
     async def complete(self, prompt: str) -> str:
-        """Raw completion wrapper for internal tasks (Hippocampus, etc)"""
         return await self._safe_chat_completion(
             messages=[{"role": "user", "content": prompt}],
             response_format=None,
@@ -43,92 +41,63 @@ class LLMService:
         )
 
     def _build_council_prompt_base(self, context_summary: str) -> str:
-        """
-        Базовый промпт для council_report (только агенты).
-        Используется в light и full режимах.
-        """
         return (
-            "You are the Cognitive Core of R-Bot. Analyze the user's input through 5 functional lenses.\n"
-            f"Context: {context_summary}\n\n"
-            
-            "### 1. AMYGDALA (Safety & Threat)\n"
-            "- Focus: Aggression, boundary violation, high risk, distress, conflict.\n"
-            "- Score 8-10: Hostile/Unsafe/Urgent. Score 0-2: Safe/Neutral.\n\n"
-            
-            "### 2. PREFRONTAL CORTEX (Logic & Planning)\n"
-            "- Focus: Factual questions, logical tasks, structure, planning, analysis.\n"
-            "- Score 8-10: User wants a solution/plan. Score 0-2: Pure chat/emotion.\n\n"
-            
-            "### 3. SOCIAL CORTEX (Empathy & Norms)\n"
-            "- Focus: Greetings, gratitude, emotional support, small talk, politeness.\n"
-            "- Score 8-10: Social/Emotional interaction. Score 0-2: Dry/Transactional.\n\n"
-            
-            "### 4. STRIATUM (Reward & Desire)\n"
-            "- Focus: Curiosity, playfulness, game mechanics, opportunities for fun/goals.\n"
-            "- Score 8-10: Exciting/Gamified. Score 0-2: Boring/Routine.\n\n"
-            
-            "### 5. INTUITION (System-1 Fast Thinking)\n"
-            "- Focus: Immediate, automatic, effortless responses. Pattern matching without deep reasoning.\n"
-            "- Score 8-10: Response is immediate and obvious (greetings, simple Q&A). No analysis needed.\n"
-            "- Score 4-7: Message is familiar but needs slight adaptation.\n"
-            "- Score 0-3: Unfamiliar territory. Requires System-2 (Prefrontal) thinking.\n\n"
+            "You are the Cognitive Core of R-Bot. Analyze the user's input through 5 functional lenses.\\n"
+            f"Context: {context_summary}\\n\\n"
+            "### 1. AMYGDALA (Safety & Threat)\\n"
+            "- Focus: Aggression, boundary violation, high risk, distress, conflict.\\n"
+            "- Score 8-10: Hostile/Unsafe/Urgent. Score 0-2: Safe/Neutral.\\n\\n"
+            "### 2. PREFRONTAL CORTEX (Logic & Planning)\\n"
+            "- Focus: Factual questions, logical tasks, structure, planning, analysis.\\n"
+            "- Score 8-10: User wants a solution/plan. Score 0-2: Pure chat/emotion.\\n\\n"
+            "### 3. SOCIAL CORTEX (Empathy & Norms)\\n"
+            "- Focus: Greetings, gratitude, emotional support, small talk, politeness.\\n"
+            "- Score 8-10: Social/Emotional interaction. Score 0-2: Dry/Transactional.\\n\\n"
+            "### 4. STRIATUM (Reward & Desire)\\n"
+            "- Focus: Curiosity, playfulness, game mechanics, opportunities for fun/goals.\\n"
+            "- Score 8-10: Exciting/Gamified. Score 0-2: Boring/Routine.\\n\\n"
+            "### 5. INTUITION (System-1 Fast Thinking)\\n"
+            "- Focus: Immediate, automatic, effortless responses. Pattern matching without deep reasoning.\\n"
+            "- Score 8-10: Response is immediate and obvious. No analysis needed.\\n"
+            "- Score 4-7: Message is familiar but needs slight adaptation.\\n"
+            "- Score 0-3: Unfamiliar territory. Requires System-2 (Prefrontal) thinking.\\n\\n"
         )
 
     def _build_affective_block(self) -> str:
-        """
-        Блок извлечения эмоциональных отношений пользователя.
-        Добавляется только в full режиме.
-        """
         return (
-            "### 6. AFFECTIVE EXTRACTION (Emotional Relations)\n"
-            "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\n"
-            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\n"
-            "- Output format: [{'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'entity', 'intensity': float(0-1)}]\n"
-            "- Examples:\n"
-            "  * 'Ненавижу Java' -> {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\n"
-            "  * 'Боюсь пауков' -> {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\n"
-            "- Return empty array [] if no affective content detected.\n\n"
+            "### 6. AFFECTIVE EXTRACTION (Emotional Relations)\\n"
+            "Detect if the user expresses strong emotional attitudes toward objects, people, concepts, or technologies.\\n"
+            "- Keywords: loves, hates, fears, enjoys, despises, adores, can't stand.\\n"
+            "- Output format: [{'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'entity', 'intensity': float(0-1)}]\\n"
+            "- Examples:\\n"
+            "  * 'Ненавижу Java' -> {'subject': 'User', 'predicate': 'HATES', 'object': 'Java', 'intensity': 0.9}\\n"
+            "  * 'Боюсь пауков' -> {'subject': 'User', 'predicate': 'FEARS', 'object': 'пауки', 'intensity': 0.7}\\n"
+            "- Return empty array [] if no affective content detected.\\n\\n"
         )
 
     async def generate_council_report_light(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
-        """
-        LIGHT MODE: Только агенты (AMYGDALA, PREFRONTAL, SOCIAL, STRIATUM, INTUITION).
-        Используется для 95% запросов (без эмоциональных маркеров).
-        ~520 токенов input.
-        """
         system_prompt = self._build_council_prompt_base(context_summary)
         system_prompt += (
-            "### OUTPUT FORMAT\n"
-            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition'.\n"
+            "### OUTPUT FORMAT\\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition'.\\n"
             "Value schema: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }"
         )
-        
         return await self._execute_council_report(user_text, system_prompt, mode="light")
 
     async def generate_council_report_full(self, user_text: str, context_summary: str = "") -> Dict[str, Dict]:
-        """
-        FULL MODE: Агенты + Affective Extraction.
-        Используется для 5% запросов (с эмоциональными маркерами).
-        ~740 токенов input.
-        """
         system_prompt = self._build_council_prompt_base(context_summary)
         system_prompt += self._build_affective_block()
         system_prompt += (
-            "### OUTPUT FORMAT\n"
-            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'affective_extraction'.\n"
-            "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\n"
+            "### OUTPUT FORMAT\\n"
+            "Return JSON ONLY. Keys: 'amygdala', 'prefrontal', 'social', 'striatum', 'intuition', 'affective_extraction'.\\n"
+            "Value schema for agents: { 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }\\n"
             "Value schema for 'affective_extraction': [ {'subject': 'User', 'predicate': 'LOVES|HATES|FEARS|ENJOYS|DESPISES', 'object': 'str', 'intensity': float(0-1)} ] OR [] if empty."
         )
-        
         return await self._execute_council_report(user_text, system_prompt, mode="full")
 
     async def _execute_council_report(self, user_text: str, system_prompt: str, mode: str) -> Dict:
-        """
-        Общая логика выполнения council_report с fallback механизмом.
-        """
-        prompt = user_text  # Для логирования
+        prompt = user_text 
         raw_response = None
-        
         try:
             raw_response = await self._safe_chat_completion(
                 messages=[
@@ -138,19 +107,15 @@ class LLMService:
                 response_format={"type": "json_object"},
                 json_mode=True
             )
-            
-            # Парсим JSON
             if isinstance(raw_response, str):
                 council_report = json.loads(raw_response)
             else:
                 council_report = raw_response
             
-            # Проверяем обязательные ключи
             required_keys = ["intuition", "amygdala", "prefrontal", "social", "striatum"]
             missing_keys = [k for k in required_keys if k not in council_report]
             
             if missing_keys:
-                # Логируем ошибку
                 await log_llm_raw_response(
                     prompt_type=f"council_report_{mode}",
                     raw_request=prompt[:2000],
@@ -158,13 +123,9 @@ class LLMService:
                     parse_status="missing_keys",
                     error_message=f"Missing: {missing_keys}"
                 )
-                
-                # Fallback
                 return self._get_fallback_council_report()
             
-            # Успех! Сохраняем в кэш
             self.last_valid_council_report = council_report
-            
             return council_report
             
         except json.JSONDecodeError as e:
@@ -188,14 +149,9 @@ class LLMService:
             return self._get_fallback_council_report()
 
     def _get_fallback_council_report(self) -> Dict:
-        """
-        Возвращает последний валидный Council Report или дефолтный.
-        """
         if self.last_valid_council_report:
             print("[LLM] Using cached council report (LLM failed)")
             return self.last_valid_council_report
-        
-        # Нейтральное состояние по умолчанию
         print("[LLM] No cached report, using neutral default")
         return {
             "intuition": {"score": 5.0, "rationale": "Fallback: neutral state", "confidence": 0.5},
@@ -217,12 +173,6 @@ class LLMService:
         style_instructions: str = "", 
         affective_context: str = ""
     ) -> Tuple[str, Optional[str]]:
-        """
-        Generates bot response AND predictive processing hypothesis.
-        
-        Returns:
-            (reply_text: str, predicted_user_reaction: str | None)
-        """
         personas = {
             "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
             "prefrontal_logic": "You are LOGIC (Analyst). Precise, factual, helpful.",
@@ -233,40 +183,35 @@ class LLMService:
         }
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
-        
-        # === SIMPLIFIED ADDRESS INSTRUCTION (ONLY ONE ACTIVE) ===
-        address_block = ""
-        
-        if user_mode == "informal":
-            address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой').\n\n"
-        else:
-            address_block = "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш').\n\n"
+        address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой').\\n\\n" if user_mode == "informal" else "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш').\\n\\n"
 
         system_prompt = (
-            f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\n"
-            f"ROLE: {system_persona}\n"
-            "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\n"
-            "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\n\n"
+            f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\\n"
+            f"ROLE: {system_persona}\\n"
+            "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\\n"
+            "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\\n\\n"
             f"{address_block}"
-            "--- CONVERSATION MEMORY ---\n"
-            f"{context_str}\n\n"
+            "--- CONVERSATION MEMORY ---\\n"
+            f"{context_str}\\n\\n"
         )
 
         if affective_context:
             system_prompt += (
-                "--- AFFECTIVE CONTEXT (User's Emotional Relations) ---\n"
-                f"{affective_context}\n\n"
+                "--- AFFECTIVE CONTEXT (User's Emotional Relations) ---\\n"
+                f"{affective_context}\\n\\n"
             )
 
         system_prompt += (
-            "--- INTERNAL DIRECTIVES (Hidden from User) ---\n"
-            f"{style_instructions}\n"
-            f"MOTIVATION: {rationale}\n\n"
-            "--- PREDICTIVE PROCESSING ---\n"
-            "You MUST output JSON with two fields:\n"
-            "1. 'reply': Your actual response to the user.\n"
-            "2. 'predicted_user_reaction': What do you think the user will say/ask NEXT? (Short sentence, e.g. 'User will ask for code example').\n"
-            "   This is used to measure how well you understand the user (Prediction Error)."
+            "--- INTERNAL DIRECTIVES (Hidden from User) ---\\n"
+            f"{style_instructions}\\n"
+            f"MOTIVATION: {rationale}\\n\\n"
+            "--- PREDICTIVE PROCESSING ---\\n"
+            "You MUST output JSON with two fields:\\n"
+            "1. 'reply': Your actual response to the user (in Russian or target language).\\n"
+            "2. 'predicted_user_reaction': What do you think the user will say/ask NEXT? \\n"
+            "   - Output ONE short sentence in ENGLISH.\\n"
+            "   - NO translations, NO duplicates.\\n"
+            "   - Example: 'User will ask for code example'\\n"
         )
 
         try:
@@ -279,12 +224,10 @@ class LLMService:
                 json_mode=True
             )
             
-            # Если вернулась строка (редкий случай при сбое json_mode=True), пробуем распарсить
             if isinstance(response_data, str):
                 try:
                     data = json.loads(response_data)
                 except json.JSONDecodeError:
-                    # Fallback: считаем, что вся строка это ответ
                     return response_data, None
             else:
                 data = response_data
