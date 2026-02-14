@@ -33,7 +33,9 @@ if "sliders" not in st.session_state:
         risk_tolerance=0.5, 
         dominance_level=0.5, 
         pace_setting=0.5, 
-        neuroticism=0.1
+        neuroticism=0.1,
+        pred_threshold=0.65, # Default
+        pred_sensitivity=10.0 # Default
     )
 
 if "bot_name" not in st.session_state:
@@ -541,7 +543,9 @@ else:
                 risk_tolerance=preset.get("risk_tolerance", 0.5),
                 dominance_level=preset.get("dominance_level", 0.5),
                 pace_setting=preset.get("pace_setting", 0.5),
-                neuroticism=preset.get("neuroticism", 0.1)
+                neuroticism=preset.get("neuroticism", 0.1),
+                pred_threshold=preset.get("pred_threshold", 0.65), # ✨ Load new fields
+                pred_sensitivity=preset.get("pred_sensitivity", 10.0) # ✨ Load new fields
             )
     else:
         st.session_state.bot_name = "R-Bot"
@@ -554,6 +558,12 @@ else:
         dominance = st.slider("👑 Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
         pace = st.slider("⚡ Thinking Style", 0.0, 1.0, st.session_state.sliders.pace_setting)
         
+        # ✨ NEW: Predictive Processing Sliders
+        st.markdown("---")
+        st.caption("🔮 Predictive Processing")
+        pred_thresh = st.slider("Threshold (µ)", 0.1, 1.0, st.session_state.sliders.pred_threshold, help="Порог 'хорошей' ошибки. Выше = бот реже паникует.")
+        pred_sens = st.slider("Sensitivity (k)", 1.0, 20.0, st.session_state.sliders.pred_sensitivity, help="Резкость реакции. Выше = сильнее награда/штраф.")
+        
         use_unified_council = st.checkbox("🔄 Unified Council", value=False)
 
         st.session_state.sliders = PersonalitySliders(
@@ -561,7 +571,9 @@ else:
             risk_tolerance=risk,
             dominance_level=dominance,
             pace_setting=pace,
-            neuroticism=0.1
+            neuroticism=0.1,
+            pred_threshold=pred_thresh, # ✨ Update state
+            pred_sensitivity=pred_sens   # ✨ Update state
         )
 
     # --- Save Agent ---
@@ -574,7 +586,8 @@ else:
                 if new_name:
                     sliders_dict = {
                         "empathy_bias": empathy, "risk_tolerance": risk,
-                        "dominance_level": dominance, "pace_setting": pace, "neuroticism": 0.1
+                        "dominance_level": dominance, "pace_setting": pace, "neuroticism": 0.1,
+                        "pred_threshold": pred_thresh, "pred_sensitivity": pred_sens # ✨ Save
                     }
                     run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))
                     st.success(f"Agent {new_name} saved!")
