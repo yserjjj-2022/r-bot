@@ -25,12 +25,12 @@ from .agents import (
     PrefrontalAgent,
     SocialAgent,
     StriatumAgent,
-    UncertaintyAgent  # ✨ NEW
+    UncertaintyAgent
 )
 from .neuromodulation import NeuroModulationSystem
 from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
-from .utils import is_phatic_message  # ✨ NEW
+from .utils import is_phatic_message
 
 class RCoreKernel:
     # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
@@ -381,7 +381,8 @@ class RCoreKernel:
             winning_agent=winner.agent_name,
             current_mood=self.current_mood, 
             current_hormones=self.neuromodulation.state, 
-            processing_mode=ProcessingMode.SLOW_PATH,\n            internal_stats=internal_stats
+            processing_mode=ProcessingMode.SLOW_PATH,
+            internal_stats=internal_stats
         )
 
     # === HELPER METHODS ===
