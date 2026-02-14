@@ -280,13 +280,13 @@ class RCoreKernel:
         self._update_mood(winner)
         
         # Hormonal Reactive Update
-        # FIX: Dampen the prediction error impact on hormones
-        # We assume a "noise floor" of 0.25 (typical embedding distance even for similar meanings)
-        # So a raw PE of 0.61 becomes 0.36 (Moderate Surprise), not 0.61 (Panic)
-        implied_pe = max(0.0, prediction_error - 0.25)
+        # ✨ SENSORY LAYER ACTIVATION
+        # Pass Raw PE to Neuromodulation, get Biological Impact back
+        implied_pe = self.neuromodulation.compute_surprise_impact(prediction_error)
         
         # Or bias it by agent type if PE is low
-        if implied_pe < 0.1: # Was 0.3, tightened due to dampening
+        # Note: If implied_pe is very low (e.g. 0.01 due to sigmoid), we treat it as Flow State
+        if implied_pe < 0.1: 
             if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
             elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 
@@ -375,7 +375,7 @@ class RCoreKernel:
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
             "council_mode": "FULL" if has_affective else "LIGHT",
             "prediction_error": prediction_error, # Raw PE
-            "implied_pe": implied_pe, # ✨ Effective PE
+            "implied_pe": implied_pe, # ✨ Effective PE (Sigmoid)
             "next_prediction": predicted_reaction 
         }
 
