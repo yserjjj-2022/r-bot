@@ -164,37 +164,42 @@ class RCoreKernel:
         last_prediction = await self.hippocampus.get_last_prediction(message.session_id)
         
         if last_prediction:
-            # Check if phatic
-            if is_phatic_message(message.text):
-                print(f"[Predictive] Phatic message detected ('{message.text}'). Skipping PE update.")
+            # 1. Determine Logic
+            is_phatic = is_phatic_message(message.text)
+            
+            predicted_vec = last_prediction.get("predicted_embedding")
+            # pgvector returns list or str, handle parsing if needed
+            if isinstance(predicted_vec, str):
+                import json as j_loader
+                try:
+                    predicted_vec = j_loader.loads(predicted_vec)
+                except:
+                    predicted_vec = None
+            
+            # 2. Calculate Error
+            if not is_phatic and predicted_vec and current_embedding:
+                # FIX: Use internal cosine_distance instead of scipy
+                dist = cosine_distance(predicted_vec, current_embedding)
+                prediction_error = float(dist)
+                print(f"[Predictive] Error Calculated: {prediction_error:.4f} (Prev: '{last_prediction['predicted_reaction']}' vs Real: '{message.text}')")
+            elif is_phatic:
+                print(f"[Predictive] Phatic message detected ('{message.text}'). Force PE=0.0.")
                 prediction_error = 0.0 # Neutral
             else:
-                # Calculate Error
-                predicted_vec = last_prediction.get("predicted_embedding")
-                
-                # pgvector returns list or str, handle parsing if needed
-                if isinstance(predicted_vec, str):
-                    import json as j_loader
-                    try:
-                        predicted_vec = j_loader.loads(predicted_vec)
-                    except:
-                        predicted_vec = None
+                 print("[Predictive] Embeddings missing or invalid, default PE=0.0.")
 
-                if predicted_vec and current_embedding:
-                    # FIX: Use internal cosine_distance instead of scipy
-                    dist = cosine_distance(predicted_vec, current_embedding)
-                    prediction_error = float(dist)
-                    
-                    # Verify in DB
-                    await self.hippocampus.verify_prediction(
-                        prediction_id=last_prediction["id"],
-                        actual_message=message.text,
-                        actual_embedding=current_embedding,
-                        prediction_error=prediction_error
-                    )
-                    print(f"[Predictive] Error Calculated: {prediction_error:.4f} (Prev: '{last_prediction['predicted_reaction']}' vs Real: '{message.text}')")
-                else:
-                    print("[Predictive] Embeddings missing, cannot calc error.")
+            # 3. ALWAYS Verify in DB (Close the loop)
+            # This ensures we don't compare against this stale prediction next turn
+            try:
+                print(f"[Predictive] Closing Loop for PredID={last_prediction['id']}. Writing actual_msg='{message.text}'")
+                await self.hippocampus.verify_prediction(
+                    prediction_id=last_prediction["id"],
+                    actual_message=message.text,
+                    actual_embedding=current_embedding,
+                    prediction_error=prediction_error
+                )
+            except Exception as e:
+                print(f"[Predictive] ❌ DB WRITE ERROR: Failed to verify prediction {last_prediction['id']}: {e}")
 
         # 2. Retrieval 
         context = await self.memory.recall_context(
