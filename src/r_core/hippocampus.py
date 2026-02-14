@@ -635,7 +635,7 @@ class Hippocampus:
                 text("""
                     INSERT INTO prediction_history 
                     (user_id, session_id, bot_message, predicted_reaction, predicted_embedding)
-                    VALUES (:user_id, :session_id, :bot_message, :predicted_reaction, :predicted_embedding::vector)
+                    VALUES (:user_id, :session_id, :bot_message, :predicted_reaction, :predicted_embedding)
                 """),
                 {
                     "user_id": user_id,
@@ -699,7 +699,7 @@ class Hippocampus:
                 text("""
                     UPDATE prediction_history
                     SET actual_message = :actual_message,
-                        actual_embedding = :actual_embedding::vector,
+                        actual_embedding = :actual_embedding,
                         prediction_error = :prediction_error,
                         verified_at = NOW()
                     WHERE id = :prediction_id
