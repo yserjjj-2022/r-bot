@@ -1,5 +1,3 @@
-# src/r_core/infrastructure/llm.py
-
 import json
 import time
 import asyncio
@@ -267,8 +265,10 @@ class LLMService:
             "--- PREDICTIVE PROCESSING ---\\n"
             "You MUST output JSON with two fields:\\n"
             "1. 'reply': Your actual response to the user.\\n"
-            "2. 'predicted_user_reaction': What do you think the user will say/ask NEXT? (Short sentence, e.g. 'User will ask for code example').\\n"
-            "   This is used to measure how well you understand the user (Prediction Error)."
+            "2. 'predicted_user_reaction': PREDICT the user's NEXT specific response to 'reply'.\\n"
+            "   IMPORTANT: Do NOT describe the action (e.g. 'User will thank me').\\n"
+            "   INSTEAD: Write the LITERAL FIRST-PERSON PHRASE you expect them to say (e.g. 'Спасибо, это помогло!' or 'Why is that?').\\n"
+            "   This is used for vector similarity comparison."
         )
 
         try:
