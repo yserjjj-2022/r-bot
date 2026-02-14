@@ -462,13 +462,11 @@ ADD COLUMN empathy_state VARCHAR(16);
 
 ## 🚀 Roadmap
 
-- ✅ **Этап 2.2.1**: Конфигурация (behavioral_config.py) — **ГОТОВО**
-- ⏳ **Этап 2.2.2**: Uncertainty Agent
-- ⏳ **Этап 2.2.3**: Prediction saving/retrieval (memory.py)
-- ⏳ **Этап 2.2.4**: LLM prediction generation (llm.py)
-- ⏳ **Этап 2.2.5**: Pipeline integration (pipeline.py)
-- ⏳ **Этап 2.2.6**: Streamlit UI (Empathy Alignment panel)
-- ⏳ **Этап 2.2.7**: Testing & Calibration
+- ✅ **Task 1**: Configuration setup (`behavioral_config.py`).
+- ⏳ **Task 2 (Current)**: Implement `Uncertainty Agent` class.
+- ⏳ **Task 3**: Add DB tables (`prediction_history`).
+- ⏳ **Task 4**: Add LLM logic for `user_reaction_prediction`.
+- ⏳ **Task 5**: Pipeline integration (PE Calculation).
 
 ---
 
