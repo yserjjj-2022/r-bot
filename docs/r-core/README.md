@@ -201,6 +201,8 @@ streamlit run app_streamlit.py
 2. **Internal Monologue** (раскрывающийся JSON).
 3. **Emotional Memory** (сайдбар).
 4. **🧪 Experiment Mode** (сравнение с "глупой" LLM).
+5. **📈 Encephalogram (Analytics)**.
+6. **🧬 Brain Structure (Introspection)**.
 
 ---
 
