@@ -18,7 +18,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple, Union
 from sqlalchemy import select, text, delete, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.r_core.infrastructure.db import (
@@ -79,7 +79,15 @@ class Hippocampus:
         self.max_cluster_size = max_cluster_size
         self.episode_window_days = episode_window_days
         self.min_theme_frequency = min_theme_frequency
-    
+
+    def _ensure_list(self, embedding: Any) -> List[float]:
+        """Helper to ensure embedding is a python list, not numpy array"""
+        if hasattr(embedding, 'tolist'):
+            return embedding.tolist()
+        if isinstance(embedding, list):
+            return embedding
+        return []
+
     async def consolidate(self, user_id: int) -> Dict[str, Any]:
         """
         🎓 Полный цикл консолидации памяти
@@ -222,6 +230,9 @@ class Hippocampus:
             if fact.id in processed or fact.embedding is None:
                 continue
             
+            # FIX: Ensure python list for json serialization (pgvector compatible)
+            emb_list = self._ensure_list(fact.embedding)
+            
             # Найти соседей через pgvector
             query = text("""
                 SELECT id, 1 - (embedding <=> :target_embedding) AS similarity
@@ -237,7 +248,7 @@ class Hippocampus:
             result = await session.execute(query, {
                 "user_id": user_id,
                 "fact_id": fact.id,
-                "target_embedding": str(fact.embedding), # Ensure string format for pgvector if needed, or pass list if adapter works
+                "target_embedding": str(emb_list), # Converts list to string "[...]" with commas
                 "threshold": self.similarity_threshold,
                 "max_size": self.max_cluster_size
             })
@@ -423,8 +434,8 @@ class Hippocampus:
 Пример:
 {{
     "themes": [
-        {{"subject": "User", "predicate": "INTERESTED_IN", "object": "Python", "confidence": 0.75}},
-        {{"subject": "User", "predicate": "DISLIKES", "object": "холодная погода", "confidence": 0.6}}
+        {{\"subject\": \"User\", \"predicate\": \"INTERESTED_IN\", \"object\": \"Python\", \"confidence\": 0.75}},
+        {{\"subject\": \"User\", \"predicate\": \"DISLIKES\", \"object\": \"холодная погода\", \"confidence\": 0.6}}
     ]
 }}
 
@@ -603,7 +614,9 @@ class Hippocampus:
         Save the bot's prediction about the user's NEXT move.
         Uses raw SQL to avoid needing a new model definition right now.
         """
-        emb_val = str(predicted_embedding) if predicted_embedding else None
+        # FIX: Ensure python list for json serialization
+        emb_list = self._ensure_list(predicted_embedding)
+        emb_val = str(emb_list) if emb_list else None
         
         async with AsyncSessionLocal() as session:
             await session.execute(
@@ -666,7 +679,9 @@ class Hippocampus:
         """
         Update the prediction record with the actual outcome and calculated error.
         """
-        emb_val = str(actual_embedding) if actual_embedding else None
+        # FIX: Ensure python list for json serialization
+        emb_list = self._ensure_list(actual_embedding)
+        emb_val = str(emb_list) if emb_list else None
         
         async with AsyncSessionLocal() as session:
             await session.execute(
