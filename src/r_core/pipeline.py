@@ -2,7 +2,8 @@ import asyncio
 from typing import Dict, List, Optional
 from datetime import datetime
 from sqlalchemy import text
-from scipy.spatial.distance import cosine
+# FIX: Removed scipy import
+# from scipy.spatial.distance import cosine
 
 from .schemas import (
     IncomingMessage, 
@@ -30,7 +31,7 @@ from .agents import (
 from .neuromodulation import NeuroModulationSystem
 from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
-from .utils import is_phatic_message
+from .utils import is_phatic_message, cosine_distance  # ✨ NEW: Imported from utils
 
 class RCoreKernel:
     # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
@@ -180,9 +181,8 @@ class RCoreKernel:
                         predicted_vec = None
 
                 if predicted_vec and current_embedding:
-                    # Cosine distance: 0.0 (Same) to 2.0 (Opposite). Usually 0..1 in embedding space.
-                    # We map 0..1 distance to 0..1 error.
-                    dist = cosine(predicted_vec, current_embedding)
+                    # FIX: Use internal cosine_distance instead of scipy
+                    dist = cosine_distance(predicted_vec, current_embedding)
                     prediction_error = float(dist)
                     
                     # Verify in DB
