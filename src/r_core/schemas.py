@@ -35,6 +35,10 @@ class PersonalitySliders(BaseModel):
     risk_tolerance: float = Field(0.5, description="Авантюризм vs Осторожность")
     pace_setting: float = Field(0.5, description="Быстрый (Intuition) vs Медленный (Logic)")
     neuroticism: float = Field(0.1, description="Степень случайности/эмоциональности")
+    
+    # === Prediction Error → Dopamine (Награда) ===
+    pred_threshold: float = Field(0.65, ge=0.1, le=1.0, description="Порог хорошей ошибки (mu)")
+    pred_sensitivity: float = Field(10.0, ge=1.0, le=20.0, description="Чувствительность к ошибке (k)")
 
 class BotConfig(BaseModel):
     character_id: str
