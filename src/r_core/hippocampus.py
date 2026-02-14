@@ -633,11 +633,13 @@ class Hippocampus:
         
         try:
             async with AsyncSessionLocal() as session:
-                await session.execute(
+                # FIX: Added RETURNING id
+                result = await session.execute(
                     text("""
                         INSERT INTO prediction_history 
                         (user_id, session_id, bot_message, predicted_reaction, predicted_embedding)
                         VALUES (:user_id, :session_id, :bot_message, :predicted_reaction, :predicted_embedding)
+                        RETURNING id
                     """),
                     {
                         "user_id": user_id,
@@ -647,8 +649,9 @@ class Hippocampus:
                         "predicted_embedding": emb_str
                     }
                 )
+                new_id = result.scalar()
                 await session.commit()
-                print("[Hippocampus] DEBUG: DB Commit Successful")
+                print(f"[Hippocampus] DEBUG: DB Commit Successful. Created Prediction ID={new_id}")
         except Exception as e:
              print(f"[Hippocampus] ❌ FATAL DB ERROR in save_prediction: {e}")
              raise e
@@ -661,10 +664,12 @@ class Hippocampus:
         
         try:
             async with AsyncSessionLocal() as session:
+                # FIX: Explicitly ignore verified rows
                 result = await session.execute(
                     text("""
                         SELECT * FROM prediction_history 
                         WHERE session_id = :session_id 
+                          AND (actual_message IS NULL OR actual_message = '')
                         ORDER BY created_at DESC 
                         LIMIT 1
                     """),
@@ -674,7 +679,7 @@ class Hippocampus:
                 # SQLAlchemy returns Row objects, convert to dict
                 row = result.fetchone()
                 if not row:
-                    print("[Hippocampus] DEBUG: No rows found for this session.")
+                    print("[Hippocampus] DEBUG: No rows found for this session (No unverified predictions).")
                     return None
                     
                 # Accessing row columns by index or name depends on driver, 
@@ -689,13 +694,8 @@ class Hippocampus:
                     data = dict(zip(keys, row))
                 
                 print(f"[Hippocampus] DEBUG: Row found. ID={data.get('id')}, ActualMsg={data.get('actual_message')}")
-                
-                # If actual_message is present (not None and not empty string?), it's already verified
-                if data.get("actual_message"):
-                     print("[Hippocampus] DEBUG: Row is already verified (actual_message present). Skipping.")
-                     return None
-                    
                 return data
+                
         except Exception as e:
             print(f"[Hippocampus] ❌ FATAL DB ERROR in get_last_prediction: {e}")
             return None
