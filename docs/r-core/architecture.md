@@ -284,8 +284,8 @@ elif prediction_error > 0.7:
 
 ---
 
-## 🔮 Будущие направления
+## 🔮 Future Directions
 
-- **Иерархический Гейтинг**: возможность подцелей (например, Social побеждает глобально, но Logic обрабатывает подпункт).
-- **Активное Вывод (Active Inference)**: бот задает вопросы для снижения неопределенности.
-- **Полноценное обучение волевых паттернов**: reinforcement/decay, истощение и временные профили ("иссякание").
+- **Hierarchical Gating**: Sub-goals possibility (e.g. Social wins globally, but Logic handles sub-task).
+- **Active Inference**: Bot asking questions to reduce uncertainty (see Phase 2.2).
+- **Full Volition Learning**: Implementing reinforcement/decay and "depletion" (see Phase 2.4).
