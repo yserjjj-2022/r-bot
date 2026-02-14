@@ -19,12 +19,15 @@ class PredictionErrorThresholds:
     - in_sync: PE < этого значения → бот в потоке с пользователем
     - puzzled: PE между in_sync и lost → лёгкая озадаченность
     - lost: PE >= этого значения → бот потерял нить диалога
+    
+    REGULATOR: Чем выше lost, тем более "толстокожий" (устойчивый) бот.
     """
     in_sync: float = field(
         default_factory=lambda: float(os.getenv("PE_THRESHOLD_IN_SYNC", "0.3"))
     )
+    # Default raised from 0.8 to 0.85 for stability (Lower Neuroticism)
     lost: float = field(
-        default_factory=lambda: float(os.getenv("PE_THRESHOLD_LOST", "0.8"))
+        default_factory=lambda: float(os.getenv("PE_THRESHOLD_LOST", "0.85"))
     )
     
     @property
@@ -54,14 +57,14 @@ class MoodAdjustmentCoefficients:
         "dominance": float(os.getenv("MOOD_IN_SYNC_DOMINANCE", "0.03"))
     })
     
-    # Puzzled (0.3 < PE < 0.8): Лёгкая озадаченность
+    # Puzzled (0.3 < PE < 0.85): Лёгкая озадаченность
     puzzled: Dict[str, float] = field(default_factory=lambda: {
         "valence": float(os.getenv("MOOD_PUZZLED_VALENCE", "-0.05")),
         "arousal": float(os.getenv("MOOD_PUZZLED_AROUSAL", "0.1")),
         "dominance": float(os.getenv("MOOD_PUZZLED_DOMINANCE", "-0.05"))
     })
     
-    # Lost (PE >= 0.8): Бот потерял понимание собеседника
+    # Lost (PE >= 0.85): Бот потерял понимание собеседника
     lost: Dict[str, float] = field(default_factory=lambda: {
         "valence": float(os.getenv("MOOD_LOST_VALENCE", "-0.1")),
         "arousal": float(os.getenv("MOOD_LOST_AROUSAL", "0.2")),
@@ -78,13 +81,13 @@ class AgentModifierCoefficients:
     Где float - множитель (1.0 = без изменений, 1.3 = +30%, 0.7 = -30%)
     """
     
-    # Puzzled (0.3 < PE < 0.8): Усилить эмпатию
+    # Puzzled: Усилить эмпатию
     puzzled: Dict[str, float] = field(default_factory=lambda: {
         "social_cortex": float(os.getenv("AGENT_MOD_PUZZLED_SOCIAL", "1.15")),
         "intuition_system1": float(os.getenv("AGENT_MOD_PUZZLED_INTUITION", "0.9"))
     })
     
-    # Lost (PE >= 0.8): Сильно усилить эмпатию, ослабить интуицию
+    # Lost: Сильно усилить эмпатию, ослабить интуицию
     lost: Dict[str, float] = field(default_factory=lambda: {
         "social_cortex": float(os.getenv("AGENT_MOD_LOST_SOCIAL", "1.3")),
         "intuition_system1": float(os.getenv("AGENT_MOD_LOST_INTUITION", "0.6")),
@@ -102,12 +105,14 @@ class UncertaintyAgentConfig:
     
     # Порог активации (должен совпадать с PE_THRESHOLD_LOST)
     activation_threshold: float = field(
-        default_factory=lambda: float(os.getenv("UNCERTAINTY_ACTIVATION_THRESHOLD", "0.8"))
+        default_factory=lambda: float(os.getenv("UNCERTAINTY_ACTIVATION_THRESHOLD", "0.85"))
     )
     
-    # Score при активации (должен быть достаточно высоким для гарантии победы)
+    # Score при активации. 
+    # Lowered from 7.5 to 5.0 to prevent "going haywire".
+    # Now it competes with other agents (avg score ~5-6) instead of dominating.
     active_score: float = field(
-        default_factory=lambda: float(os.getenv("UNCERTAINTY_ACTIVE_SCORE", "7.5"))
+        default_factory=lambda: float(os.getenv("UNCERTAINTY_ACTIVE_SCORE", "5.0"))
     )
     
     # Score в неактивном состоянии
