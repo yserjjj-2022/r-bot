@@ -280,9 +280,13 @@ class RCoreKernel:
         self._update_mood(winner)
         
         # Hormonal Reactive Update
-        implied_pe = prediction_error # ✨ Use REAL PE instead of hardcoded
+        # FIX: Dampen the prediction error impact on hormones
+        # We assume a "noise floor" of 0.25 (typical embedding distance even for similar meanings)
+        # So a raw PE of 0.61 becomes 0.36 (Moderate Surprise), not 0.61 (Panic)
+        implied_pe = max(0.0, prediction_error - 0.25)
+        
         # Or bias it by agent type if PE is low
-        if implied_pe < 0.3:
+        if implied_pe < 0.1: # Was 0.3, tightened due to dampening
             if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
             elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 
@@ -370,8 +374,9 @@ class RCoreKernel:
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
             "council_mode": "FULL" if has_affective else "LIGHT",
-            "prediction_error": prediction_error, # ✨ Stats
-            "next_prediction": predicted_reaction # ✨ Stats
+            "prediction_error": prediction_error, # Raw PE
+            "implied_pe": implied_pe, # ✨ Effective PE
+            "next_prediction": predicted_reaction 
         }
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
