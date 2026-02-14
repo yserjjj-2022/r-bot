@@ -278,15 +278,6 @@ class Hippocampus:
     async def _llm_merge_facts(self, facts: List[SemanticFact]) -> Optional[Dict[str, Any]]:
         """
         LLM сливает несколько фактов в один канонический.
-        
-        Returns:
-            {
-                "subject": "...",
-                "predicate": "...",
-                "object": "...",
-                "confidence": 0.0-1.0,
-                "sentiment": {...} or None
-            }
         """
         # Формируем промпт
         facts_text = "\n".join([
@@ -294,6 +285,7 @@ class Hippocampus:
             for i, f in enumerate(facts)
         ])
         
+        # ✨ Updated Prompt: Added Sentiment Extraction
         prompt = f"""
 Ты - система консолидации семантической памяти.
 Задача: слить несколько похожих фактов в один канонический.
@@ -304,6 +296,7 @@ class Hippocampus:
 Инструкция:
 - Сохрани общий смысл, убери дубликаты.
 - confidence = средневзвешенное (с учётом старых confidence).
+- sentiment: Оцени эмоцию пользователя к объекту (Valence: -1..1, Arousal: 0..1). Если эмоция неясна, верни null.
 - Если факты НЕ являются дубликатами (разный смысл), верни null.
 
 Формат ответа (JSON):
@@ -313,7 +306,8 @@ class Hippocampus:
         "subject": "...",
         "predicate": "...",
         "object": "...",
-        "confidence": 0.85
+        "confidence": 0.85,
+        "sentiment": {{ "valence": 0.8, "arousal": 0.5, "dominance": 0.0 }}
     }}
 }}
 """
@@ -405,8 +399,6 @@ class Hippocampus:
             
             for theme in themes:
                 # ✨ Fix: Check duplicates before adding
-                # Мы проверяем точное совпадение (или ILIKE) для subject/predicate/object
-                # Чтобы не создавать вечный цикл extraction -> consolidation
                 existing = await session.execute(
                     select(SemanticModel).where(
                         and_(
@@ -431,7 +423,8 @@ class Hippocampus:
                     object=theme["object"],
                     confidence=theme.get("confidence", 0.7),
                     embedding=embedding,
-                    source_message_id="hippocampus_episode_extraction"
+                    source_message_id="hippocampus_episode_extraction",
+                    sentiment=theme.get("sentiment") # ✨ Save Sentiment
                 )
                 session.add(new_fact)
                 facts_added += 1
@@ -455,6 +448,7 @@ class Hippocampus:
             for i, ep in enumerate(episodes[:50])  # ограничение для контекста
         ])
         
+        # ✨ Updated Prompt: Added Sentiment Extraction
         prompt = f"""
 Ты - система анализа эпизодической памяти.
 Задача: найти повторяющиеся темы/интересы пользователя.
@@ -466,12 +460,18 @@ class Hippocampus:
 - Найди темы, которые встречаются >= {self.min_theme_frequency} раз.
 - Создай факт в формате Subject-Predicate-Object.
 - confidence = frequency / total_episodes.
+- sentiment: Оцени эмоцию пользователя к этой теме (Valence: -1..1, Arousal: 0..1).
 
 Пример:
 {{
     "themes": [
-        {{\"subject\": \"User\", \"predicate\": \"INTERESTED_IN\", \"object\": \"Python\", \"confidence\": 0.75}},
-        {{\"subject\": \"User\", \"predicate\": \"DISLIKES\", \"object\": \"холодная погода\", \"confidence\": 0.6}}
+        {{
+            "subject": "User", 
+            "predicate": "INTERESTED_IN", 
+            "object": "Python", 
+            "confidence": 0.75,
+            "sentiment": {{ "valence": 0.7, "arousal": 0.4, "dominance": 0.2 }}
+        }}
     ]
 }}
 
