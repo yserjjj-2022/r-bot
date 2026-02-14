@@ -3,6 +3,7 @@ import math
 from typing import Dict, Tuple
 
 from src.r_core.schemas import HormonalState, AgentType
+from src.r_core.utils import sigmoid  # ✨ NEW: Import sigmoid
 
 class NeuroModulationSystem:
     """
@@ -10,6 +11,11 @@ class NeuroModulationSystem:
     Model: Lovheim Cube of Emotion + Non-Linear Metabolic Decay + Cross-Effects.
     """
     
+    # === SENSORY THRESHOLDS ===
+    # Surprise (Prediction Error)
+    SURPRISE_MIDPOINT = 0.65  # Where sigmoid crosses 0.5 (Panic Threshold)
+    SURPRISE_STEEPNESS = 12.0 # Sharpness of transition
+
     def __init__(self, state: HormonalState = None):
         self.state = state or HormonalState()
         
@@ -69,14 +75,24 @@ class NeuroModulationSystem:
             return baseline + diff * (0.5 ** (t / half_life))
         return current  # Don't decay up for NE/DA/CORT
 
-    def update_from_stimuli(self, prediction_error: float, winner_agent: AgentType):
+    def compute_surprise_impact(self, raw_pe: float) -> float:
+        """
+        SENSORY LAYER: Converts Raw Prediction Error (0-2.0) into effective Biological Impact (0-1.0).
+        Uses S-curve to filter out noise (synonyms) and amplify true context loss.
+        """
+        return sigmoid(raw_pe, k=self.SURPRISE_STEEPNESS, mu=self.SURPRISE_MIDPOINT)
+
+    def update_from_stimuli(self, implied_pe: float, winner_agent: AgentType):
         """
         Reactive update based on current turn processing.
+        implied_pe: Already processed biological impact (0.0 - 1.0) calculated via compute_surprise_impact.
         """
-        # 1. Norepinephrine (Surprise)
-        # PE > 0.3 starts spiking NE
-        if prediction_error > 0.3:
-            spike = (prediction_error - 0.3) * 1.5  # Strong reaction
+        # 1. Norepinephrine (Surprise / Vigilance)
+        # Driven by biological surprise impact
+        if implied_pe > 0.1:
+            # Impact 0.5 -> +0.25 NE
+            # Impact 0.9 -> +0.45 NE
+            spike = implied_pe * 0.5 
             self.state.ne = min(1.0, self.state.ne + spike)
         
         # 2. Dopamine (Reward)
@@ -89,15 +105,18 @@ class NeuroModulationSystem:
         # Social interactions CONSUME serotonin (emotional labor)
         if winner_agent == AgentType.SOCIAL:
              self.state.ht = max(0.0, self.state.ht - 0.05)
-        # In Sync restores it
-        if prediction_error < 0.2:
+        
+        # In Sync (Low Surprise) restores it
+        if implied_pe < 0.1:
              self.state.ht = min(1.0, self.state.ht + 0.05)
              
         # 4. Cortisol (Stress)
         if winner_agent == AgentType.AMYGDALA:
             self.state.cort = min(1.0, self.state.cort + 0.25)
-        if prediction_error > 0.8:  # Lost
-            self.state.cort = min(1.0, self.state.cort + 0.1)
+        
+        # High biological surprise causes stress
+        if implied_pe > 0.6:  
+            self.state.cort = min(1.0, self.state.cort + 0.15)
 
     def get_effective_cortisol(self) -> float:
         """
