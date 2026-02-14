@@ -5,6 +5,7 @@ from sqlalchemy import text
 # FIX: Removed scipy import
 # from scipy.spatial.distance import cosine
 
+
 from .schemas import (
     IncomingMessage, 
     CoreResponse, 
@@ -33,6 +34,7 @@ from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
 from .utils import is_phatic_message, cosine_distance  # ✨ NEW: Imported from utils
 
+
 class RCoreKernel:
     # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
     COUNCIL_CONTEXT_DEPTH = 1  
@@ -47,6 +49,7 @@ class RCoreKernel:
     VOLITION_PERSISTENCE_BONUS = 0.3  # Бонус для текущего фокуса
     VOLITION_DECAY_PER_DAY = 0.1      # Штраф за давность (если decay_rate не задан)
     VOLITION_FOCUS_DURATION = 3       # Сколько ходов длится фокус по умолчанию
+
 
     # === HORMONAL MODULATION RULES (Introspection Exposed) ===
     HORMONAL_MODULATION_RULES = {
@@ -91,6 +94,7 @@ class RCoreKernel:
             "user_id": None
         }
 
+
     def get_architecture_snapshot(self) -> Dict:
         """
         Возвращает текущую структуру управления для визуализации.
@@ -121,6 +125,7 @@ class RCoreKernel:
             }
         }
 
+
     async def process_message(self, message: IncomingMessage, mode: str = "CORTICAL") -> CoreResponse:
         """
         Main pipeline entry point.
@@ -146,6 +151,7 @@ class RCoreKernel:
                 processing_mode=ProcessingMode.FAST_PATH,
                 internal_stats={"latency_ms": int(latency), "mode": "ZOMBIE"}
             )
+
 
         # --- CORTICAL MODE (Full Architecture) ---
         
@@ -188,6 +194,7 @@ class RCoreKernel:
             else:
                  print("[Predictive] Embeddings missing or invalid, default PE=0.0.")
 
+
             # 3. ALWAYS Verify in DB (Close the loop)
             # This ensures we don't compare against this stale prediction next turn
             try:
@@ -200,6 +207,7 @@ class RCoreKernel:
                 )
             except Exception as e:
                 print(f"[Predictive] ❌ DB WRITE ERROR: Failed to verify prediction {last_prediction['id']}: {e}")
+
 
         # 2. Retrieval 
         context = await self.memory.recall_context(
@@ -221,6 +229,7 @@ class RCoreKernel:
         else:
             preferred_mode = "formal"
 
+
         # Save memory
         await self.memory.memorize_event(
             message, 
@@ -228,8 +237,10 @@ class RCoreKernel:
             precomputed_embedding=current_embedding
         )
 
+
         # === HIPPOCAMPUS TRIGGER ===
         asyncio.create_task(self._check_and_trigger_hippocampus(message.user_id))
+
 
         # 3. Parliament Debate
         council_context_str = self._format_context_for_llm(
@@ -264,8 +275,10 @@ class RCoreKernel:
             signals = await self._process_legacy_council(council_report, message, context)
             print(f"[Pipeline] Using LEGACY mode")
 
+
         # ✨ Apply Hormonal Modulation BEFORE arbitration
         signals = self._apply_hormonal_modulation(signals)
+
 
         # 4. Arbitration & Mood Update
         signals.sort(key=lambda s: s.score, reverse=True)
@@ -333,7 +346,14 @@ class RCoreKernel:
             affective_context=affective_context_str
         )
         
-        # ✨ Save NEW Prediction (Step 2)
+        # === 6.1 SAVE BOT RESPONSE FIRST (CRITICAL FOR ID MATCHING) ===
+        await self.memory.memorize_bot_response(
+            message.user_id, 
+            message.session_id, 
+            response_text
+        )
+        
+        # === 6.2 THEN SAVE PREDICTION (Now chat_history has the bot message) ===
         if predicted_reaction:
             try:
                 # Embed the prediction for future comparison
@@ -349,13 +369,6 @@ class RCoreKernel:
                 print(f"[Predictive] Saved hypothesis: '{predicted_reaction}'")
             except Exception as e:
                 print(f"[Predictive] Failed to save prediction: {e}")
-
-        
-        await self.memory.memorize_bot_response(
-            message.user_id, 
-            message.session_id, 
-            response_text
-        )
         
         latency = (datetime.now() - start_time).total_seconds() * 1000
         
@@ -379,6 +392,7 @@ class RCoreKernel:
             "next_prediction": predicted_reaction # ✨ Stats
         }
 
+
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
         
         return CoreResponse(
@@ -389,6 +403,7 @@ class RCoreKernel:
             processing_mode=ProcessingMode.SLOW_PATH,
             internal_stats=internal_stats
         )
+
 
     # === HELPER METHODS ===
     
@@ -444,6 +459,7 @@ class RCoreKernel:
         
         return winner
 
+
     async def _process_affective_extraction(self, message: IncomingMessage, extracts: List[Dict]):
         """Helper to process extracted emotions"""
         for item in extracts:
@@ -472,6 +488,7 @@ class RCoreKernel:
             await self.memory.store.save_semantic(message.user_id, triple)
             print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object}")
 
+
     def _format_affective_context(self, warnings: List[Dict]) -> str:
         if not warnings: return ""
         s = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\\n"
@@ -485,6 +502,7 @@ class RCoreKernel:
             else:
                 s += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}).\\n"
         return s
+
 
     async def _check_and_trigger_hippocampus(self, user_id: int):
         try:
@@ -509,6 +527,7 @@ class RCoreKernel:
         except Exception as e:
             print(f"[Pipeline] Hippocampus trigger failed: {e}")
 
+
     def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         archetype = self.neuromodulation.get_archetype()
         
@@ -525,6 +544,7 @@ class RCoreKernel:
             mod = modifiers.get(signal.agent_name, default_mod)
             signal.score = max(0.0, min(10.0, signal.score * mod))
         return signals
+
 
     async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]: # FIX: Made async
         signals = []
@@ -544,6 +564,7 @@ class RCoreKernel:
              # Manually add to signals if it decided to run (score > 0)
              signals.append(u_signal)
 
+
         for key, (agent, agent_type) in agent_map.items():
             report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal", "confidence": 0.5})
             base_score = report_data.get("score", 0.0)
@@ -554,6 +575,7 @@ class RCoreKernel:
             signals.append(signal)
             
         return signals
+
 
     async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
         intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
@@ -576,6 +598,7 @@ class RCoreKernel:
              
         return signals
 
+
     def _update_mood(self, winner_signal):
         INERTIA = 0.7
         SENSITIVITY = 0.3
@@ -594,6 +617,7 @@ class RCoreKernel:
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
 
+
     def _format_context_for_llm(self, context: Dict, limit_history: Optional[int] = None, exclude_episodic: bool = False, exclude_semantic: bool = False) -> str:
         lines = []
         profile = context.get("user_profile")
@@ -603,6 +627,7 @@ class RCoreKernel:
             if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
             if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
             lines.append("")
+
 
         if context.get("chat_history"):
             chat_history = context["chat_history"]
@@ -628,6 +653,7 @@ class RCoreKernel:
             lines.append("")
                 
         return "\\n".join(lines) if lines else "No prior context."
+
 
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
         await asyncio.sleep(0.05)
