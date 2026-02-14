@@ -92,12 +92,15 @@ class IntuitionAgent(BaseAgent):
                 # Слишком короткий эпизод — снижаем уверенность
                 score = 3.0
                 rationale = "Weak pattern match"
+        
+        # Calculate confidence separately to avoid 'UnboundLocalError' if episodes is empty
+        confidence = 0.85 if score >= 5 else 0.3
 
         signal = AgentSignal(
             agent_name=self.agent_type,
             score=score,
             rationale_short=rationale,
-            confidence=0.85 if score >= 5 else 0.3,  # Более строгий порог для высокой уверенности
+            confidence=confidence,  
             latency_ms=10,
             style_instruction=self.style_instruction # NEW
         )
@@ -119,7 +122,7 @@ class AmygdalaAgent(BaseAgent):
     """
     agent_type = AgentType.AMYGDALA
     
-    @property\
+    @property
     def style_instruction(self) -> str:
         return "...but maintain firm boundaries and safety."
     
@@ -228,22 +231,28 @@ class UncertaintyAgent(BaseAgent):
         config = behavioral_config.uncertainty_agent
         threshold = config.activation_threshold
         
+        # FIX: Ensure default if behavioral_config is missing keys
+        if not threshold: threshold = 0.85
+        
+        score = 0.0
+        rationale = "In sync (Low Error)"
+        confidence = 0.1 # Default low confidence
+        
         if prediction_error >= threshold:
             # Активация!
-            score = config.active_score
-            confidence = config.active_confidence
+            score = config.active_score if config.active_score else 8.5
+            confidence = config.active_confidence if config.active_confidence else 0.9
             rationale = f"High Prediction Error ({prediction_error:.2f}) -> LOST TRACK"
             
             # Эффект накопления: если уже были потеряны, усиливаем (симуляция)
-            # В будущем здесь будет чтение 'uncertainty_level' из сессии
             if prediction_error > 0.9:
                 score += 1.0 # Critical failure
                 rationale += " [CRITICAL]"
                 
         else:
             # Спящий режим
-            score = config.inactive_score
-            confidence = config.inactive_confidence
+            score = config.inactive_score if config.inactive_score else 0.0
+            confidence = config.inactive_confidence if config.inactive_confidence else 0.1
             rationale = "In sync (Low Error)"
 
         signal = AgentSignal(
