@@ -80,6 +80,9 @@ class PostgresMemoryStore(AbstractMemoryStore):
                 # ✨ Update sentiment if provided
                 if triple.sentiment:
                     existing.sentiment = triple.sentiment
+                # ✨ Update embedding if provided (and was null)
+                if triple.embedding and not existing.embedding:
+                     existing.embedding = triple.embedding
             else:
                 new_triple = SemanticModel(
                     user_id=user_id,
@@ -88,7 +91,8 @@ class PostgresMemoryStore(AbstractMemoryStore):
                     object=triple.object,
                     confidence=triple.confidence,
                     source_message_id=triple.source_message_id,
-                    sentiment=triple.sentiment  # ✨ NEW: Save sentiment
+                    sentiment=triple.sentiment,  # ✨ NEW: Save sentiment
+                    embedding=triple.embedding   # ✨ NEW: Save embedding
                 )
                 session.add(new_triple)
             await session.commit()
@@ -157,7 +161,8 @@ class PostgresMemoryStore(AbstractMemoryStore):
                     object=r.object,
                     confidence=r.confidence,
                     source_message_id=r.source_message_id,
-                    sentiment=r.sentiment  # ✨ NEW: Include sentiment
+                    sentiment=r.sentiment,  # ✨ NEW: Include sentiment
+                    # Embedding is usually heavy to return for simple search, skipping for now
                 ) for r in rows
             ]
 
@@ -329,6 +334,20 @@ class MemorySystem:
         user_id = message.user_id
         for triple_data in extraction_result.get("triples", []):
             triple = SemanticTriple(**triple_data, source_message_id=message.message_id)
+            # ✨ NEW: If triple came without embedding (from fast path), generate it now?
+            # Actually, `memorize_event` is mostly used by standard path. 
+            # Fast path calls `save_semantic` directly via pipeline.
+            # But let's handle it here just in case.
+            if not triple.embedding and precomputed_embedding:
+                 # Only if the triple text matches the message exactly, which is rare for semantic triples.
+                 # Usually semantic triples are abstract.
+                 # So we probably should generate specific embedding for the triple text.
+                 try:
+                     fact_text = f"{triple.subject} {triple.predicate} {triple.object}"
+                     triple.embedding = await self.llm_service.get_embedding(fact_text)
+                 except Exception:
+                     pass
+            
             await self.store.save_semantic(user_id, triple)
 
         for anchor_data in extraction_result.get("anchors", []):
