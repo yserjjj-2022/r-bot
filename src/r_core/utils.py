@@ -1,61 +1,54 @@
-from typing import List
 import math
-
-PHATIC_PHRASES = {
-    "привет", "здравствуй", "добрый день", "доброе утро", "добрый вечер", "хай", "ку",
-    "пока", "до свидания", "удачи", "спокойной ночи",
-    "спасибо", "спс", "благодарю", "сяп",
-    "пожалуйста", "пжл",
-    "ок", "хорошо", "ладно", "ага", "угу", "да", "нет",
-    "ясно", "понятно", "круто", "класс",
-    "👍", "👋", "🙂", "👌", "🙏", "❤️"
-}
-
-def is_phatic_message(text: str) -> bool:
-    """
-    Check if the message is purely phatic (social lubricant) or too short to carry semantic weight.
-    """
-    if not text:
-        return True
-        
-    cleaned = text.strip().lower()
-    
-    # 1. Check length (too short to be meaningful for embedding comparison)
-    if len(cleaned) < 5 and cleaned not in PHATIC_PHRASES:
-        return True
-        
-    # 2. Check exact matches in phatic set
-    if cleaned in PHATIC_PHRASES:
-        return True
-        
-    # 3. Check simple emoji-only messages
-    if all(char in PHATIC_PHRASES for char in cleaned.split()):
-         return True
-         
-    return False
+from typing import List, Union
 
 def cosine_distance(v1: List[float], v2: List[float]) -> float:
     """
-    Calculate Cosine Distance between two vectors (1 - Cosine Similarity).
-    
-    Returns:
-        0.0 = Identical
-        1.0 = Orthogonal (Unrelated)
-        2.0 = Opposite
+    Computes cosine distance between two vectors.
+    Returns: float between 0.0 (identical) and 2.0 (opposite).
     """
-    if not v1 or not v2 or len(v1) != len(v2):
-        return 1.0 # Maximum error if vectors are invalid
-        
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    norm_v1 = math.sqrt(sum(a * a for a in v1))
-    norm_v2 = math.sqrt(sum(b * b for b in v2))
+    if not v1 or not v2: return 1.0
     
-    if norm_v1 == 0 or norm_v2 == 0:
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    norm_a = sum(a * a for a in v1) ** 0.5
+    norm_b = sum(b * b for b in v2) ** 0.5
+    
+    if norm_a == 0 or norm_b == 0:
         return 1.0
         
-    similarity = dot_product / (norm_v1 * norm_v2)
-    
-    # Clamp to [-1, 1] to avoid floating point errors
+    similarity = dot_product / (norm_a * norm_b)
+    # Clip to avoid float errors slightly outside [-1, 1]
     similarity = max(-1.0, min(1.0, similarity))
     
     return 1.0 - similarity
+
+def sigmoid(x: float, k: float = 10.0, mu: float = 0.5) -> float:
+    """
+    S-curve function for biological sensitivity modeling.
+    x: Input value
+    k: Steepness (growth rate). Higher = sharper transition.
+    mu: Midpoint (x-value where y=0.5). The threshold.
+    """
+    try:
+        return 1 / (1 + math.exp(-k * (x - mu)))
+    except OverflowError:
+        return 0.0 if x < mu else 1.0
+
+def is_phatic_message(text: str) -> bool:
+    """
+    Detects short, non-informational messages that shouldn't trigger heavy logic.
+    """
+    phatic_set = {
+        "да", "нет", "ага", "угу", "ок", "хорошо", "спасибо", "привет", "пока",
+        "yes", "no", "ok", "okay", "thanks", "hello", "hi", "bye", "cool"
+    }
+    
+    clean_text = "".join(ch for ch in text.lower() if ch.isalnum() or ch.isspace()).strip()
+    
+    if clean_text in phatic_set:
+        return True
+    
+    # Also catch very short generic phrases like "ну да", "так и есть"
+    if len(clean_text.split()) <= 2 and len(clean_text) < 10:
+        return True
+        
+    return False
