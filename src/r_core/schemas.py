@@ -113,7 +113,9 @@ class SemanticTriple(BaseModel):
     confidence: float = 1.0
     source_message_id: Optional[str] = None
     # Affective extension placeholder
-    sentiment: Optional[Dict[str, float]] = None 
+    sentiment: Optional[Dict[str, float]] = None
+    # ✨ NEW: Vector embedding for semantic search / clustering
+    embedding: Optional[List[float]] = None
 
 class EpisodicAnchor(BaseModel):
     """
