@@ -13,6 +13,7 @@ from src.r_core.schemas import (
     EpisodicAnchor
 )
 from src.r_core.infrastructure.llm import LLMService
+from src.r_core.behavioral_config import behavioral_config
 
 class AbstractLLMClient(ABC):
     @abstractmethod
@@ -118,7 +119,7 @@ class AmygdalaAgent(BaseAgent):
     """
     agent_type = AgentType.AMYGDALA
     
-    @property
+    @property\
     def style_instruction(self) -> str:
         return "...but maintain firm boundaries and safety."
     
@@ -202,3 +203,59 @@ class StriatumAgent(BaseAgent):
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
         return 0.5 + (sliders.risk_tolerance * 0.8)
+
+class UncertaintyAgent(BaseAgent):
+    """
+    🚨 Uncertainty Agent (Lost State Handler)
+    Activates when the bot loses track of the user's intent or when Prediction Error is high.
+    Requires the bot to ask clarifying questions instead of making assumptions.
+    """
+    agent_type = AgentType.UNCERTAINTY
+    
+    @property
+    def style_instruction(self) -> str:
+        return "...but you are lost, so ask clarifying questions instead of making assumptions."
+
+    async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
+        """
+        Activates based on 'prediction_error' in context.
+        Only fires if PE >= threshold defined in behavioral_config.
+        """
+        # Получаем PE из контекста (рассчитывается в pipeline)
+        prediction_error = context.get("prediction_error", 0.0)
+        
+        # Получаем конфиг
+        config = behavioral_config.uncertainty_agent
+        threshold = config.activation_threshold
+        
+        if prediction_error >= threshold:
+            # Активация!
+            score = config.active_score
+            confidence = config.active_confidence
+            rationale = f"High Prediction Error ({prediction_error:.2f}) -> LOST TRACK"
+            
+            # Эффект накопления: если уже были потеряны, усиливаем (симуляция)
+            # В будущем здесь будет чтение 'uncertainty_level' из сессии
+            if prediction_error > 0.9:
+                score += 1.0 # Critical failure
+                rationale += " [CRITICAL]"
+                
+        else:
+            # Спящий режим
+            score = config.inactive_score
+            confidence = config.inactive_confidence
+            rationale = "In sync (Low Error)"
+
+        signal = AgentSignal(
+            agent_name=self.agent_type,
+            score=score,
+            rationale_short=rationale,
+            confidence=confidence,
+            latency_ms=1,  # Very fast check
+            style_instruction=self.style_instruction
+        )
+        # У Uncertainty нет слайдеров-модификаторов, она зависит от ошибки прогноза
+        return signal
+
+    def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
+        return 1.0
