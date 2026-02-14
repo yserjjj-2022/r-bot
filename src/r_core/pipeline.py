@@ -476,13 +476,22 @@ class RCoreKernel:
                 "dominance": -0.2 if predicate == "FEARS" else 0.0
             }
             
+            # ✨ NEW: Compute embedding
+            fact_text = f"{item.get('subject', 'User')} {predicate} {item.get('object', '')}"
+            try:
+                embedding = await self.llm.get_embedding(fact_text)
+            except Exception as e:
+                print(f"[Pipeline] Embedding generation failed for affective extraction: {e}")
+                embedding = None
+
             triple = SemanticTriple(
                 subject=item.get("subject", "User"),
                 predicate=predicate,
                 object=item.get("object", ""),
                 confidence=intensity,
                 source_message_id=message.message_id,
-                sentiment=sentiment_vad
+                sentiment=sentiment_vad,
+                embedding=embedding # ✨ Added embedding
             )
             
             await self.memory.store.save_semantic(message.user_id, triple)
