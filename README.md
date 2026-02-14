@@ -14,16 +14,20 @@ The primary decision-making body. Five specialized agents debate how to respond 
 - 🟢 **Striatum**: Responsible for reward seeking, fun, and curiosity.
 - 🟡 **Social Center**: Responsible for empathy, social norms, and politeness.
 - 🟣 **Intuition (System 1)**: Fast, heuristic-based judgments.
+- ⚪ **Uncertainty Agent**: Handles confusion and prediction errors (new).
 
 ### 2. Hormonal Physics (Modulation)
 A biochemical layer that modulates the agents' influence.
-- **DA (Dopamine)**: Boosts Striatum (reward seeking).
-- **NE (Norepinephrine)**: Controls arousal/alertness.
+- **DA (Dopamine)**: Boosts Striatum (reward seeking). Regulated by **Predictive Processing** accuracy.
+- **NE (Norepinephrine)**: Controls arousal/alertness. Spikes on high Prediction Error (surprise).
 - **CORT (Cortisol)**: Stress hormone. High CORT suppresses Prefrontal (logic) and boosts Amygdala (fight/flight).
 - **5-HT (Serotonin)**: Mood stabilizer.
 
-### 3. Hippocampus & Volition (Long-term Strategy)
+### 3. Hippocampus & Predictive Processing
 - **Lazy Consolidation**: Background process that sleeps during dialogue and wakes up (every 20 turns) to consolidate raw episodes into semantic facts.
+- **Predictive Coding**: The bot constantly generates hypotheses about the user's next move. 
+    - **Low Error** (User does what expected) → **Dopamine Release** (Reward).
+    - **High Error** (User surprises bot) → **Norepinephrine/Cortisol Spike** (Stress/Alertness).
 - **Volitional Gating**: A mechanism that allows the bot to "force" a focus (e.g., "I want to learn about X") even if the immediate conversation drifts. It implements "Willpower" via persistence and decay.
 
 ### 4. Arbitration (The Final Verdict)
@@ -70,11 +74,11 @@ graph TD
 
     Amygdala & Prefrontal & Striatum & Social & Intuition --> AgentScores
 
-    %% 5. VOLITION
-    subgraph VOLITION ["Volitional System - Organ 3"]
-        VolitionalPatterns -->|Selects Dominant| VolitionalGating["🛡️ Volitional Gating"]
-        VolitionalGating -->|Injection| PromptContext["Final Prompt Context"]
-        Chemistry -.->|Panic Blocks| VolitionalGating
+    %% 5. PREDICTION
+    subgraph PREDICTION ["Predictive Processing"]
+        Hippocampus -->|Generates| Hypothesis["Next User Action"]
+        User -->|Compares vs| Hypothesis
+        Hypothesis -->|Error| Chemistry
     end
 
     %% 6. ARBITRATION
@@ -95,5 +99,5 @@ graph TD
 2. **Environment**: Python 3.11+.
 3. **Run**:
    ```bash
-   streamlit run src/main.py
+   streamlit run app_streamlit.py
    ```
