@@ -425,7 +425,7 @@ class Hippocampus:
     
     async def _llm_extract_themes(self, episodes: List[EpisodicModel]) -> List[Dict[str, Any]]:
         """
-        LLM анализирует эпизоды и извлекает повторяющиеся темы/интересы.
+        LLM анализирует эпизоды и извлекает повторяющиеся темы/интересы пользователя.
         """
         episodes_text = "\n".join([
             f"{i+1}. {ep.raw_text[:200]}"
@@ -625,63 +625,80 @@ class Hippocampus:
                             predicted_embedding: Optional[List[float]] = None):
         """
         Save the bot's prediction about the user's NEXT move.
-        Uses raw SQL to avoid needing a new model definition right now.
         """
         # FIX: Ensure python list for json serialization
         emb_str = self._serialize_vector(predicted_embedding)
         
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                text("""
-                    INSERT INTO prediction_history 
-                    (user_id, session_id, bot_message, predicted_reaction, predicted_embedding)
-                    VALUES (:user_id, :session_id, :bot_message, :predicted_reaction, :predicted_embedding)
-                """),
-                {
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "bot_message": bot_message,
-                    "predicted_reaction": predicted_reaction,
-                    "predicted_embedding": emb_str
-                }
-            )
-            await session.commit()
+        print(f"[Hippocampus] DEBUG: Saving Prediction. Session={session_id}, Prediction='{predicted_reaction}'")
+        
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("""
+                        INSERT INTO prediction_history 
+                        (user_id, session_id, bot_message, predicted_reaction, predicted_embedding)
+                        VALUES (:user_id, :session_id, :bot_message, :predicted_reaction, :predicted_embedding)
+                    """),
+                    {
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "bot_message": bot_message,
+                        "predicted_reaction": predicted_reaction,
+                        "predicted_embedding": emb_str
+                    }
+                )
+                await session.commit()
+                print("[Hippocampus] DEBUG: DB Commit Successful")
+        except Exception as e:
+             print(f"[Hippocampus] ❌ FATAL DB ERROR in save_prediction: {e}")
+             raise e
 
     async def get_last_prediction(self, session_id: str) -> Optional[Dict]:
         """
         Get the most recent UNVERIFIED prediction for this session.
         """
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                text("""
-                    SELECT * FROM prediction_history 
-                    WHERE session_id = :session_id 
-                    ORDER BY created_at DESC 
-                    LIMIT 1
-                """),
-                {"session_id": session_id}
-            )
-            
-            # SQLAlchemy returns Row objects, convert to dict
-            row = result.fetchone()
-            if not row:
-                return None
+        print(f"[Hippocampus] DEBUG: Fetching last prediction for Session={session_id}")
+        
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("""
+                        SELECT * FROM prediction_history 
+                        WHERE session_id = :session_id 
+                        ORDER BY created_at DESC 
+                        LIMIT 1
+                    """),
+                    {"session_id": session_id}
+                )
                 
-            # Accessing row columns by index or name depends on driver, 
-            # assuming name access or mapping.
-            # Convert row to dict safely
-            try:
-                data = row._mapping
-            except AttributeError:
-                # Fallback for older alchemy
-                keys = result.keys()
-                data = dict(zip(keys, row))
-            
-            # If actual_message is present, it's already verified
-            if data["actual_message"] is not None:
-                return None
+                # SQLAlchemy returns Row objects, convert to dict
+                row = result.fetchone()
+                if not row:
+                    print("[Hippocampus] DEBUG: No rows found for this session.")
+                    return None
+                    
+                # Accessing row columns by index or name depends on driver, 
+                # assuming name access or mapping.
+                # Convert row to dict safely
+                try:
+                    data = row._mapping
+                    data = dict(data)
+                except AttributeError:
+                    # Fallback for older alchemy
+                    keys = result.keys()
+                    data = dict(zip(keys, row))
                 
-            return dict(data)
+                print(f"[Hippocampus] DEBUG: Row found. ID={data.get('id')}, ActualMsg={data.get('actual_message')}")
+                
+                # If actual_message is present (not None and not empty string?), it's already verified
+                if data.get("actual_message"):
+                     print("[Hippocampus] DEBUG: Row is already verified (actual_message present). Skipping.")
+                     return None
+                    
+                return data
+        except Exception as e:
+            print(f"[Hippocampus] ❌ FATAL DB ERROR in get_last_prediction: {e}")
+            return None
 
     async def verify_prediction(self, 
                               prediction_id: int, 
@@ -694,21 +711,27 @@ class Hippocampus:
         # FIX: Ensure python list for json serialization
         emb_str = self._serialize_vector(actual_embedding)
         
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                text("""
-                    UPDATE prediction_history
-                    SET actual_message = :actual_message,
-                        actual_embedding = :actual_embedding,
-                        prediction_error = :prediction_error,
-                        verified_at = NOW()
-                    WHERE id = :prediction_id
-                """),
-                {
-                    "actual_message": actual_message,
-                    "actual_embedding": emb_str,
-                    "prediction_error": prediction_error,
-                    "prediction_id": prediction_id
-                }
-            )
-            await session.commit()
+        print(f"[Hippocampus] DEBUG: Verifying Prediction {prediction_id}. Error={prediction_error}")
+        
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(
+                    text("""
+                        UPDATE prediction_history
+                        SET actual_message = :actual_message,
+                            actual_embedding = :actual_embedding,
+                            prediction_error = :prediction_error,
+                            verified_at = NOW()
+                        WHERE id = :prediction_id
+                    """),
+                    {
+                        "actual_message": actual_message,
+                        "actual_embedding": emb_str,
+                        "prediction_error": prediction_error,
+                        "prediction_id": prediction_id
+                    }
+                )
+                await session.commit()
+                print(f"[Hippocampus] DEBUG: Prediction {prediction_id} Verified & Committed.")
+        except Exception as e:
+             print(f"[Hippocampus] ❌ FATAL DB ERROR in verify_prediction: {e}")
