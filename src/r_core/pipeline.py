@@ -253,7 +253,7 @@ class RCoreKernel:
         
         # ✨ Unified Council + Uncertainty Agent
         if self.config.use_unified_council:
-            signals = self._process_unified_council(council_report, message, context)
+            signals = await self._process_unified_council(council_report, message, context) # FIX: Added await
             print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
         else:
             signals = await self._process_legacy_council(council_report, message, context)
@@ -521,7 +521,7 @@ class RCoreKernel:
             signal.score = max(0.0, min(10.0, signal.score * mod))
         return signals
 
-    def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
+    async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]: # FIX: Made async
         signals = []
         agent_map = {
             "intuition": (self.agents[0], AgentType.INTUITION),
@@ -534,7 +534,7 @@ class RCoreKernel:
         # ✨ NEW: Process Uncertainty Agent
         # It's NOT in the council report (yet), it runs its own logic based on context data (PE)
         uncertainty_agent = self.agents[5] # Index 5
-        u_signal = uncertainty_agent.process(message, context, self.config.sliders)
+        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) # FIX: Added await
         if u_signal:
              # Manually add to signals if it decided to run (score > 0)
              signals.append(u_signal)
@@ -565,7 +565,7 @@ class RCoreKernel:
             
         # ✨ Add Uncertainty Agent for legacy mode too
         uncertainty_agent = self.agents[5]
-        u_signal = uncertainty_agent.process(message, context, self.config.sliders)
+        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) # FIX: Added await
         if u_signal:
              signals.append(u_signal)
              
