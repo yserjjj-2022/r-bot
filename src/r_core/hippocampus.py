@@ -87,6 +87,17 @@ class Hippocampus:
         if isinstance(embedding, list):
             return embedding
         return []
+    
+    def _serialize_vector(self, embedding: Any) -> Optional[str]:
+        """
+        Robustly serialize vector to pgvector string format '[1.0,2.0,3.0]'.
+        Returns None if embedding is missing or empty.
+        """
+        vec_list = self._ensure_list(embedding)
+        if not vec_list:
+            return None
+        # pgvector expects '[1,2,3]' format. json.dumps produces exactly this for lists.
+        return json.dumps(vec_list)
 
     async def consolidate(self, user_id: int) -> Dict[str, Any]:
         """
@@ -230,8 +241,10 @@ class Hippocampus:
             if fact.id in processed or fact.embedding is None:
                 continue
             
-            # FIX: Ensure python list for json serialization (pgvector compatible)
-            emb_list = self._ensure_list(fact.embedding)
+            # Use new robust serializer
+            emb_str = self._serialize_vector(fact.embedding)
+            if not emb_str:
+                continue
             
             # Найти соседей через pgvector
             query = text("""
@@ -248,7 +261,7 @@ class Hippocampus:
             result = await session.execute(query, {
                 "user_id": user_id,
                 "fact_id": fact.id,
-                "target_embedding": str(emb_list), # Converts list to string "[...]" with commas
+                "target_embedding": emb_str,
                 "threshold": self.similarity_threshold,
                 "max_size": self.max_cluster_size
             })
@@ -615,8 +628,7 @@ class Hippocampus:
         Uses raw SQL to avoid needing a new model definition right now.
         """
         # FIX: Ensure python list for json serialization
-        emb_list = self._ensure_list(predicted_embedding)
-        emb_val = str(emb_list) if emb_list else None
+        emb_str = self._serialize_vector(predicted_embedding)
         
         async with AsyncSessionLocal() as session:
             await session.execute(
@@ -630,7 +642,7 @@ class Hippocampus:
                     "session_id": session_id,
                     "bot_message": bot_message,
                     "predicted_reaction": predicted_reaction,
-                    "predicted_embedding": emb_val
+                    "predicted_embedding": emb_str
                 }
             )
             await session.commit()
@@ -680,8 +692,7 @@ class Hippocampus:
         Update the prediction record with the actual outcome and calculated error.
         """
         # FIX: Ensure python list for json serialization
-        emb_list = self._ensure_list(actual_embedding)
-        emb_val = str(emb_list) if emb_list else None
+        emb_str = self._serialize_vector(actual_embedding)
         
         async with AsyncSessionLocal() as session:
             await session.execute(
@@ -695,7 +706,7 @@ class Hippocampus:
                 """),
                 {
                     "actual_message": actual_message,
-                    "actual_embedding": emb_val,
+                    "actual_embedding": emb_str,
                     "prediction_error": prediction_error,
                     "prediction_id": prediction_id
                 }
