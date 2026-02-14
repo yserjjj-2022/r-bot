@@ -358,7 +358,7 @@ class RCoreKernel:
             response_text
         )
         
-        latency = (datetime.now() - start_time).total_seconds() * 1000\n        
+        latency = (datetime.now() - start_time).total_seconds() * 1000        
         internal_stats = {
             "latency_ms": int(latency),
             "winner_score": winner.score,
