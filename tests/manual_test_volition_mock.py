@@ -4,6 +4,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
+# --- FIX: Mock pgvector before importing src ---
+# Это позволяет запускать тест без установленного драйвера pgvector
+sys.modules["pgvector"] = MagicMock()
+sys.modules["pgvector.sqlalchemy"] = MagicMock()
+
 # --- FIX: Add project root to sys.path ---
 # Это позволяет запускать скрипт из любой папки: python3 tests/manual_test_volition_mock.py
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
