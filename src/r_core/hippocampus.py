@@ -19,14 +19,15 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Set, Tuple, Union
-from sqlalchemy import select, text, delete, and_, update
+from sqlalchemy import select, text, delete, and_, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.r_core.infrastructure.db import (
     AsyncSessionLocal,
     SemanticModel,
     EpisodicModel,
     VolitionalModel,
-    UserProfileModel
+    UserProfileModel,
+    ChatHistoryModel
 )
 from src.r_core.config import settings
 
@@ -125,7 +126,7 @@ class Hippocampus:
             # Task 2: Извлечение новых фактов из эпизодов
             stats["task_2_extract"] = await self._extract_facts_from_episodes(user_id)
             
-            # Task 3: Обновление volitional_patterns
+            # Task 3: Обновление volitional_patterns (Semantic Intent Analysis)
             stats["task_3_volitional"] = await self._update_volitional_patterns(user_id)
             
             # Сброс счётчика
@@ -486,157 +487,172 @@ class Hippocampus:
             print(f"[Hippocampus] Theme extraction failed: {e}")
             return []
     
-    # ========== TASK 3: Update Volitional Patterns ==========
+    # ========== TASK 3: Update Volitional Patterns (Semantic Intent Analysis) ==========
     
     async def _update_volitional_patterns(self, user_id: int) -> Dict[str, Any]:
         """
-        Task 3: Обновление volitional_memory (паттерны поведения).
+        Task 3: Semantic Intent Analysis.
         
-        Анализируем:
-        - Время активности (night_owl / morning_person)
-        - Энергетический профиль (high / low energy)
+        Выделяет структуру волевого акта из последних сообщений:
+        - Trigger (контекст)
+        - Impulse (сопротивление/желание)
+        - Target (объект цели)
+        - Resolution Strategy
         
-        ✨ NEW (Update): Reinforcement Learning of Volition
-        Вместо простого добавления, мы теперь:
-        1. Ищем существующий паттерн.
-        2. Если найден: Увеличиваем learned_delta (обучение) и обновляем last_activated_at.
-        3. Если нет: Создаем с базовым intensity.
+        Reinforcement:
+        - Если паттерн найден (похожий target), пополняем fuel, обновляем strategy.
+        - Если нет, создаем новый.
         """
         async with AsyncSessionLocal() as session:
-            # Загрузить эпизоды за последние N дней
-            cutoff_date = datetime.utcnow() - timedelta(days=self.episode_window_days)
+            # 1. Загружаем последние 25 сообщений (User + Assistant)
+            # 25 - достаточно для контекста, не слишком много шума
             result = await session.execute(
-                select(EpisodicModel)
-                .where(
-                    and_(
-                        EpisodicModel.user_id == user_id,
-                        EpisodicModel.created_at >= cutoff_date
-                    )
-                )
-                .order_by(EpisodicModel.created_at.desc())
-                .limit(50)  # ✨ Fix: Limit to last 50 episodes for Short-Term Trend
+                select(ChatHistoryModel)
+                .where(ChatHistoryModel.user_id == user_id)
+                .order_by(ChatHistoryModel.created_at.desc())
+                .limit(25)
             )
-            episodes = result.scalars().all()
+            messages = result.scalars().all()
+            # Разворачиваем в хронологическом порядке для LLM
+            messages = list(reversed(messages))
             
-            if len(episodes) < 5:
-                return {"status": "skip", "reason": "too_few_episodes", "count": len(episodes)}
+            if len(messages) < 5:
+                return {"status": "skip", "reason": "too_few_messages", "count": len(messages)}
+            
+            # 2. LLM извлекает волевые паттерны
+            patterns_data = await self._llm_extract_volitional_intent(messages)
+            
+            if not patterns_data:
+                return {"status": "ok", "reason": "no_volition_detected"}
             
             patterns_updated = 0
+            patterns_created = 0
             
-            # --- Analysis 1: Night Owl ---
-            timestamps = [ep.created_at for ep in episodes]
-            is_night_owl = self._detect_night_owl(timestamps)
-            
-            if is_night_owl:
-                await self._reinforce_or_create_pattern(
-                    session, user_id,
-                    trigger="time > 22:00",
-                    impulse="initiate_dialogue",
-                    defaults={
-                        "goal": "social_connection",
-                        "resolution_strategy": "wait_for_user",
-                        "action_taken": "detected_night_owl_pattern",
-                        "intensity": 0.4  # Базовая сила хронотипа
-                    }
+            # 3. Merging logic
+            for p_data in patterns_data:
+                target = p_data.get("target")
+                if not target:
+                    continue
+                
+                # Поиск похожего паттерна по Target (case-insensitive)
+                # В будущем можно добавить embedding поиск, пока simple text match
+                existing_pattern = await session.execute(
+                    select(VolitionalModel).where(
+                        and_(
+                            VolitionalModel.user_id == user_id,
+                            VolitionalModel.target.ilike(target),
+                            VolitionalModel.is_active == True
+                        )
+                    ).limit(1)
                 )
-                patterns_updated += 1
-            
-            # --- Analysis 2: High Energy ---
-            avg_emotion = sum(ep.emotion_score for ep in episodes) / len(episodes)
-            energy_level = min(1.0, max(0.0, (avg_emotion + 1.0) / 2.0))  # нормализация -1..1 → 0..1
-            
-            if energy_level > 0.5:
-                await self._reinforce_or_create_pattern(
-                    session, user_id,
-                    trigger="user_message_received",
-                    impulse="high_energy",
-                    defaults={
-                        "goal": "maintain_engagement",
-                        "resolution_strategy": "mirror_energy",
-                        "action_taken": f"detected_high_energy (avg={energy_level:.2f})",
-                        "intensity": 0.7  # Высокая базовая сила
-                    }
-                )
-                patterns_updated += 1
-            
-            elif energy_level < 0.3:
-                await self._reinforce_or_create_pattern(
-                    session, user_id,
-                    trigger="user_message_received",
-                    impulse="low_energy",
-                    defaults={
-                        "goal": "gentle_engagement",
-                        "resolution_strategy": "soothing_tone",
-                        "action_taken": f"detected_low_energy (avg={energy_level:.2f})",
-                        "intensity": 0.3  # Низкая базовая сила
-                    }
-                )
-                patterns_updated += 1
+                existing = existing_pattern.scalar_one_or_none()
+                
+                if existing:
+                    # ✨ REINFORCE / MERGE
+                    # Fuel update with inertia: 0.7 * old + 0.3 * new
+                    new_fuel = p_data.get("fuel", 0.5)
+                    existing.fuel = 0.7 * existing.fuel + 0.3 * new_fuel
+                    
+                    # Intensity: max(old, new)
+                    existing.intensity = max(existing.intensity, p_data.get("intensity", 0.5))
+                    
+                    # Strategy: Append unique
+                    new_strat = p_data.get("resolution_strategy")
+                    if new_strat and new_strat.lower() not in existing.resolution_strategy.lower():
+                        existing.resolution_strategy += f", {new_strat}"
+                        
+                    # Update learned_delta (small boost for recurrence)
+                    existing.learned_delta = min(1.0, existing.learned_delta + 0.05)
+                    existing.last_activated_at = datetime.utcnow()
+                    existing.turns_active += 1
+                    
+                    patterns_updated += 1
+                else:
+                    # ✨ CREATE NEW
+                    new_pattern = VolitionalModel(
+                        user_id=user_id,
+                        trigger=p_data.get("trigger", "unknown"),
+                        impulse=p_data.get("impulse", "unknown"),
+                        target=target,
+                        goal="self_improvement", # default grouping
+                        resolution_strategy=p_data.get("resolution_strategy", ""),
+                        intensity=p_data.get("intensity", 0.5),
+                        fuel=p_data.get("fuel", 0.8),
+                        learned_delta=0.0,
+                        last_activated_at=datetime.utcnow(),
+                        turns_active=1,
+                        is_active=True
+                    )
+                    session.add(new_pattern)
+                    patterns_created += 1
             
             await session.commit()
             
             return {
                 "status": "ok",
-                "episodes_analyzed": len(episodes),
-                "patterns_updated": patterns_updated
+                "messages_analyzed": len(messages),
+                "patterns_extracted": len(patterns_data),
+                "updated": patterns_updated,
+                "created": patterns_created
             }
-            
-    async def _reinforce_or_create_pattern(
-        self, 
-        session: AsyncSession, 
-        user_id: int, 
-        trigger: str, 
-        impulse: str, 
-        defaults: Dict[str, Any]
-    ):
-        """
-        Helper: Ищет паттерн. Если есть — усиливает (Reinforcement). Если нет — создает.
-        """
-        # 1. Try to find existing pattern
-        result = await session.execute(
-            select(VolitionalModel).where(
-                and_(
-                    VolitionalModel.user_id == user_id,
-                    VolitionalModel.trigger == trigger,
-                    VolitionalModel.impulse == impulse
-                )
-            )
-        )
-        pattern = result.scalar_one_or_none()
-        
-        if pattern:
-            # ✨ REINFORCEMENT: Усиливаем паттерн
-            # learned_delta растет, но не бесконечно (clamp -1.0 to +1.0)
-            new_delta = pattern.learned_delta + pattern.reinforcement_rate
-            pattern.learned_delta = max(-1.0, min(1.0, new_delta))
-            
-            # Обновляем время последней активации (важно для decay)
-            pattern.last_activated_at = datetime.utcnow()
-            
-            # Обновляем метаданные (например, новый уровень энергии)
-            if "action_taken" in defaults:
-                pattern.action_taken = defaults["action_taken"]
-                
-        else:
-            # ✨ CREATE: Создаем новый паттерн
-            new_pattern = VolitionalModel(
-                user_id=user_id,
-                trigger=trigger,
-                impulse=impulse,
-                goal=defaults.get("goal"),
-                resolution_strategy=defaults.get("resolution_strategy"),
-                action_taken=defaults.get("action_taken"),
-                intensity=defaults.get("intensity", 0.5),
-                learned_delta=0.0,
-                last_activated_at=datetime.utcnow()
-            )
-            session.add(new_pattern)
 
-    def _detect_night_owl(self, timestamps: List[datetime]) -> bool:
-        """Проверяет, является ли пользователь ночной совой (>50% активности 22:00-06:00)"""
-        night_count = sum(1 for ts in timestamps if ts.hour >= 22 or ts.hour <= 6)
-        return night_count / len(timestamps) > 0.5
-    
+    async def _llm_extract_volitional_intent(self, messages: List[ChatHistoryModel]) -> List[Dict[str, Any]]:
+        """
+        Извлекает JSON структуру волевого акта из диалога.
+        """
+        dialogue_text = "\n".join([
+            f"{msg.role}: {msg.content}" 
+            for msg in messages
+        ])
+        
+        prompt = f"""
+Ты - аналитик волевой сферы (Volitional Analyst).
+Твоя задача: найти в диалоге следы волевого конфликта или стремления (Volitional Act).
+
+Диалог:
+{dialogue_text}
+
+Структура Волевого Праттерна:
+1. Trigger: Контекст или событие (например, "разговор о работе", "поздняя ночь").
+2. Impulse: Внутреннее сопротивление или желание "животного я" (например, "лень", "страх", "злость").
+3. Target: Объект приложения усилий (например, "Spanish", "Python", "Morning Run").
+4. Resolution Strategy: Как пользователь пытается преодолеть импульс? (например, "обещание", "геймификация", "просьба о помощи").
+5. Intensity: Сила конфликта (0.0 - 1.0).
+6. Fuel: Текущий ресурс/желание (0.0 - нет сил, 1.0 - горит желанием).
+
+Инструкция:
+- Анализируй в основном реплики USER.
+- Если волевого акта нет (просто болтовня), верни пустой список [].
+- Не выдумывай. Извлекай только явные паттерны.
+
+Верни JSON формат:
+[
+  {{
+    "trigger": "...",
+    "impulse": "...",
+    "target": "...",
+    "resolution_strategy": "...",
+    "intensity": 0.7,
+    "fuel": 0.5
+  }}
+]
+"""
+        try:
+            response = await self.llm.complete(prompt)
+            # Пытаемся распарсить JSON. Иногда LLM добавляет markdown ```json
+            cleaned = response.replace("```json", "").replace("```", "").strip()
+            data = json.loads(cleaned)
+            
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict):
+                return [data]
+            return []
+            
+        except Exception as e:
+            print(f"[Hippocampus] Volitional extraction failed: {e}")
+            return []
+
     # ========== Utility ==========
     
     async def _reset_consolidation_counter(self, user_id: int):
