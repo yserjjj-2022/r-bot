@@ -3,8 +3,6 @@ import random
 from typing import Dict, List, Optional
 from datetime import datetime
 from sqlalchemy import text
-# FIX: Removed scipy import
-# from scipy.spatial.distance import cosine
 
 
 from .schemas import (
@@ -33,7 +31,7 @@ from .agents import (
 from .neuromodulation import NeuroModulationSystem
 from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
-from .utils import is_phatic_message, cosine_distance  # ✨ NEW: Imported from utils
+from .utils import is_phatic_message, cosine_distance 
 
 
 class RCoreKernel:
@@ -47,9 +45,9 @@ class RCoreKernel:
     ]
     
     # === VOLITIONAL CONSTANTS ===
-    VOLITION_PERSISTENCE_BONUS = 0.3  # Бонус для текущего фокуса
-    VOLITION_DECAY_PER_DAY = 0.1      # Штраф за давность (если decay_rate не задан)
-    VOLITION_FOCUS_DURATION = 3       # Сколько ходов длится фокус по умолчанию
+    VOLITION_PERSISTENCE_BONUS = 0.3 
+    VOLITION_DECAY_PER_DAY = 0.1      
+    VOLITION_FOCUS_DURATION = 3       
 
 
     # === HORMONAL MODULATION RULES (Introspection Exposed) ===
@@ -85,7 +83,7 @@ class RCoreKernel:
             PrefrontalAgent(self.llm),
             SocialAgent(self.llm),
             StriatumAgent(self.llm),
-            UncertaintyAgent(self.llm)  # ✨ NEW: Uncertainty Agent (Index 5)
+            UncertaintyAgent(self.llm) 
         ]
         
         # Volitional State (In-memory cache for session persistence)
@@ -99,10 +97,8 @@ class RCoreKernel:
     def get_architecture_snapshot(self) -> Dict:
         """
         Возвращает текущую структуру управления для визуализации.
-        Динамически считывает загруженных агентов и настройки.
         """
         return {
-            # 1. Список активных агентов (какие классы реально загружены)
             "active_agents": [
                 {
                     "name": agent.agent_type.value if hasattr(agent, 'agent_type') else "Unknown",
@@ -111,18 +107,12 @@ class RCoreKernel:
                 }
                 for agent in self.agents
             ],
-            
-            # 2. Текущая конфигурация слайдеров (весов)
             "control_sliders": self.config.sliders.dict(),
-            
-            # 3. Карта гормональной модуляции (правила)
             "modulation_rules": self.HORMONAL_MODULATION_RULES,
-            
-            # 4. Активные системы
             "subsystems": {
                 "hippocampus": "Active" if self.hippocampus else "Disabled",
                 "council_mode": "Unified" if self.config.use_unified_council else "Legacy",
-                "predictive_processing": "Active" # ✨
+                "predictive_processing": "Active" 
             }
         }
 
@@ -139,10 +129,9 @@ class RCoreKernel:
         
         # --- ZOMBIE MODE ---
         if mode == "ZOMBIE":
-            simple_response, _ = await self.llm.generate_response( # Mock tuple return
+            simple_response, _ = await self.llm.generate_response( 
                  "prefrontal_logic", message.text, "", "", user_mode="formal"
             )
-            # Fix if generate_response returns string in mock scenarios, but here we assume updated llm.py
             latency = (datetime.now() - start_time).total_seconds() * 1000
             
             return CoreResponse(
@@ -156,14 +145,14 @@ class RCoreKernel:
 
         # --- CORTICAL MODE (Full Architecture) ---
         
-        # 0. Precompute Embedding (used for Search AND Prediction Verification)
+        # 0. Precompute Embedding 
         current_embedding = None
         try:
             current_embedding = await self.llm.get_embedding(message.text)
         except Exception as e:
             print(f"[Pipeline] Embedding failed early: {e}")
         
-        # 1. Perception
+        # 1. Perception (Still need extraction for context, but save later)
         extraction_result = await self._mock_perception(message)
         
         # === ✨ PREDICTIVE PROCESSING: Verify Last Prediction (Step 1) ===
@@ -175,7 +164,6 @@ class RCoreKernel:
             is_phatic = is_phatic_message(message.text)
             
             predicted_vec = last_prediction.get("predicted_embedding")
-            # pgvector returns list or str, handle parsing if needed
             if isinstance(predicted_vec, str):
                 import json as j_loader
                 try:
@@ -185,19 +173,17 @@ class RCoreKernel:
             
             # 2. Calculate Error
             if not is_phatic and predicted_vec and current_embedding:
-                # FIX: Use internal cosine_distance instead of scipy
                 dist = cosine_distance(predicted_vec, current_embedding)
                 prediction_error = float(dist)
                 print(f"[Predictive] Error Calculated: {prediction_error:.4f} (Prev: '{last_prediction['predicted_reaction']}' vs Real: '{message.text}')")
             elif is_phatic:
                 print(f"[Predictive] Phatic message detected ('{message.text}'). Force PE=0.0.")
-                prediction_error = 0.0 # Neutral
+                prediction_error = 0.0 
             else:
                  print("[Predictive] Embeddings missing or invalid, default PE=0.0.")
 
 
             # 3. ALWAYS Verify in DB (Close the loop)
-            # This ensures we don't compare against this stale prediction next turn
             try:
                 print(f"[Predictive] Closing Loop for PredID={last_prediction['id']}. Writing actual_msg='{message.text}'")
                 await self.hippocampus.verify_prediction(
@@ -223,7 +209,6 @@ class RCoreKernel:
         
         user_profile = context.get("user_profile", {})
         
-        # Normalize user mode
         raw_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
         if raw_mode and raw_mode.lower() in ["ты", "informal", "casual", "friendly"]:
             preferred_mode = "informal"
@@ -231,12 +216,7 @@ class RCoreKernel:
             preferred_mode = "formal"
 
 
-        # Save memory
-        await self.memory.memorize_event(
-            message, 
-            extraction_result,
-            precomputed_embedding=current_embedding
-        )
+        # === MOVED MEMORY SAVE TO END (After Council) ===
 
 
         # === HIPPOCAMPUS TRIGGER ===
@@ -270,7 +250,7 @@ class RCoreKernel:
         
         # ✨ Unified Council + Uncertainty Agent
         if self.config.use_unified_council:
-            signals = await self._process_unified_council(council_report, message, context) # FIX: Added await
+            signals = await self._process_unified_council(council_report, message, context) 
             print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
         else:
             signals = await self._process_legacy_council(council_report, message, context)
@@ -302,8 +282,7 @@ class RCoreKernel:
         self._update_mood(winner)
         
         # Hormonal Reactive Update
-        implied_pe = prediction_error # ✨ Use REAL PE instead of hardcoded
-        # Or bias it by agent type if PE is low
+        implied_pe = prediction_error 
         if implied_pe < 0.3:
             if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
@@ -326,7 +305,7 @@ class RCoreKernel:
             )
             print(f"[Volition] Selected dominant pattern: {dominant_volition.get('impulse')} (score={dominant_volition.get('effective_score', 0):.2f})")
         
-        # 5. Response Generation (NOW RETURNS TUPLE)
+        # 5. Response Generation 
         response_context_str = self._format_context_for_llm(context)
         bot_gender = getattr(self.config, "gender", "Neutral")
         
@@ -335,7 +314,7 @@ class RCoreKernel:
         
         # Affective Context for LLM
         affective_warnings = context.get("affective_context", [])
-        affective_context_str = self._format_affective_context(affective_warnings) # ✨ NOW IT EXISTS
+        affective_context_str = self._format_affective_context(affective_warnings)
         
         # ✨ Generate Response + Prediction
         response_text, predicted_reaction = await self.llm.generate_response(
@@ -350,17 +329,36 @@ class RCoreKernel:
             affective_context=affective_context_str
         )
         
-        # === 6.1 SAVE BOT RESPONSE FIRST (CRITICAL FOR ID MATCHING) ===
+        # === 6.1 SAVE MEMORY with REAL Emotion Score (Moved from start) ===
+        # Calculate max intensity from emotional agents (Amygdala, Striatum, Social)
+        hot_scores = [
+            s.score for s in signals 
+            if s.agent_name in [AgentType.AMYGDALA, AgentType.STRIATUM, AgentType.SOCIAL]
+        ]
+        max_hot = max(hot_scores) if hot_scores else 0.0
+        real_emotion_score = max_hot / 10.0
+        
+        # Ensure extraction_result uses this real score if possible, or override in save
+        # Actually memorize_event takes the whole extraction object.
+        # We update it here:
+        extraction_result["anchors"][0]["emotion_score"] = real_emotion_score
+        
+        await self.memory.memorize_event(
+            message, 
+            extraction_result,
+            precomputed_embedding=current_embedding
+        )
+        
+        # === 6.2 SAVE BOT RESPONSE ===
         await self.memory.memorize_bot_response(
             message.user_id, 
             message.session_id, 
             response_text
         )
         
-        # === 6.2 THEN SAVE PREDICTION (Now chat_history has the bot message) ===
+        # === 6.3 SAVE PREDICTION ===
         if predicted_reaction:
             try:
-                # Embed the prediction for future comparison
                 pred_emb = await self.llm.get_embedding(predicted_reaction)
                 
                 await self.hippocampus.save_prediction(
@@ -392,8 +390,9 @@ class RCoreKernel:
             "modulators": [s.agent_name.value for s in strong_losers],
             "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
             "council_mode": "FULL" if has_affective else "LIGHT",
-            "prediction_error": prediction_error, # ✨ Stats
-            "next_prediction": predicted_reaction # ✨ Stats
+            "prediction_error": prediction_error, 
+            "next_prediction": predicted_reaction,
+            "user_emotion_score": real_emotion_score # ✨ Log for debug
         }
 
 
@@ -411,7 +410,7 @@ class RCoreKernel:
 
     # === HELPER METHODS ===
     
-    def _format_affective_context(self, warnings: List[str]) -> str: # ✨ ADDED METHOD
+    def _format_affective_context(self, warnings: List[str]) -> str: 
         """
         Formats list of affective warnings into a single string for LLM prompt.
         """
@@ -427,10 +426,7 @@ class RCoreKernel:
     def _apply_chaos(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         """
         🌀 CHAOS INJECTION (Entropy)
-        If chaos_level > 0, introduce random noise to agent scores.
-        High chaos (0.8+) can randomly swap the winner.
         """
-        # Безопасно получаем chaos_level из слайдеров
         chaos = getattr(self.config.sliders, "chaos_level", 0.0)
         
         if chaos <= 0.05: return signals
@@ -438,9 +434,6 @@ class RCoreKernel:
         print(f"[Chaos] Injecting entropy (level={chaos:.2f})")
         
         for s in signals:
-            # Noise: +/- (chaos * 2.0)
-            # При chaos=0.5 -> шум от -1.0 до +1.0
-            # При chaos=1.0 -> шум от -2.0 до +2.0
             noise = (random.random() - 0.5) * (chaos * 4.0) 
             s.score = max(0.0, min(10.0, s.score + noise))
             if abs(noise) > 0.5:
@@ -532,7 +525,7 @@ class RCoreKernel:
                 confidence=intensity,
                 source_message_id=message.message_id,
                 sentiment=sentiment_vad,
-                embedding=embedding # ✨ Added embedding
+                embedding=embedding 
             )
             
             await self.memory.store.save_semantic(message.user_id, triple)
@@ -549,8 +542,6 @@ class RCoreKernel:
             if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
             lines.append("")
             
-        # ✨ NEW: RELEVANT PERSONALITY TRAITS
-        # Это то, что мы добавили в MemorySystem
         relevant_traits = context.get("relevant_traits", [])
         if relevant_traits:
             lines.append("CONTEXTUALLY RELEVANT TRAITS:")
@@ -599,7 +590,6 @@ class RCoreKernel:
                 )
                 load = result.scalar() or 0
                 
-                # FIX: Set threshold to 10
                 THRESHOLD = 10 
                 
                 if load >= THRESHOLD:
@@ -612,7 +602,6 @@ class RCoreKernel:
     def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         archetype = self.neuromodulation.get_archetype()
         
-        # Use class constant for rules
         MODULATION_MAP = self.HORMONAL_MODULATION_RULES
         
         if archetype not in MODULATION_MAP: return signals
@@ -627,7 +616,7 @@ class RCoreKernel:
         return signals
 
 
-    async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]: # FIX: Made async
+    async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]: 
         signals = []
         agent_map = {
             "intuition": (self.agents[0], AgentType.INTUITION),
@@ -637,12 +626,9 @@ class RCoreKernel:
             "striatum": (self.agents[4], AgentType.STRIATUM)
         }
         
-        # ✨ NEW: Process Uncertainty Agent
-        # It's NOT in the council report (yet), it runs its own logic based on context data (PE)
-        uncertainty_agent = self.agents[5] # Index 5
-        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) # FIX: Added await
+        uncertainty_agent = self.agents[5] 
+        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) 
         if u_signal:
-             # Manually add to signals if it decided to run (score > 0)
              signals.append(u_signal)
 
 
@@ -671,9 +657,8 @@ class RCoreKernel:
             report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
             signals.append(agent.process_from_report(report_data, self.config.sliders))
             
-        # ✨ Add Uncertainty Agent for legacy mode too
         uncertainty_agent = self.agents[5]
-        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) # FIX: Added await
+        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) 
         if u_signal:
              signals.append(u_signal)
              
@@ -689,7 +674,7 @@ class RCoreKernel:
             AgentType.SOCIAL:    MoodVector(valence=0.5, arousal=-0.2, dominance=-0.1),
             AgentType.PREFRONTAL:MoodVector(valence=0.0, arousal=-0.5, dominance=0.1),
             AgentType.INTUITION: MoodVector(valence=0.0, arousal=0.1, dominance=0.0),
-            AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) # ✨ NEW
+            AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) 
         }
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
         force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
