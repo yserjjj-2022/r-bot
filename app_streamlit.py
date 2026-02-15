@@ -34,8 +34,13 @@ if "sliders" not in st.session_state:
         dominance_level=0.5, 
         pace_setting=0.5, 
         neuroticism=0.1,
-        pred_threshold=0.65, # Default
-        pred_sensitivity=10.0 # Default
+        # ✨ NEW: Dashboard Controls (Homeostasis)
+        chaos_level=0.2,
+        learning_speed=0.5,
+        persistence=0.5,
+        # === Prediction Error ===
+        pred_threshold=0.65, 
+        pred_sensitivity=10.0
     )
 
 if "bot_name" not in st.session_state:
@@ -395,7 +400,8 @@ if app_mode == "📈 Encephalogram (Analytics)":
     # Обратный порядок для ленты
     for i in range(len(timeline)-1, -1, -1):
         item = timeline[i]
-        prev_item = timeline[i-1] if i > 0 else None\n        
+        prev_item = timeline[i-1] if i > 0 else None
+        
         winner_display = item['winner']
         if winner_display == "Unknown": winner_display = "⚠️ Log Missing"
 
@@ -543,8 +549,13 @@ else:
                 dominance_level=preset.get("dominance_level", 0.5),
                 pace_setting=preset.get("pace_setting", 0.5),
                 neuroticism=preset.get("neuroticism", 0.1),
-                pred_threshold=preset.get("pred_threshold", 0.65), # ✨ Load new fields
-                pred_sensitivity=preset.get("pred_sensitivity", 10.0) # ✨ Load new fields
+                # ✨ NEW: Load Dashboard Controls
+                chaos_level=preset.get("chaos_level", 0.2),
+                learning_speed=preset.get("learning_speed", 0.5),
+                persistence=preset.get("persistence", 0.5),
+                # ✨ NEW: Load Pred Controls
+                pred_threshold=preset.get("pred_threshold", 0.65), 
+                pred_sensitivity=preset.get("pred_sensitivity", 10.0) 
             )
     else:
         st.session_state.bot_name = "R-Bot"
@@ -552,14 +563,21 @@ else:
 
     # --- Sliders Control ---
     with st.sidebar.expander("Personality Tuner", expanded=False):
+        st.markdown("### 🎭 Core Personality")
         empathy = st.slider("❤️ Empathy", 0.0, 1.0, st.session_state.sliders.empathy_bias)
         risk = st.slider("🎲 Risk / Curiosity", 0.0, 1.0, st.session_state.sliders.risk_tolerance)
         dominance = st.slider("👑 Dominance", 0.0, 1.0, st.session_state.sliders.dominance_level)
         pace = st.slider("⚡ Thinking Style", 0.0, 1.0, st.session_state.sliders.pace_setting)
         
-        # ✨ NEW: Predictive Processing Sliders
+        # ✨ NEW: Predictive Processing Sliders (Dashboard)
+        st.markdown("### 🎛️ Neuro-Dynamics")
+        st.caption("Homeostasis & Adaptation")
+        chaos_level = st.slider("🌪️ Chaos Level (Entropy)", 0.0, 1.0, st.session_state.sliders.chaos_level, help="Стабильность vs Хаос. Повышает Uncertainty.")
+        learning_speed = st.slider("🧠 Learning Speed (Plasticity)", 0.0, 1.0, st.session_state.sliders.learning_speed, help="Скорость обновления весов (RL Rate).")
+        persistence = st.slider("🔋 Persistence (Willpower)", 0.0, 1.0, st.session_state.sliders.persistence, help="Упорство в достижении целей (Fuel).")
+        
         st.markdown("---")
-        st.caption("🔮 Predictive Processing")
+        st.caption("🔮 Predictive Error Params")
         pred_thresh = st.slider("Threshold (µ)", 0.1, 1.0, st.session_state.sliders.pred_threshold, help="Порог 'хорошей' ошибки. Выше = бот реже паникует.")
         pred_sens = st.slider("Sensitivity (k)", 1.0, 20.0, st.session_state.sliders.pred_sensitivity, help="Резкость реакции. Выше = сильнее награда/штраф.")
         
@@ -571,8 +589,12 @@ else:
             dominance_level=dominance,
             pace_setting=pace,
             neuroticism=0.1,
-            pred_threshold=pred_thresh, # ✨ Update state
-            pred_sensitivity=pred_sens   # ✨ Update state
+            # ✨ NEW fields
+            chaos_level=chaos_level,
+            learning_speed=learning_speed,
+            persistence=persistence,
+            pred_threshold=pred_thresh,
+            pred_sensitivity=pred_sens
         )
 
     # --- Save Agent ---
@@ -586,7 +608,8 @@ else:
                     sliders_dict = {
                         "empathy_bias": empathy, "risk_tolerance": risk,
                         "dominance_level": dominance, "pace_setting": pace, "neuroticism": 0.1,
-                        "pred_threshold": pred_thresh, "pred_sensitivity": pred_sens # ✨ Save
+                        "chaos_level": chaos_level, "learning_speed": learning_speed, "persistence": persistence, # ✨ Save
+                        "pred_threshold": pred_thresh, "pred_sensitivity": pred_sens
                     }
                     run_async(create_agent(new_name, new_desc, new_gender, sliders_dict))
                     st.success(f"Agent {new_name} saved!")
@@ -636,8 +659,7 @@ else:
                     if "all_scores" in stats:
                         scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
-                            y=alt.Y('Agent', sort='-x'),
+                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),\n                            y=alt.Y('Agent', sort='-x'),
                             color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))).properties(height=150)
                         st.altair_chart(chart, use_container_width=True)
 
@@ -648,7 +670,8 @@ else:
         if st.session_state.kernel_instance is None:
             # FIX: Use empty lists for values if needed, but ensure config is valid
             config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
-            config.gender = st.session_state.bot_gender\n            st.session_state.kernel_instance = RCoreKernel(config)
+            config.gender = st.session_state.bot_gender
+            st.session_state.kernel_instance = RCoreKernel(config)
         else:
             st.session_state.kernel_instance.config.name = st.session_state.bot_name
             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
