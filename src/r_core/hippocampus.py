@@ -544,7 +544,7 @@ class Hippocampus:
             avg_emotion = sum(ep.emotion_score for ep in episodes) / len(episodes)
             energy_level = min(1.0, max(0.0, (avg_emotion + 1.0) / 2.0))  # нормализация -1..1 → 0..1
             
-            if energy_level > 0.7:
+            if energy_level > 0.5:
                 await self._reinforce_or_create_pattern(
                     session, user_id,
                     trigger="user_message_received",
@@ -554,6 +554,20 @@ class Hippocampus:
                         "resolution_strategy": "mirror_energy",
                         "action_taken": f"detected_high_energy (avg={energy_level:.2f})",
                         "intensity": 0.7  # Высокая базовая сила
+                    }
+                )
+                patterns_updated += 1
+            
+            elif energy_level < 0.3:
+                await self._reinforce_or_create_pattern(
+                    session, user_id,
+                    trigger="user_message_received",
+                    impulse="low_energy",
+                    defaults={
+                        "goal": "gentle_engagement",
+                        "resolution_strategy": "soothing_tone",
+                        "action_taken": f"detected_low_energy (avg={energy_level:.2f})",
+                        "intensity": 0.3  # Низкая базовая сила
                     }
                 )
                 patterns_updated += 1
@@ -747,7 +761,7 @@ class Hippocampus:
     async def verify_prediction(self, 
                               prediction_id: int, 
                               actual_message: str, 
-                              prediction_error: float,
+                              prediction_error: float, 
                               actual_embedding: Optional[List[float]] = None):
         """
         Update the prediction record with the actual outcome and calculated error.
