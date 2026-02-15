@@ -335,7 +335,7 @@ class RCoreKernel:
         
         # Affective Context for LLM
         affective_warnings = context.get("affective_context", [])
-        affective_context_str = self._format_affective_context(affective_warnings)
+        affective_context_str = self._format_affective_context(affective_warnings) # ✨ NOW IT EXISTS
         
         # ✨ Generate Response + Prediction
         response_text, predicted_reaction = await self.llm.generate_response(
@@ -410,6 +410,19 @@ class RCoreKernel:
 
 
     # === HELPER METHODS ===
+    
+    def _format_affective_context(self, warnings: List[str]) -> str: # ✨ ADDED METHOD
+        """
+        Formats list of affective warnings into a single string for LLM prompt.
+        """
+        if not warnings:
+            return ""
+        
+        warning_str = "\\nAFFECTIVE MEMORY WARNING:\\n"
+        for w in warnings:
+            warning_str += f"⚠️ {w}\\n"
+        return warning_str
+
     
     def _apply_chaos(self, signals: List[AgentSignal]) -> List[AgentSignal]:
         """
