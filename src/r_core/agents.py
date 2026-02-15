@@ -209,61 +209,67 @@ class StriatumAgent(BaseAgent):
 
 class UncertaintyAgent(BaseAgent):
     """
-    🚨 Uncertainty Agent (Lost State Handler)
-    Activates when the bot loses track of the user's intent or when Prediction Error is high.
-    Requires the bot to ask clarifying questions instead of making assumptions.
+    🚨 Uncertainty Agent (Lost State Handler) - Active Inference v2.0
+    Activates when Prediction Error (PE) exceeds a threshold controlled by user settings.
+    Implements 'Persistence' (Willpower) logic:
+    - High Persistence: Bot ignores errors (Stubborn).
+    - Low Persistence: Bot yields to errors (Flexible).
     """
     agent_type = AgentType.UNCERTAINTY
     
     @property
     def style_instruction(self) -> str:
-        return "...but you are lost, so ask clarifying questions instead of making assumptions."
+        return "...but admit you are confused and ask clarifying questions."
 
     async def process(self, message: IncomingMessage, context: Dict, sliders: PersonalitySliders) -> AgentSignal:
         """
-        Activates based on 'prediction_error' in context.
-        Only fires if PE >= threshold defined in behavioral_config.
+        Decides activation based on PE, Threshold, and Persistence.
         """
-        # Получаем PE из контекста (рассчитывается в pipeline)
+        # 1. Get Prediction Error (PE)
         prediction_error = context.get("prediction_error", 0.0)
         
-        # Получаем конфиг
-        config = behavioral_config.uncertainty_agent
-        threshold = config.activation_threshold
-        
-        # FIX: Ensure default if behavioral_config is missing keys
-        if not threshold: threshold = 0.85
+        # 2. Get Thresholds from Sliders (Active Inference Control)
+        # Default to high threshold if slider missing (safe fallback)
+        pe_threshold = getattr(sliders, "pred_threshold", 0.8) 
+        persistence = getattr(sliders, "persistence", 0.5)
         
         score = 0.0
-        rationale = "In sync (Low Error)"
-        confidence = 0.1 # Default low confidence
+        rationale = "In sync"
+        confidence = 0.1
         
-        if prediction_error >= threshold:
-            # Активация!
-            score = config.active_score if config.active_score else 8.5
-            confidence = config.active_confidence if config.active_confidence else 0.9
-            rationale = f"High Prediction Error ({prediction_error:.2f}) -> LOST TRACK"
+        # 3. Active Inference Logic: Willpower Check
+        # If Persistence is HIGH, we artificially LOWER the perceived error.
+        # "I'm sure I'm right, the user is just weird."
+        perceived_error = prediction_error * (1.0 - (persistence * 0.5)) 
+        
+        if perceived_error >= pe_threshold:
+            # --- LOST TRACK (Surprise Minimization Failed) ---
+            score = 8.5
+            confidence = 0.9
+            rationale = f"High PE ({prediction_error:.2f}) > Threshold ({pe_threshold:.2f}). Persistence failed."
             
-            # Эффект накопления: если уже были потеряны, усиливаем (симуляция)
-            if prediction_error > 0.9:
-                score += 1.0 # Critical failure
-                rationale += " [CRITICAL]"
+            # Critical failure escalation
+            if prediction_error > 0.95:
+                score = 10.0
+                rationale += " [CRITICAL SURPRISE]"
                 
         else:
-            # Спящий режим
-            score = config.inactive_score if config.inactive_score else 0.0
-            confidence = config.inactive_confidence if config.inactive_confidence else 0.1
-            rationale = "In sync (Low Error)"
+            # --- IN SYNC (or Stubbornly Ignoring) ---
+            score = 0.0
+            confidence = 0.1
+            if prediction_error > pe_threshold:
+                rationale = f"High PE ({prediction_error:.2f}) suppressed by Persistence ({persistence:.2f})"
+            else:
+                rationale = f"Low PE ({prediction_error:.2f})"
 
         signal = AgentSignal(
             agent_name=self.agent_type,
             score=score,
             rationale_short=rationale,
             confidence=confidence,
-            latency_ms=1,  # Very fast check
+            latency_ms=1, 
             style_instruction=self.style_instruction
         )
-        # У Uncertainty нет слайдеров-модификаторов, она зависит от ошибки прогноза
         return signal
 
     def _calculate_modifier(self, sliders: PersonalitySliders) -> float:
