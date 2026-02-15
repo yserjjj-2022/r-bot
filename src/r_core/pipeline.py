@@ -1,4 +1,5 @@
 import asyncio
+import random
 from typing import Dict, List, Optional
 from datetime import datetime
 from sqlalchemy import text
@@ -278,6 +279,9 @@ class RCoreKernel:
 
         # ✨ Apply Hormonal Modulation BEFORE arbitration
         signals = self._apply_hormonal_modulation(signals)
+        
+        # ✨ Apply CHAOS Injection (Entropy) BEFORE arbitration
+        signals = self._apply_chaos(signals)
 
 
         # 4. Arbitration & Mood Update
@@ -407,6 +411,30 @@ class RCoreKernel:
 
     # === HELPER METHODS ===
     
+    def _apply_chaos(self, signals: List[AgentSignal]) -> List[AgentSignal]:
+        """
+        🌀 CHAOS INJECTION (Entropy)
+        If chaos_level > 0, introduce random noise to agent scores.
+        High chaos (0.8+) can randomly swap the winner.
+        """
+        # Безопасно получаем chaos_level из слайдеров
+        chaos = getattr(self.config.sliders, "chaos_level", 0.0)
+        
+        if chaos <= 0.05: return signals
+        
+        print(f"[Chaos] Injecting entropy (level={chaos:.2f})")
+        
+        for s in signals:
+            # Noise: +/- (chaos * 2.0)
+            # При chaos=0.5 -> шум от -1.0 до +1.0
+            # При chaos=1.0 -> шум от -2.0 до +2.0
+            noise = (random.random() - 0.5) * (chaos * 4.0) 
+            s.score = max(0.0, min(10.0, s.score + noise))
+            if abs(noise) > 0.5:
+                s.rationale_short += f" [Entropy {noise:+.1f}]"
+                
+        return signals
+    
     def _select_dominant_volition(self, patterns: List[Dict], user_id: int) -> Optional[Dict]:
         """
         Winner-Takes-Volition mechanism.
@@ -498,19 +526,50 @@ class RCoreKernel:
             print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object}")
 
 
-    def _format_affective_context(self, warnings: List[Dict]) -> str:
-        if not warnings: return ""
-        s = "⚠️ EMOTIONAL RELATIONS (User's Preferences):\\n"
-        for warn in warnings:
-            entity = warn["entity"]
-            predicate = warn["predicate"]
-            feeling = warn["user_feeling"]
-            intensity = warn["intensity"]
-            if feeling == "NEGATIVE":
-                s += f"- ⚠️ AVOID mentioning '{entity}' (User {predicate} it, intensity={intensity:.2f}).\\n"
-            else:
-                s += f"- 💚 User {predicate} '{entity}' (intensity={intensity:.2f}).\\n"
-        return s
+    def _format_context_for_llm(self, context: Dict, limit_history: Optional[int] = None, exclude_episodic: bool = False, exclude_semantic: bool = False) -> str:
+        lines = []
+        profile = context.get("user_profile")
+        if profile:
+            lines.append("USER PROFILE (Core Identity):")
+            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
+            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
+            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
+            lines.append("")
+            
+        # ✨ NEW: RELEVANT PERSONALITY TRAITS
+        # Это то, что мы добавили в MemorySystem
+        relevant_traits = context.get("relevant_traits", [])
+        if relevant_traits:
+            lines.append("CONTEXTUALLY RELEVANT TRAITS:")
+            for trait in relevant_traits:
+                lines.append(f"- {trait}")
+            lines.append("")
+
+
+        if context.get("chat_history"):
+            chat_history = context["chat_history"]
+            if limit_history is not None:
+                chat_history = chat_history[-limit_history:]
+            if chat_history:
+                lines.append("RECENT DIALOGUE:")
+                for msg in chat_history:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    lines.append(f"{role}: {msg['content']}")
+                lines.append("") 
+        
+        if not exclude_episodic and context.get("episodic_memory"):
+            lines.append("PAST EPISODES (Long-term memory):")
+            for ep in context["episodic_memory"]:
+                lines.append(f"- {ep.get('raw_text', '')}")
+            lines.append("")
+        
+        if not exclude_semantic and context.get("semantic_facts"):
+            lines.append("KNOWN FACTS:")
+            for fact in context["semantic_facts"]:
+                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
+            lines.append("")
+                
+        return "\\n".join(lines) if lines else "No prior context."
 
 
     async def _check_and_trigger_hippocampus(self, user_id: int):
@@ -625,43 +684,6 @@ class RCoreKernel:
         self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
-
-
-    def _format_context_for_llm(self, context: Dict, limit_history: Optional[int] = None, exclude_episodic: bool = False, exclude_semantic: bool = False) -> str:
-        lines = []
-        profile = context.get("user_profile")
-        if profile:
-            lines.append("USER PROFILE (Core Identity):")
-            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
-            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
-            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
-            lines.append("")
-
-
-        if context.get("chat_history"):
-            chat_history = context["chat_history"]
-            if limit_history is not None:
-                chat_history = chat_history[-limit_history:]
-            if chat_history:
-                lines.append("RECENT DIALOGUE:")
-                for msg in chat_history:
-                    role = "User" if msg["role"] == "user" else "Assistant"
-                    lines.append(f"{role}: {msg['content']}")
-                lines.append("") 
-        
-        if not exclude_episodic and context.get("episodic_memory"):
-            lines.append("PAST EPISODES (Long-term memory):")
-            for ep in context["episodic_memory"]:
-                lines.append(f"- {ep.get('raw_text', '')}")
-            lines.append("")
-        
-        if not exclude_semantic and context.get("semantic_facts"):
-            lines.append("KNOWN FACTS:")
-            for fact in context["semantic_facts"]:
-                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
-            lines.append("")
-                
-        return "\\n".join(lines) if lines else "No prior context."
 
 
     async def _mock_perception(self, message: IncomingMessage) -> Dict:
