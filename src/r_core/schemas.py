@@ -13,7 +13,7 @@ class AgentType(str, Enum):
     STRIATUM = "striatum_reward"
     PREFRONTAL = "prefrontal_logic"
     SOCIAL = "social_cortex"
-    UNCERTAINTY = "uncertainty_agent"  # ✨ NEW: Predictive Processing Handler
+    UNCERTAINTY = "uncertainty_agent"  # Predictive Processing Handler
 
 class ProcessingMode(str, Enum):
     FAST_PATH = "fast_path"
@@ -30,13 +30,18 @@ class PersonalitySliders(BaseModel):
     """
     Настройки характера бота (0.0 - 1.0)
     """
+    # Legacy Sliders (still used by Agents?)
     empathy_bias: float = Field(0.5, description="Приоритет чувств vs эффективности")
     dominance_level: float = Field(0.5, description="Лидерство vs Подстройка")
     risk_tolerance: float = Field(0.5, description="Авантюризм vs Осторожность")
-    pace_setting: float = Field(0.5, description="Быстрый (Intuition) vs Медленный (Logic)")
     neuroticism: float = Field(0.1, description="Степень случайности/эмоциональности")
     
-    # === Prediction Error → Dopamine (Награда) ===
+    # === Dashboard Controls (Homeostasis) ===
+    chaos_level: float = Field(0.2, ge=0.0, le=1.0, description="Стабильность vs Хаос (Uncertainty Boost)")
+    learning_speed: float = Field(0.5, ge=0.0, le=1.0, description="Скорость обучения (RL Rate)")
+    persistence: float = Field(0.5, ge=0.0, le=1.0, description="Рассеянность vs Упорство (Fuel Restoration)")
+
+    # === Prediction Error (can be derived from Chaos Level) ===
     pred_threshold: float = Field(0.65, ge=0.1, le=1.0, description="Порог хорошей ошибки (mu)")
     pred_sensitivity: float = Field(10.0, ge=1.0, le=20.0, description="Чувствительность к ошибке (k)")
 
@@ -47,7 +52,6 @@ class BotConfig(BaseModel):
     sliders: PersonalitySliders
     core_values: List[str]
     
-    # ✨ NEW: Experimental flags for Unified Council
     use_unified_council: bool = Field(
         default=False, 
         description="Использовать единый Council Report для всех агентов (включая Intuition)"
@@ -112,9 +116,7 @@ class SemanticTriple(BaseModel):
     object: str
     confidence: float = 1.0
     source_message_id: Optional[str] = None
-    # Affective extension placeholder
     sentiment: Optional[Dict[str, float]] = None
-    # ✨ NEW: Vector embedding for semantic search / clustering
     embedding: Optional[List[float]] = None
 
 class EpisodicAnchor(BaseModel):
@@ -130,13 +132,29 @@ class EpisodicAnchor(BaseModel):
 class VolitionalPattern(BaseModel):
     """
     Паттерн поведения (Micro-Graph)
+    Updated for Phase 2.2 (Attention * Persistence)
     """
-    trigger: str
-    impulse: str
+    # === Core ===
+    trigger: str  # Context Condition (e.g. "time:late_night")
+    impulse: str  # Behavioral Response (e.g. "deep_talk")
+    target: str   # Object of Focus (e.g. "topic:Python")
+    
+    # === Dynamics ===
+    intensity: float = Field(0.5, ge=0.0, le=1.0)
+    fuel: float = Field(1.0, ge=0.0, le=1.0)
+    intrinsic_value: float = Field(0.5, ge=0.0, le=1.0)
+    depletion_rate: float = Field(0.05, ge=0.0, le=1.0)
+    
+    # === State ===
+    turns_active: int = 0
+    last_novelty_turn: int = 0
+    learned_delta: float = Field(0.0, ge=-1.0, le=1.0)
+    
+    # === Legacy / Optional ===
     goal: Optional[str] = None
-    conflict_detected: bool
-    resolution_strategy: str
-    action_taken: str
+    conflict_detected: bool = False
+    resolution_strategy: Optional[str] = None
+    action_taken: Optional[str] = None
 
 # --- Internal Agent Signals ---
 
@@ -149,9 +167,7 @@ class AgentSignal(BaseModel):
     rationale_short: str
     confidence: float = Field(..., ge=0, le=1.0)
     latency_ms: int
-    # Agent's influence on mood
     mood_impact: Optional[MoodVector] = None
-    # Style modulation instruction (Adverb)
     style_instruction: Optional[str] = None
 
 # --- Output ---
@@ -170,10 +186,9 @@ class CoreResponse(BaseModel):
     response_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     actions: List[CoreAction]
     
-    # Meta for debugging & logging
     internal_stats: Dict[str, Any] = Field(default_factory=dict) 
     winning_agent: Optional[AgentType] = None
     current_mood: Optional[MoodVector] = None 
-    current_hormones: Optional[HormonalState] = None # <-- Added Hormones
+    current_hormones: Optional[HormonalState] = None 
     processing_mode: ProcessingMode
     memory_updates: Dict[str, int] = Field(default_factory=dict) 
