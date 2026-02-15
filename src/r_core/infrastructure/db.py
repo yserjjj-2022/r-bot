@@ -55,23 +55,33 @@ class VolitionalModel(Base):
     __tablename__ = "volitional_patterns"
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
+    
+    # === Core ===
     trigger: Mapped[str] = mapped_column(String(255))
     impulse: Mapped[str] = mapped_column(String(255))
-    goal: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    conflict_detected: Mapped[bool] = mapped_column(default=False)
-    resolution_strategy: Mapped[str] = mapped_column(String(255))
-    action_taken: Mapped[str] = mapped_column(Text)
+    target: Mapped[Optional[str]] = mapped_column(String(255), nullable=True) # ✨ NEW: Object of focus
+    goal: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)   # Legacy, keep for now
     
-    # ✨ NEW (Migration 005): Volitional System Fields
-    intensity: Mapped[float] = mapped_column(Float, default=0.5) # Base strength
-    learned_delta: Mapped[float] = mapped_column(Float, default=0.0) # Learning param
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Switch
+    # === State & Dynamics ===
+    intensity: Mapped[float] = mapped_column(Float, default=0.5) 
+    fuel: Mapped[float] = mapped_column(Float, default=1.0) # ✨ NEW: Current fuel
+    learned_delta: Mapped[float] = mapped_column(Float, default=0.0) 
     
-    last_activated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    turns_active: Mapped[int] = mapped_column(Integer, default=0) # ✨ NEW
+    last_novelty_turn: Mapped[int] = mapped_column(Integer, default=0) # ✨ NEW
+    
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True) 
+    
+    # === Config ===
     decay_rate: Mapped[float] = mapped_column(Float, default=0.01)
     reinforcement_rate: Mapped[float] = mapped_column(Float, default=0.05)
-    energy_cost: Mapped[float] = mapped_column(Float, default=0.1) # Future use
     
+    # === Legacy ===
+    conflict_detected: Mapped[bool] = mapped_column(default=False)
+    resolution_strategy: Mapped[str] = mapped_column(String(255), default="")
+    action_taken: Mapped[str] = mapped_column(Text, default="")
+    
+    last_activated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class MetricsModel(Base):
@@ -232,9 +242,22 @@ async def init_models():
             await conn.execute(text(
                 "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS reinforcement_rate FLOAT DEFAULT 0.05"
             ))
-            print("[DB Init] ✅ Volitional System fields added (Migration 005)")
+            # ✨ NEW Migration 006: Phase 2.2 Volitional Spec (Fuel & Target)
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS fuel FLOAT DEFAULT 1.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS target VARCHAR(255) DEFAULT NULL"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS turns_active INTEGER DEFAULT 0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS last_novelty_turn INTEGER DEFAULT 0"
+            ))
+            print("[DB Init] ✅ Volitional System fields added (Migration 006)")
         except Exception as e:
-            print(f"[DB Init] Schema update (volitional): {e}")
+            print(f"[DB Init] Schema update (volitional 006): {e}")
 
 # --- Helper Methods ---
 
