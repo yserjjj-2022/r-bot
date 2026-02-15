@@ -380,7 +380,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 markers=True
             )
             fig_scores.update_layout(xaxis_title="Time", yaxis_title="Activation Score", hovermode="x unified")
-            st.plotly_chart(fig_scores, use_container_width=True)
+            st.plotly_chart(fig_scores, width='stretch')
             
         with c2:
             st.subheader("Hormonal Levels Over Time")
@@ -394,7 +394,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
                 markers=True
             )
             fig_hormones.update_layout(xaxis_title="Time", yaxis_title="Concentration", hovermode="x unified")
-            st.plotly_chart(fig_hormones, use_container_width=True)
+            st.plotly_chart(fig_hormones, width='stretch')
 
     # Timeline Cards
     st.header("📅 Interaction History")
@@ -663,7 +663,7 @@ else:
                             x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
                             y=alt.Y('Agent', sort='-x'),
                             color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))).properties(height=150)
-                        st.altair_chart(chart, use_container_width=True)
+                        st.altair_chart(chart, width='stretch')
 
     # Input
     user_input = st.chat_input("Say something...")
@@ -724,7 +724,7 @@ else:
                                 y=alt.Y('Agent', sort='-x'),
                                 color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
                             ).properties(height=150)
-                            st.altair_chart(chart, use_container_width=True)
+                            st.altair_chart(chart, width='stretch')
 
                     st.session_state.messages.append({
                         "role": "assistant", "content": bot_text,
