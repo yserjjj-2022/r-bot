@@ -15,6 +15,7 @@ from src.r_core.memory import MemorySystem
 from src.r_core.infrastructure.db import AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel
 from src.r_core.config import settings
 import re
+import uuid # ✨ ADDED
 
 # --- Setup Page ---
 st.set_page_config(
@@ -679,7 +680,13 @@ else:
             st.session_state.kernel_instance.config.use_unified_council = use_unified_council
 
         kernel = st.session_state.kernel_instance
-        incoming = IncomingMessage(user_id=999, session_id="streamlit_session", text=user_input)
+        # FIX: ADD MESSAGE_ID
+        incoming = IncomingMessage(
+            user_id=999, 
+            session_id="streamlit_session", 
+            text=user_input,
+            message_id=str(uuid.uuid4()) # ✨ ADDED
+        )
 
         if test_mode == "A/B Test":
             with st.chat_message("user"): st.write(user_input)
