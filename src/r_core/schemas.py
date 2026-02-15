@@ -34,6 +34,7 @@ class PersonalitySliders(BaseModel):
     empathy_bias: float = Field(0.5, description="Приоритет чувств vs эффективности")
     dominance_level: float = Field(0.5, description="Лидерство vs Подстройка")
     risk_tolerance: float = Field(0.5, description="Авантюризм vs Осторожность")
+    pace_setting: float = Field(0.5, ge=0.0, le=1.0, description="Стиль мышления (Интуиция <-> Логика)")
     neuroticism: float = Field(0.1, description="Степень случайности/эмоциональности")
     
     # === Dashboard Controls (Homeostasis) ===

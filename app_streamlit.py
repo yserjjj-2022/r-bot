@@ -659,7 +659,8 @@ else:
                     if "all_scores" in stats:
                         scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
                         chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),\n                            y=alt.Y('Agent', sort='-x'),
+                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
+                            y=alt.Y('Agent', sort='-x'),
                             color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))).properties(height=150)
                         st.altair_chart(chart, use_container_width=True)
 
