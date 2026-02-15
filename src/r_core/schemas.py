@@ -51,6 +51,10 @@ class PersonalitySliders(BaseModel):
     empathy_bias: float = 0.5    # 0.0 (Cold) - 1.0 (Warm)
     curiosity_level: float = 0.5 # 0.0 (Focused) - 1.0 (Explorative)
     pace_setting: float = 0.5    # 0.0 (Slow/Deep) - 1.0 (Fast/Reflex)
+    
+    # ✨ Legacy but required for UI (app_streamlit.py)
+    dominance_level: float = 0.5 # 0.0 (Submissive) - 1.0 (Assertive)
+    
     chaos_level: float = 0.0     # 0.0 (Stable) - 1.0 (Unpredictable) ✨ NEW
     
     # ✨ NEW: Active Inference Controls
