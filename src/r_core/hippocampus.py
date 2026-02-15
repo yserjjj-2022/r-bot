@@ -307,7 +307,7 @@ class Hippocampus:
         "predicate": "...",
         "object": "...",
         "confidence": 0.85,
-        "sentiment": {{ "valence": 0.8, "arousal": 0.5, "dominance": 0.0 }}
+        "sentiment": {{ "valence": 0.8, "arousal": 0.5, \"dominance\": 0.0 }}
     }}
 }}
 """
@@ -486,8 +486,7 @@ class Hippocampus:
             print(f"[Hippocampus] Theme extraction failed: {e}")
             return []
     
-    # ========== TASK 3: Update Volitional Patterns ==========
-    
+    # ========== TASK 3: Update Volitional Patterns ==========\n
     async def _update_volitional_patterns(self, user_id: int) -> Dict[str, Any]:
         """
         Task 3: Обновление volitional_memory (паттерны поведения).
@@ -495,12 +494,6 @@ class Hippocampus:
         Анализируем:
         - Время активности (night_owl / morning_person)
         - Энергетический профиль (high / low energy)
-        
-        ✨ NEW (Update): Reinforcement Learning of Volition
-        Вместо простого добавления, мы теперь:
-        1. Ищем существующий паттерн.
-        2. Если найден: Увеличиваем learned_delta (обучение) и обновляем last_activated_at.
-        3. Если нет: Создаем с базовым intensity.
         """
         async with AsyncSessionLocal() as session:
             # Загрузить эпизоды за последние N дней
@@ -535,16 +528,30 @@ class Hippocampus:
                         "goal": "social_connection",
                         "resolution_strategy": "wait_for_user",
                         "action_taken": "detected_night_owl_pattern",
-                        "intensity": 0.4  # Базовая сила хронотипа
+                        "intensity": 0.4
                     }
                 )
                 patterns_updated += 1
             
-            # --- Analysis 2: High Energy ---
-            avg_emotion = sum(ep.emotion_score for ep in episodes) / len(episodes)
-            energy_level = min(1.0, max(0.0, (avg_emotion + 1.0) / 2.0))  # нормализация -1..1 → 0..1
+            # --- Analysis 2: Energy Level ---
+            # FIX: removed normalization (avg + 1)/2 because data is already 0..1
+            # Assuming emotion_score is float. If it's string in DB, SQLAlchemy casts it usually.
+            total_emotion = 0.0
+            valid_episodes = 0
             
-            if energy_level > 0.5:
+            for ep in episodes:
+                try:
+                    # Robust float conversion just in case
+                    score = float(ep.emotion_score) if ep.emotion_score is not None else 0.0
+                    total_emotion += score
+                    valid_episodes += 1
+                except ValueError:
+                    continue
+            
+            avg_emotion = total_emotion / valid_episodes if valid_episodes > 0 else 0.0
+            
+            # Using raw 0..1 scale now
+            if avg_emotion > 0.75:
                 await self._reinforce_or_create_pattern(
                     session, user_id,
                     trigger="user_message_received",
@@ -552,13 +559,13 @@ class Hippocampus:
                     defaults={
                         "goal": "maintain_engagement",
                         "resolution_strategy": "mirror_energy",
-                        "action_taken": f"detected_high_energy (avg={energy_level:.2f})",
-                        "intensity": 0.7  # Высокая базовая сила
+                        "action_taken": f"detected_high_energy (avg={avg_emotion:.2f})",
+                        "intensity": 0.8
                     }
                 )
                 patterns_updated += 1
             
-            elif energy_level < 0.3:
+            elif avg_emotion < 0.5:
                 await self._reinforce_or_create_pattern(
                     session, user_id,
                     trigger="user_message_received",
@@ -566,8 +573,8 @@ class Hippocampus:
                     defaults={
                         "goal": "gentle_engagement",
                         "resolution_strategy": "soothing_tone",
-                        "action_taken": f"detected_low_energy (avg={energy_level:.2f})",
-                        "intensity": 0.3  # Низкая базовая сила
+                        "action_taken": f"detected_low_energy (avg={avg_emotion:.2f})",
+                        "intensity": 0.4
                     }
                 )
                 patterns_updated += 1
@@ -577,7 +584,8 @@ class Hippocampus:
             return {
                 "status": "ok",
                 "episodes_analyzed": len(episodes),
-                "patterns_updated": patterns_updated
+                "patterns_updated": patterns_updated,
+                "avg_emotion_calculated": avg_emotion
             }
             
     async def _reinforce_or_create_pattern(
@@ -620,8 +628,7 @@ class Hippocampus:
             # ✨ CREATE: Создаем новый паттерн
             new_pattern = VolitionalModel(
                 user_id=user_id,
-                trigger=trigger,
-                impulse=impulse,
+                trigger=trigger,\n                impulse=impulse,
                 goal=defaults.get("goal"),
                 resolution_strategy=defaults.get("resolution_strategy"),
                 action_taken=defaults.get("action_taken"),
@@ -640,8 +647,7 @@ class Hippocampus:
     
     async def _reset_consolidation_counter(self, user_id: int):
         """Сбросить short_term_memory_load = 0 и обновить last_consolidation_at"""
-        async with AsyncSessionLocal() as session:
-            await session.execute(
+        async with AsyncSessionLocal() as session:\n            await session.execute(
                 text("""
                     UPDATE user_profiles
                     SET short_term_memory_load = 0,
@@ -684,15 +690,13 @@ class Hippocampus:
                         "session_id": session_id,
                         "bot_message": bot_message,
                         "predicted_reaction": predicted_reaction,
-                        "predicted_embedding": emb_str
-                    }
+                        "predicted_embedding": emb_str\n                    }
                 )
                 new_id = result.scalar()
                 await session.commit()
                 print(f"[Hippocampus] DEBUG: DB Commit Successful. Created Prediction ID={new_id}")
         except Exception as e:
-             print(f"[Hippocampus] ❌ FATAL DB ERROR in save_prediction: {e}")
-             raise e
+             print(f"[Hippocampus] ❌ FATAL DB ERROR in save_prediction: {e}\")\n             raise e
 
     async def get_last_prediction(self, session_id: str) -> Optional[Dict]:
         """
@@ -755,8 +759,7 @@ class Hippocampus:
                 return data
                 
         except Exception as e:
-            print(f"[Hippocampus] ❌ FATAL DB ERROR in get_last_prediction: {e}")
-            return None
+            print(f"[Hippocampus] ❌ FATAL DB ERROR in get_last_prediction: {e}\")\n            return None
 
     async def verify_prediction(self, 
                               prediction_id: int, 
