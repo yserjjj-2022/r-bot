@@ -30,16 +30,19 @@ class MoodVector(BaseModel):
 
 class HormonalState(BaseModel):
     """
-    Biochemical internal state simulation.
+    Biochemical internal state simulation (Lovheim Cube).
+    Updated to match neuromodulation.py keys.
     """
-    cortisol: float = 0.2    # Stress (0.0 - 1.0)
-    dopamine: float = 0.5    # Reward/Motivation
-    oxytocin: float = 0.5    # Social Bonding
-    serotonin: float = 0.5   # Mood Stability
-    adrenaline: float = 0.1  # Acute Arousal (Fight/Flight)
+    cort: float = 0.1     # Cortisol (Stress)
+    da: float = 0.5       # Dopamine (Reward/Motivation)
+    ht: float = 0.5       # Serotonin (5-HT, Mood Stability)
+    ne: float = 0.1       # Norepinephrine (Arousal/Vigilance)
+    oxytocin: float = 0.5 # Social Bonding (Extra axis)
+    
+    last_update: datetime = Field(default_factory=datetime.utcnow) # ✨ NEW
 
     def __str__(self):
-        return f"Cort:{self.cortisol:.2f} Dop:{self.dopamine:.2f} Oxy:{self.oxytocin:.2f} Ser:{self.serotonin:.2f} Adr:{self.adrenaline:.2f}"
+        return f"NE:{self.ne:.2f} DA:{self.da:.2f} 5HT:{self.ht:.2f} CORT:{self.cort:.2f}"
 
 # --- Configuration Schemas ---
 
