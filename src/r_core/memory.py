@@ -396,6 +396,9 @@ class MemorySystem:
 
         # ✨ 6. NEW: Affective Context — сканирование на эмоционально заряженные объекты
         affective_warnings = await self._extract_affective_context(user_id, current_text)
+        
+        # ✨ 7. NEW: Relevant Profile Traits — фильтрация черт личности по теме
+        relevant_traits = self._filter_relevant_profile(profile, current_text)
 
         return {
             "episodic_memory": [e.dict() for e in episodic],
@@ -403,7 +406,8 @@ class MemorySystem:
             "known_patterns": [p.dict() for p in patterns],
             "chat_history": history,
             "user_profile": profile,
-            "affective_context": affective_warnings  # ✨ NEW
+            "affective_context": affective_warnings,  # ✨ NEW
+            "relevant_traits": relevant_traits        # ✨ NEW
         }
 
     async def _extract_affective_context(self, user_id: int, text: str) -> List[Dict]:
@@ -429,6 +433,43 @@ class MemorySystem:
                 })
         
         return warnings
+
+    def _filter_relevant_profile(self, profile: Optional[Dict], current_text: str) -> List[str]:
+        """
+        ✨ NEW: Filters user profile traits to find only those relevant to the current conversation context.
+        Uses simple keyword matching for MVP (Topic Tracker Light).
+        
+        Example:
+        - Text: "How do I fix this Python bug?"
+        - Profile Traits: ["Python Expert", "Loves Cats", "Night Owl"]
+        - Result: ["Python Expert"] (Relevance > 0)
+        """
+        if not profile or not profile.get("attributes"):
+            return []
+            
+        traits = profile["attributes"].get("personality_traits", [])
+        if not traits:
+            return []
+            
+        relevant = []
+        text_lower = current_text.lower()
+        
+        for trait in traits:
+            name = trait.get("name", "")
+            # Simple keyword match: Check if any word from trait name appears in text
+            # E.g. Trait "Python Expert" matches text "python bug"
+            trait_words = name.lower().split()
+            if any(word in text_lower for word in trait_words if len(word) > 3):
+                relevant.append(f"{name} (weight={trait.get('weight', 0.5)})")
+                
+        # If no specific matches, return top 2 dominant traits just in case
+        if not relevant and traits:
+            # Sort by weight
+            sorted_traits = sorted(traits, key=lambda x: x.get("weight", 0.0), reverse=True)
+            top_traits = sorted_traits[:2]
+            return [f"{t.get('name')} (Dominant)" for t in top_traits]
+            
+        return relevant
 
     async def update_user_profile(self, user_id: int, updates: Dict):
         """Service method to update profile"""
