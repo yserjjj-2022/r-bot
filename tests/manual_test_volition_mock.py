@@ -1,6 +1,13 @@
+import sys
+import os
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
+
+# --- FIX: Add project root to sys.path ---
+# Это позволяет запускать скрипт из любой папки: python3 tests/manual_test_volition_mock.py
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.r_core.hippocampus import Hippocampus
 from src.r_core.infrastructure.db import ChatHistoryModel, VolitionalModel
 
@@ -37,16 +44,7 @@ async def run_test():
     embedder = MockEmbedder()
     hippo = Hippocampus(llm_client=llm, embedding_client=embedder)
     
-    # 2. Mock DB Session and Data
-    # We need to monkeypatch the AsyncSessionLocal used inside Hippocampus
-    # OR we can just test the internal logic if we refactor, but here we'll mock the db call context.
-    
-    # Since we can't easily mock the internal AsyncSessionLocal context manager without 
-    # complex patching, we will assume the user runs this in an env where DB is accessible
-    # OR we demonstrate the logic by extracting the LLM part which is the core change.
-    
-    # Let's test the LLM extraction part specifically, which is isolated.
-    
+    # 2. Mock Data
     messages = [
         ChatHistoryModel(role="user", content="Привет"),
         ChatHistoryModel(role="assistant", content="Привет!"),
@@ -59,13 +57,15 @@ async def run_test():
     for m in messages:
         print(f" - {m.role}: {m.content}")
         
-    # Test private method _llm_extract_volitional_intent directly
+    # 3. Test private method _llm_extract_volitional_intent directly
+    # Note: We are testing the logic of extraction and parsing, not the DB save part here
     patterns = await hippo._llm_extract_volitional_intent(messages)
     
     print("\n✅ Result Patterns:")
     for p in patterns:
         print(p)
         
+    # 4. Assertions
     assert len(patterns) == 1
     assert patterns[0]['target'] == "Spanish"
     assert patterns[0]['impulse'] == "laziness"
