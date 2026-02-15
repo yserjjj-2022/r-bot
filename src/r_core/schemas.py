@@ -54,11 +54,13 @@ class PersonalitySliders(BaseModel):
     
     # ✨ Legacy but required for UI (app_streamlit.py)
     dominance_level: float = 0.5 # 0.0 (Submissive) - 1.0 (Assertive)
+    neuroticism: float = 0.1     # 0.0 (Stable) - 1.0 (Neurotic)
     
     chaos_level: float = 0.0     # 0.0 (Stable) - 1.0 (Unpredictable) ✨ NEW
     
     # ✨ NEW: Active Inference Controls
     pred_threshold: float = 0.8  # Порог ошибки для активации Uncertainty (0.1 - 1.0)
+    pred_sensitivity: float = 10.0 # Резкость реакции (k)
     persistence: float = 0.5     # Воля/Упрямство (0.0 - 1.0)
     learning_speed: float = 0.5  # Скорость обучения (Plasticity)
 
