@@ -242,7 +242,7 @@ def get_winner_safe(metrics_data):
     # 2. Вычисление по максимальному скору (если есть all_scores)
     scores = extract_scores(metrics_data)
     if scores and max(scores.values()) > 0:
-        winner = max(scores, key=scores.get)
+        winner = max(scores.items(), key=lambda x: x[1])[0]
         return winner
         
     return "Unknown"
@@ -395,8 +395,7 @@ if app_mode == "📈 Encephalogram (Analytics)":
     # Обратный порядок для ленты
     for i in range(len(timeline)-1, -1, -1):
         item = timeline[i]
-        prev_item = timeline[i-1] if i > 0 else None
-        
+        prev_item = timeline[i-1] if i > 0 else None\n        
         winner_display = item['winner']
         if winner_display == "Unknown": winner_display = "⚠️ Log Missing"
 
@@ -649,8 +648,7 @@ else:
         if st.session_state.kernel_instance is None:
             # FIX: Use empty lists for values if needed, but ensure config is valid
             config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
-            config.gender = st.session_state.bot_gender
-            st.session_state.kernel_instance = RCoreKernel(config)
+            config.gender = st.session_state.bot_gender\n            st.session_state.kernel_instance = RCoreKernel(config)
         else:
             st.session_state.kernel_instance.config.name = st.session_state.bot_name
             st.session_state.kernel_instance.config.sliders = st.session_state.sliders
