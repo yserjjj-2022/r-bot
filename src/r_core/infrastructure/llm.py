@@ -313,7 +313,9 @@ class LLMService:
             "   INSTEAD: Write the LITERAL FIRST-PERSON PHRASE you expect them to say (e.g. 'Спасибо, это помогло!' or 'Why is that?').\\n"
             "   This is used for vector similarity comparison."
         )
-
+        
+        # 🕵️ DEBUG PRINT: Inspect FULL prompt before sending
+        print(f"\\n[DEBUG] FULL SYSTEM PROMPT (Before Send):\\n{system_prompt}\\n[END PROMPT]\\n")
 
         try:
             response_data = await self._safe_chat_completion(
