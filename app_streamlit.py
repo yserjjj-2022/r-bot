@@ -14,6 +14,7 @@ from src.r_core.memory import MemorySystem
 # FIX: Removed init_models to prevent auto-migration
 from src.r_core.infrastructure.db import AsyncSessionLocal, AgentProfileModel, UserProfileModel, SemanticModel
 from src.r_core.config import settings
+from src.interfaces.ui.hud import render_neuro_hud  # ✨ IMPORT HUD
 import re
 import uuid # ✨ ADDED
 
@@ -480,7 +481,7 @@ elif app_mode == "🧬 Brain Structure (Introspection)":
             cols = st.columns(len(snapshot["active_agents"]))
             for i, agent in enumerate(snapshot["active_agents"]):
                 with cols[i]:
-                    st.info(f"**{agent['name']}**\n\n`{agent['class']}`\n\n_{agent['description']}_")
+                    st.info(f"**{agent['name']}**\\n\\n`{agent['class']}`\\n\\n_{agent['description']}_")
             
             # 2. Subsystems
             st.header("2. Подсистемы")
@@ -651,19 +652,8 @@ else:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
                 if msg["role"] == "assistant" and "meta" in msg:
-                    stats = msg["meta"]
-                    w_name = msg.get("winner", "Unknown")
-                    caption = f"🏆 Winner: **{w_name}**"
-                    if stats.get("sentiment_context_used"): caption += " | 💚 Sentiment Used"
-                    st.caption(caption)
-                    
-                    if "all_scores" in stats:
-                        scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
-                        chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                            x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
-                            y=alt.Y('Agent', sort='-x'),
-                            color=alt.condition(alt.datum.Agent == w_name, alt.value('orange'), alt.value('lightgray'))).properties(height=150)
-                        st.altair_chart(chart, width='stretch')
+                    # ✨ USE HUD FOR HISTORY
+                    render_neuro_hud(msg["meta"])
 
     # Input
     user_input = st.chat_input("Say something...")
@@ -715,16 +705,8 @@ else:
                     
                     with st.chat_message("assistant"):
                         st.write(bot_text)
-                        st.caption(f"🏆 Winner: {response.winning_agent.value}")
-                        
-                        if "all_scores" in stats:
-                            scores_df = pd.DataFrame([{"Agent": k, "Score": v} for k, v in stats["all_scores"].items()])
-                            chart = alt.Chart(scores_df).mark_bar(size=15).encode(
-                                x=alt.X('Score', scale=alt.Scale(domain=[0, 10])),
-                                y=alt.Y('Agent', sort='-x'),
-                                color=alt.condition(alt.datum.Agent == response.winning_agent.value, alt.value('orange'), alt.value('lightgray'))
-                            ).properties(height=150)
-                            st.altair_chart(chart, width='stretch')
+                        # ✨ RENDER LIVE HUD
+                        render_neuro_hud(stats)
 
                     st.session_state.messages.append({
                         "role": "assistant", "content": bot_text,
