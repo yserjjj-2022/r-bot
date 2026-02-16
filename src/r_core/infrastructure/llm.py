@@ -264,12 +264,12 @@ class LLMService:
             (reply_text: str, predicted_user_reaction: str | None)
         """
         personas = {
-            "amygdala_safety": "You are AMYGDALA (Protector). Protective, firm, concise.",
-            "prefrontal_logic": "You are LOGIC (Analyst). Precise, factual, helpful.",
-            "social_cortex": "You are SOCIAL (Empath). Warm, polite, supportive.",
-            "striatum_reward": "You are REWARD (Drive). Energetic, playful, curious.",
-            "intuition_system1": "You are INTUITION (Mystic). Short, insightful bursts.",
-            "uncertainty_agent": "You are UNCERTAINTY (Seeker). Curious, verifying, clarifying."
+            "amygdala": "You are AMYGDALA (Protector). Protective, firm, concise.",
+            "prefrontal": "You are LOGIC (Analyst). Precise, factual, helpful.",
+            "social": "You are SOCIAL (Empath). Warm, polite, supportive.",
+            "striatum": "You are REWARD (Drive). Energetic, playful, curious.",
+            "intuition": "You are INTUITION (Mystic). Short, insightful bursts.",
+            "uncertainty": "You are UNCERTAINTY (Seeker). Curious, verifying, clarifying."
         }
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
@@ -314,9 +314,6 @@ class LLMService:
             "   This is used for vector similarity comparison."
         )
         
-        # 🕵️ DEBUG PRINT: Inspect FULL prompt before sending
-        print(f"\\n[DEBUG] FULL SYSTEM PROMPT (Before Send):\\n{system_prompt}\\n[END PROMPT]\\n")
-
         try:
             response_data = await self._safe_chat_completion(
                 messages=[
