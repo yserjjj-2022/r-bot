@@ -257,8 +257,31 @@ class RCoreKernel:
             print(f"[Pipeline] Using LEGACY mode")
 
 
+        # === ✨ VOLITIONAL GATING (Step 1: Selection) ===
+        volitional_patterns = context.get("volitional_patterns", [])
+        dominant_volition = self._select_dominant_volition(volitional_patterns, message.user_id)
+        
+        volitional_instruction = ""
+        if dominant_volition:
+            impulse = dominant_volition.get("impulse", "UNKNOWN")
+            fuel = dominant_volition.get("fuel", 0.5)
+            
+            volitional_instruction = (
+                f"\\nVOLITIONAL DIRECTIVE (Focus):\\n"
+                f"- TARGET: {dominant_volition.get('target')}\\n"
+                f"- IMPULSE: {impulse} (Fuel Level: {fuel:.2f})\\n"
+                f"- STRATEGY: {dominant_volition.get('resolution_strategy')}\\n"
+            )
+            print(f"[Volition] Selected dominant pattern: {impulse} (fuel={fuel:.2f})")
+
+
         # ✨ Apply Hormonal Modulation BEFORE arbitration
         signals = self._apply_hormonal_modulation(signals)
+        
+        # === ✨ VOLITIONAL MODULATION (Step 2: Matrix Application) ===
+        # This applies the 'Matrix' multipliers to agent scores
+        if dominant_volition:
+            signals = self._apply_volitional_modulation(signals, dominant_volition)
         
         # ✨ Apply CHAOS Injection (Entropy) BEFORE arbitration
         signals = self._apply_chaos(signals)
@@ -290,20 +313,6 @@ class RCoreKernel:
         
         self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name)
         
-        # === ✨ VOLITIONAL GATING ===
-        volitional_patterns = context.get("volitional_patterns", [])
-        dominant_volition = self._select_dominant_volition(volitional_patterns, message.user_id)
-        
-        volitional_instruction = ""
-        if dominant_volition:
-            volitional_instruction = (
-                f"\\nVOLITIONAL DIRECTIVE (Focus):\\n"
-                f"- TRIGGER: {dominant_volition.get('trigger')}\\n"
-                f"- IMPULSE: {dominant_volition.get('impulse')}\\n"
-                f"- STRATEGY: {dominant_volition.get('resolution_strategy')}\\n"
-                f"- NOTE: {dominant_volition.get('action_taken')}\\n"
-            )
-            print(f"[Volition] Selected dominant pattern: {dominant_volition.get('impulse')} (score={dominant_volition.get('effective_score', 0):.2f})")
         
         # 5. Response Generation 
         response_context_str = self._format_context_for_llm(context)
@@ -493,6 +502,79 @@ class RCoreKernel:
         
         return winner
 
+    def _apply_volitional_modulation(self, signals: List[AgentSignal], pattern: Dict) -> List[AgentSignal]:
+        """
+        ⚖️ VOLITIONAL STRATEGY MATRIX IMPLEMENTATION
+        Applies multipliers to agents based on Impulse Type and Fuel Level.
+        Ref: docs/volitional_matrix.md
+        """
+        impulse = pattern.get("impulse", "").upper()
+        fuel = pattern.get("fuel", 0.5)
+        
+        # Default Multipliers (No change)
+        multipliers = {
+            AgentType.INTUITION: 1.0,
+            AgentType.AMYGDALA: 1.0,
+            AgentType.PREFRONTAL: 1.0,
+            AgentType.SOCIAL: 1.0,
+            AgentType.STRIATUM: 1.0
+        }
+        
+        strategy_name = "Standard"
+
+        # === 1. LAZINESS / PROCRASTINATION ===
+        if "LAZI" in impulse or "PROCRAST" in impulse or "APATHY" in impulse:
+            if fuel < 0.4: # Low Fuel -> Baby Steps
+                strategy_name = "Baby Steps (Low Fuel)"
+                multipliers[AgentType.SOCIAL] = 1.5
+                multipliers[AgentType.INTUITION] = 1.3
+                multipliers[AgentType.PREFRONTAL] = 0.5 # Don't push logic
+            elif fuel > 0.7: # High Fuel -> Challenge
+                strategy_name = "Challenge (High Fuel)"
+                multipliers[AgentType.PREFRONTAL] = 1.4
+                multipliers[AgentType.STRIATUM] = 1.2
+                multipliers[AgentType.SOCIAL] = 0.6
+        
+        # === 2. FEAR / ANXIETY ===
+        elif "FEAR" in impulse or "ANXI" in impulse or "SCARE" in impulse:
+            if fuel < 0.4: # Low Fuel -> Safe Space
+                strategy_name = "Safe Space (Low Fuel)"
+                multipliers[AgentType.SOCIAL] = 1.6
+                multipliers[AgentType.AMYGDALA] = 1.2 # Validate fear
+                multipliers[AgentType.PREFRONTAL] = 0.4
+            elif fuel > 0.7: # High Fuel -> Deconstruction
+                strategy_name = "Rationalization (High Fuel)"
+                multipliers[AgentType.PREFRONTAL] = 1.5
+                multipliers[AgentType.INTUITION] = 1.3
+        
+        # === 3. ANGER / RAGE ===
+        elif "ANGER" in impulse or "RAGE" in impulse or "HATE" in impulse:
+            if fuel < 0.4: # Low Fuel -> Ventilation
+                strategy_name = "Ventilation (Low Fuel)"
+                multipliers[AgentType.SOCIAL] = 1.8
+                multipliers[AgentType.PREFRONTAL] = 0.2 # Do not argue
+            elif fuel > 0.7: # High Fuel -> Redirection
+                strategy_name = "Redirection (High Fuel)"
+                multipliers[AgentType.AMYGDALA] = 1.3
+                multipliers[AgentType.STRIATUM] = 1.4
+
+        # === 4. BOREDOM ===
+        elif "BORED" in impulse or "ROUTINE" in impulse:
+            strategy_name = "Gamification"
+            multipliers[AgentType.STRIATUM] = 1.5
+            multipliers[AgentType.INTUITION] = 1.5
+            multipliers[AgentType.PREFRONTAL] = 0.7
+
+        print(f"[Volition] Applying Strategy: {strategy_name} (Fuel={fuel:.2f})")
+        
+        # Apply multipliers
+        for s in signals:
+            mult = multipliers.get(s.agent_name, 1.0)
+            if mult != 1.0:
+                s.score = max(0.0, min(10.0, s.score * mult))
+                s.rationale_short += f" [Volition x{mult}]"
+                
+        return signals
 
     async def _process_affective_extraction(self, message: IncomingMessage, extracts: List[Dict]):
         """Helper to process extracted emotions"""
