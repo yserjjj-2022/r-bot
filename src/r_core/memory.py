@@ -116,16 +116,46 @@ class PostgresMemoryStore(AbstractMemoryStore):
 
     async def save_pattern(self, user_id: int, pattern: VolitionalPattern):
         async with AsyncSessionLocal() as session:
-            entry = VolitionalModel(
-                user_id=user_id,
-                trigger=pattern.trigger,
-                impulse=pattern.impulse,
-                goal=pattern.goal,
-                conflict_detected=pattern.conflict_detected,
-                resolution_strategy=pattern.resolution_strategy,
-                action_taken=pattern.action_taken
+            # Check if pattern exists (by trigger + impulse + target)
+            stmt = select(VolitionalModel).where(
+                VolitionalModel.user_id == user_id,
+                VolitionalModel.trigger == pattern.trigger,
+                VolitionalModel.impulse == pattern.impulse,
+                VolitionalModel.target == pattern.target
             )
-            session.add(entry)
+            result = await session.execute(stmt)
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update existing
+                existing.goal = pattern.goal
+                existing.intensity = pattern.intensity
+                existing.fuel = pattern.fuel
+                existing.learned_delta = pattern.learned_delta
+                existing.conflict_detected = pattern.conflict_detected
+                existing.resolution_strategy = pattern.resolution_strategy
+                existing.action_taken = pattern.action_taken
+                existing.last_activated_at = datetime.utcnow()
+            else:
+                # Create new
+                entry = VolitionalModel(
+                    user_id=user_id,
+                    trigger=pattern.trigger,
+                    impulse=pattern.impulse,
+                    target=pattern.target, # ✨ NEW
+                    goal=pattern.goal,
+                    
+                    intensity=pattern.intensity,
+                    fuel=pattern.fuel, # ✨ NEW
+                    learned_delta=pattern.learned_delta,
+                    
+                    conflict_detected=pattern.conflict_detected,
+                    resolution_strategy=pattern.resolution_strategy,
+                    action_taken=pattern.action_taken,
+                    last_activated_at=datetime.utcnow()
+                )
+                session.add(entry)
+            
             await session.commit()
 
     async def search_episodic(self, user_id: int, query_vector: List[float], params: VectorStoreParams) -> List[EpisodicAnchor]:
@@ -201,12 +231,20 @@ class PostgresMemoryStore(AbstractMemoryStore):
             rows = result.scalars().all()
             return [
                 VolitionalPattern(
+                    id=r.id, # ✨ Critical for updates
                     trigger=r.trigger,
                     impulse=r.impulse,
+                    target=r.target, # ✨ Critical for Volitional Gating
                     goal=r.goal,
+                    
+                    intensity=r.intensity,
+                    fuel=r.fuel, # ✨ Critical for Modulation Matrix
+                    learned_delta=r.learned_delta,
+                    
                     conflict_detected=r.conflict_detected,
                     resolution_strategy=r.resolution_strategy,
-                    action_taken=r.action_taken
+                    action_taken=r.action_taken,
+                    last_activated_at=r.last_activated_at
                 ) for r in rows
             ]
 
@@ -403,7 +441,8 @@ class MemorySystem:
         return {
             "episodic_memory": [e.dict() for e in episodic],
             "semantic_facts": [s.dict() for s in semantic],
-            "known_patterns": [p.dict() for p in patterns],
+            "volitional_patterns": [p.dict() for p in patterns], # ✨ Use CORRECT key matching memory.py return type
+            "known_patterns": [p.dict() for p in patterns],      # Keep legacy key for safety
             "chat_history": history,
             "user_profile": profile,
             "affective_context": affective_warnings,  # ✨ NEW
@@ -464,7 +503,7 @@ class MemorySystem:
                 
         # If no specific matches, return top 2 dominant traits just in case
         if not relevant and traits:
-            # Sort by weight
+            # Sort by weight (descending)
             sorted_traits = sorted(traits, key=lambda x: x.get("weight", 0.0), reverse=True)
             top_traits = sorted_traits[:2]
             return [f"{t.get('name')} (Dominant)" for t in top_traits]
