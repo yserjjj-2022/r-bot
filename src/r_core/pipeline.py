@@ -130,7 +130,7 @@ class RCoreKernel:
         # --- ZOMBIE MODE ---
         if mode == "ZOMBIE":
             simple_response, _ = await self.llm.generate_response( 
-                 "prefrontal_logic", message.text, "", "", user_mode="formal"
+                 "prefrontal", message.text, "", "", user_mode="formal"
             )
             latency = (datetime.now() - start_time).total_seconds() * 1000
             
@@ -385,6 +385,7 @@ class RCoreKernel:
         
         internal_stats = {
             "latency_ms": int(latency),
+            "winner_agent": winner.agent_name.value, # ✨ FIXED: Explicitly save winner name
             "winner_score": winner.score,
             "winner_reason": winner.rationale_short,
             "all_scores": {s.agent_name.value: round(s.score, 2) for s in signals},
