@@ -36,6 +36,7 @@ The bot acts as a **Companion for Development**:
 
 ### Volitional System (The Will)
 *   **Storage:** `volitional_patterns` table.
+*   **Reference:** See [Volitional Strategy Matrix](volitional_matrix.md) for detailed agent modulation rules.
 *   **Dynamics:**
     *   *Reinforcement:* Successful acts increase `fuel` and `intensity`.
     *   *Decay:* Unused patterns lose `fuel` over time.
