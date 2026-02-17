@@ -275,27 +275,48 @@ class LLMService:
         
         system_persona = personas.get(agent_name, "You are a helpful AI.")
         
-        # === SIMPLIFIED ADDRESS INSTRUCTION (ONLY ONE ACTIVE) ===
-        address_block = ""
-        
-        if user_mode == "informal":
-            address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой').\\n\\n"
-        else:
-            address_block = "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш').\\n\\n"
-            
-        # ✨ Inject bot description if present
-        description_block = ""
+        # === 1. IDENTITY & PERSONA CONSTRUCTION ===
         if bot_description:
-            description_block = f"PERSONA / DESCRIPTION:\\n{bot_description}\\n"
+             # ✨ PRIORITY: DB-Driven Persona
+             # We explicitly override the default "AI assistant" framing.
+             identity_block = (
+                 f"CORE IDENTITY / ROLE:\\n"
+                 f"{bot_description}\\n"
+                 f"Name: {bot_name}. Gender: {bot_gender}.\\n"
+                 f"IMPORTANT: You are NOT a generic AI assistant. You are the character described above. "
+                 f"Stay in character at all times.\\n"
+             )
+        else:
+             # Fallback
+             identity_block = (
+                 f"IDENTITY: You are a helpful AI assistant named {bot_name}. "
+                 f"Gender: {bot_gender}.\\n"
+             )
 
 
+        # === 2. ADDRESSING MODE (Russian Specifics) ===
+        if user_mode == "informal":
+            address_block = (
+                "LANGUAGE RULES (Russian):\\n"
+                "- You MUST address the user as 'ТЫ' (informal/friendly).\\n"
+                "- Do NOT use 'Вы' (formal).\\n"
+                "- Be natural, direct, and close.\\n"
+            )
+        else:
+            address_block = (
+                "LANGUAGE RULES (Russian):\\n"
+                "- You MUST address the user as 'ВЫ' (formal/polite).\\n"
+                "- Maintain professional or respectful distance.\\n"
+            )
+            
+        
+        # === 3. FINAL SYSTEM PROMPT ===
         system_prompt = (
-            f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\\n"
-            f"{description_block}"
-            f"ROLE (Current Active Agent): {system_persona}\\n"
+            f"{identity_block}\\n"
+            f"{address_block}\\n"
+            f"CURRENT FUNCTIONAL STATE (Active Agent): {system_persona}\\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\\n"
             "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\\n\\n"
-            f"{address_block}"
             "--- CONVERSATION MEMORY ---\\n"
             f"{context_str}\\n\\n"
         )
@@ -363,16 +384,16 @@ class LLMService:
             "2. Fear/Avoidance loops ('Scared to call' -> Avoidance)\\n"
             "3. Anger/Venting loops ('I hate X' -> Rage)\\n"
             "4. Routine/Boredom loops ('Nothing to do' -> Apathy)\\n\\n"
-            "INPUT:\\n"
+            "INPUT:\\\\n"
             f"History Context:\\n{history_str}\\n\\n"
-            "Current Message:\\n"
+            "Current Message:\\\\n"
             f"'{user_text}'\\n\\n"
             "OUTPUT FORMAT (JSON Only):\\n"
             "If a pattern is detected, return:\\n"
             "{ 'pattern_found': true, 'trigger': 'Brief trigger description (e.g. Phone Call)', 'impulse': 'Brief reaction (e.g. Avoidance)', 'target': 'Specific object if any (e.g. Client)' }\\n"
             "If NO clear pattern or just a one-off event, return:\\n"
             "{ 'pattern_found': false }\\n\\n"
-            "CONSTRAINTS:\\n"
+            "CONSTRAINTS:\\\\n"
             "- Be abstract with Trigger/Impulse (use standard psychological terms where possible).\\n"
             "- 'target' should be specific to the context."
         )
