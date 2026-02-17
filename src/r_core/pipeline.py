@@ -92,6 +92,9 @@ class RCoreKernel:
             "turns_remaining": 0,
             "user_id": None
         }
+        
+        # Counter for Volitional Detection throttling
+        self.volition_check_counter = 0
 
 
     def get_architecture_snapshot(self) -> Dict:
@@ -824,8 +827,7 @@ class RCoreKernel:
             AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) 
         }
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
-        
+        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05\n        
         self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
@@ -850,12 +852,18 @@ class RCoreKernel:
         history_str = "\\n".join(history_lines)
         
         volitional_pattern = None
-        # Only run detection if history is sufficient
-        if len(chat_history) >= 2:
-             print("[Pipeline] Scanning for volitional patterns...")
+        
+        # Increase counter
+        self.volition_check_counter += 1
+        
+        # Only run detection if history is sufficient AND Throttled (1 in 5)
+        if len(chat_history) >= 2 and (self.volition_check_counter % 5 == 0):
+             print(f"[Pipeline] Scanning for volitional patterns (Turn {self.volition_check_counter})...")
              volitional_pattern = await self.llm.detect_volitional_pattern(message.text, history_str)
              if volitional_pattern:
                  print(f"[Pipeline] Pattern DETECTED: {volitional_pattern['trigger']} -> {volitional_pattern['impulse']}")
+        else:
+             print(f"[Pipeline] Volition scan skipped (Turn {self.volition_check_counter})")
         
         return {
             "triples": [], 
