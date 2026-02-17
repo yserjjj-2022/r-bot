@@ -118,6 +118,7 @@ class VolitionalPattern(BaseModel):
     # Config
     decay_rate: float = 0.01
     reinforcement_rate: float = 0.05
+    energy_cost: float = 0.1 # ✨ NEW: Cost per turn
     
     # Legacy
     conflict_detected: bool = False
