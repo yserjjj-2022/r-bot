@@ -1,7 +1,7 @@
 import uuid
+import math
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-import math
 from pydantic import BaseModel
 from sqlalchemy import select, desc, or_
 
@@ -115,8 +115,20 @@ class PostgresMemoryStore(AbstractMemoryStore):
             await session.commit()
 
     async def save_pattern(self, user_id: int, pattern: VolitionalPattern):
+        """
+        🎯 Smart Upsert для волевых паттернов с сигмоидальным обучением.
+        
+        Логика:
+        1. Ищем существующий паттерн по (trigger, impulse, target)
+        2. Если найден:
+           - Применяем sigmoid learning (быстрый рост вначале, насыщение)
+           - Восстанавливаем fuel (подтверждение "заряжает" паттерн)
+           - Обновляем timestamp
+        3. Если не найден:
+           - Создаем новую запись с базовым весом
+        """
         async with AsyncSessionLocal() as session:
-            # Check if pattern exists (by trigger + impulse + target)
+            # Поиск существующего паттерна
             stmt = select(VolitionalModel).where(
                 VolitionalModel.user_id == user_id,
                 VolitionalModel.trigger == pattern.trigger,
@@ -127,34 +139,55 @@ class PostgresMemoryStore(AbstractMemoryStore):
             existing = result.scalar_one_or_none()
 
             if existing:
-                # Update existing
-                existing.goal = pattern.goal
-                existing.intensity = pattern.intensity
-                existing.fuel = pattern.fuel
-                existing.learned_delta = pattern.learned_delta
-                existing.conflict_detected = pattern.conflict_detected
-                existing.resolution_strategy = pattern.resolution_strategy
-                existing.action_taken = pattern.action_taken
+                # === REINFORCEMENT (Усиление) ===
+                # Sigmoid Learning: Δweight = base_rate * (1 - intensity)
+                # Первые разы: быстрый рост (intensity ~ 0.5 → Δ = 0.05 * 0.5 = 0.025)
+                # Насыщение: медленный рост (intensity ~ 0.9 → Δ = 0.05 * 0.1 = 0.005)
+                old_intensity = existing.intensity
+                learning_rate = pattern.reinforcement_rate * (1.0 - old_intensity)
+                new_intensity = min(1.0, old_intensity + learning_rate)
+                
+                existing.intensity = new_intensity
+                existing.learned_delta += learning_rate  # Накопительная метрика
+                
+                # Восстанавливаем fuel (подтверждение паттерна)
+                existing.fuel = min(1.0, existing.fuel + 0.2)
+                
+                # Обновляем метаданные
                 existing.last_activated_at = datetime.utcnow()
+                existing.turns_active += 1
+                
+                print(f"[Volition] Reinforced: {pattern.impulse} | {old_intensity:.2f} → {new_intensity:.2f} | fuel={existing.fuel:.2f}")
             else:
-                # Create new
+                # === NEW PATTERN (Новый паттерн) ===
                 entry = VolitionalModel(
                     user_id=user_id,
                     trigger=pattern.trigger,
                     impulse=pattern.impulse,
-                    target=pattern.target, # ✨ NEW
-                    goal=pattern.goal,
+                    target=pattern.target,
+                    goal=pattern.goal or "",
                     
-                    intensity=pattern.intensity,
-                    fuel=pattern.fuel, # ✨ NEW
-                    learned_delta=pattern.learned_delta,
+                    # Начальные значения
+                    intensity=pattern.intensity,  # Обычно 0.5
+                    fuel=pattern.fuel,            # Обычно 1.0
+                    learned_delta=0.0,
+                    
+                    turns_active=1,
+                    last_novelty_turn=0,
+                    is_active=True,
+                    
+                    decay_rate=pattern.decay_rate,
+                    reinforcement_rate=pattern.reinforcement_rate,
+                    energy_cost=pattern.energy_cost,
                     
                     conflict_detected=pattern.conflict_detected,
-                    resolution_strategy=pattern.resolution_strategy,
-                    action_taken=pattern.action_taken,
+                    resolution_strategy=pattern.resolution_strategy or "",
+                    action_taken=pattern.action_taken or "",
+                    
                     last_activated_at=datetime.utcnow()
                 )
                 session.add(entry)
+                print(f"[Volition] Created: {pattern.impulse} | intensity={pattern.intensity:.2f} | fuel={pattern.fuel:.2f}")
             
             await session.commit()
 
@@ -240,6 +273,14 @@ class PostgresMemoryStore(AbstractMemoryStore):
                     intensity=r.intensity,
                     fuel=r.fuel, # ✨ Critical for Modulation Matrix
                     learned_delta=r.learned_delta,
+                    
+                    turns_active=r.turns_active,
+                    last_novelty_turn=r.last_novelty_turn,
+                    is_active=r.is_active,
+                    
+                    decay_rate=r.decay_rate,
+                    reinforcement_rate=r.reinforcement_rate,
+                    energy_cost=r.energy_cost,
                     
                     conflict_detected=r.conflict_detected,
                     resolution_strategy=r.resolution_strategy,
@@ -400,6 +441,7 @@ class MemorySystem:
             except Exception as e:
                 print(f"[MemorySystem] Embedding failed: {e}")
 
+        # 🎯 NEW: Save Volitional Pattern (если есть)
         if "volitional_pattern" in extraction_result and extraction_result["volitional_pattern"]:
             pattern = VolitionalPattern(**extraction_result["volitional_pattern"])
             await self.store.save_pattern(user_id, pattern)
