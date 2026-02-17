@@ -2,7 +2,7 @@ import asyncio
 import random
 from typing import Dict, List, Optional
 from datetime import datetime
-from sqlalchemy import text
+from sqlalchemy import text, select
 
 
 from .schemas import (
@@ -19,7 +19,7 @@ from .schemas import (
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
-from .infrastructure.db import log_turn_metrics, AsyncSessionLocal
+from .infrastructure.db import log_turn_metrics, AsyncSessionLocal, AgentProfileModel, UserProfileModel
 from .agents import (
     IntuitionAgent,
     AmygdalaAgent,
@@ -145,6 +145,53 @@ class RCoreKernel:
 
         # --- CORTICAL MODE (Full Architecture) ---
         
+        # === ✨ RESTORE IDENTITY: Fetch Active Agent Profile from DB ===
+        bot_description = ""
+        try:
+            async with AsyncSessionLocal() as session:
+                # 1. Fetch Agent Profile
+                # Try to find by config name first
+                stmt = select(AgentProfileModel).where(AgentProfileModel.name == self.config.name)
+                result = await session.execute(stmt)
+                agent_profile = result.scalar_one_or_none()
+                
+                # If current config is default "R-Bot" but not in DB, fallback to finding ANY profile (e.g. "Lyutik")
+                if not agent_profile and self.config.name == "R-Bot":
+                     print("[Identity] 'R-Bot' not found in DB. Searching for ANY active agent...")
+                     stmt = select(AgentProfileModel).limit(1)
+                     result = await session.execute(stmt)
+                     agent_profile = result.scalar_one_or_none()
+
+                if agent_profile:
+                    print(f"[Identity] Loaded Profile: {agent_profile.name} (Gender: {agent_profile.gender})")
+                    # Update Config in Runtime
+                    self.config.name = agent_profile.name
+                    self.config.gender = agent_profile.gender or "Neutral"
+                    if agent_profile.description:
+                        bot_description = agent_profile.description
+                    
+                    # Update Experimental Controls
+                    if hasattr(agent_profile, "intuition_gain"):
+                        self.config.intuition_gain = agent_profile.intuition_gain
+                    if hasattr(agent_profile, "use_unified_council"):
+                        self.config.use_unified_council = agent_profile.use_unified_council
+                    
+                    # Update Sliders (if present and valid)
+                    if agent_profile.sliders_preset:
+                        try:
+                            # Assuming sliders_preset matches Schema structure partially
+                            for k, v in agent_profile.sliders_preset.items():
+                                if hasattr(self.config.sliders, k):
+                                    setattr(self.config.sliders, k, float(v))
+                        except Exception as e:
+                            print(f"[Identity] Failed to apply sliders: {e}")
+                else:
+                    print(f"[Identity] No agent profile found for '{self.config.name}'. Using defaults.")
+
+        except Exception as e:
+            print(f"[Identity] DB Fetch Failed: {e}")
+
+
         # 0. Precompute Embedding 
         current_embedding = None
         try:
@@ -332,6 +379,7 @@ class RCoreKernel:
             rationale=winner.rationale_short,
             bot_name=self.config.name,
             bot_gender=bot_gender,
+            bot_description=bot_description, # ✨ NEW: Pass the DB description
             user_mode=preferred_mode,
             style_instructions=final_style_instructions, 
             affective_context=affective_context_str
@@ -766,6 +814,14 @@ class RCoreKernel:
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
 
+
+    async def _mock_perception(self, message: IncomingMessage) -> Dict:
+        await asyncio.sleep(0.05)
+        return {
+            "triples": [], 
+            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
+            "volitional_pattern": None
+        }
 
     async def _perception_stage(self, message: IncomingMessage, chat_history: List[Dict]) -> Dict:
         """
