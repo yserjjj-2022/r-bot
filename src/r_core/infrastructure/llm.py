@@ -343,6 +343,62 @@ class LLMService:
             print(f"[LLM] generate_response failed: {e}")
             return "Извините, произошла внутренняя ошибка.", None
 
+    async def detect_volitional_pattern(self, user_text: str, history_str: str) -> Optional[Dict[str, Any]]:
+        """
+        🔍 Volitional Pattern Detector.
+        Analyzes the current message in context of history to find repetitive behavioral loops.
+        """
+        system_prompt = (
+            "You are a Behavioral Psychologist AI observing a user.\\n"
+            "TASK: Detect if the user is exhibiting a REPETITIVE behavioral or emotional pattern (Volitional Loop) based on their history.\\n"
+            "LOOK FOR:\\n"
+            "1. Procrastination loops ('I'll do it later' -> Anxiety -> Avoidance)\\n"
+            "2. Fear/Avoidance loops ('Scared to call' -> Avoidance)\\n"
+            "3. Anger/Venting loops ('I hate X' -> Rage)\\n"
+            "4. Routine/Boredom loops ('Nothing to do' -> Apathy)\\n\\n"
+            "INPUT:\\n"
+            f"History Context:\\n{history_str}\\n\\n"
+            "Current Message:\\n"
+            f"'{user_text}'\\n\\n"
+            "OUTPUT FORMAT (JSON Only):\\n"
+            "If a pattern is detected, return:\\n"
+            "{ 'pattern_found': true, 'trigger': 'Brief trigger description (e.g. Phone Call)', 'impulse': 'Brief reaction (e.g. Avoidance)', 'target': 'Specific object if any (e.g. Client)' }\\n"
+            "If NO clear pattern or just a one-off event, return:\\n"
+            "{ 'pattern_found': false }\\n\\n"
+            "CONSTRAINTS:\\n"
+            "- Be abstract with Trigger/Impulse (use standard psychological terms where possible).\\n"
+            "- 'target' should be specific to the context."
+        )
+
+        try:
+            response_data = await self._safe_chat_completion(
+                messages=[{"role": "system", "content": system_prompt}],
+                response_format={"type": "json_object"},
+                json_mode=True
+            )
+            
+            # Parsing logic for _safe_chat_completion return type
+            if isinstance(response_data, str):
+                try:
+                    data = json.loads(response_data)
+                except:
+                    return None
+            else:
+                data = response_data
+
+            if data.get("pattern_found"):
+                return {
+                    "trigger": data.get("trigger", "Unknown"),
+                    "impulse": data.get("impulse", "Unknown"),
+                    "target": data.get("target", "General"),
+                    "intensity": 0.5, # Default starting intensity
+                    "fuel": 1.0       # Full fuel for new/confirmed pattern
+                }
+            return None
+            
+        except Exception as e:
+            print(f"[LLM] Volitional Detection failed: {e}")
+            return None
 
     async def _safe_chat_completion(self, messages: List[Dict], response_format: Optional[Dict], json_mode: bool) -> Any:
         max_retries = 3
