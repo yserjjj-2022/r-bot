@@ -75,6 +75,7 @@ class VolitionalModel(Base):
     # === Config ===
     decay_rate: Mapped[float] = mapped_column(Float, default=0.01)
     reinforcement_rate: Mapped[float] = mapped_column(Float, default=0.05)
+    energy_cost: Mapped[float] = mapped_column(Float, default=0.1) # ✨ NEW: Cost per turn
     
     # === Legacy ===
     conflict_detected: Mapped[bool] = mapped_column(default=False)
@@ -255,9 +256,13 @@ async def init_models():
             await conn.execute(text(
                 "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS last_novelty_turn INTEGER DEFAULT 0"
             ))
-            print("[DB Init] ✅ Volitional System fields added (Migration 006)")
+            # ✨ NEW Migration 007: Energy Cost
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS energy_cost FLOAT DEFAULT 0.1"
+            ))
+            print("[DB Init] ✅ Volitional System fields added (Migration 006+007)")
         except Exception as e:
-            print(f"[DB Init] Schema update (volitional 006): {e}")
+            print(f"[DB Init] Schema update (volitional 006+007): {e}")
 
 # --- Helper Methods ---
 
@@ -311,21 +316,6 @@ async def log_llm_raw_response(
 ):
     """
     Логирует сырой ответ LLM в БД (circular buffer).
-    
-    Args:
-        prompt_type: Тип запроса ('council_report', 'response_generation', etc.)
-        raw_request: Промпт (обрезается до 2000 символов)
-        raw_response: Ответ LLM (обрезается до 5000 символов)
-        parse_status: Статус ('success', 'json_error', 'timeout', 'api_error', 'missing_keys')
-        error_message: Описание ошибки (опционально)
-        user_id: ID пользователя (по умолчанию 'system')
-        session_id: ID сессии (опционально)
-        max_records: Максимальное количество записей в буфере (по умолчанию 20)
-    
-    Behavior:
-        - Если settings.ENABLE_LLM_RAW_LOGGING=False → ничего не делает (silent fail)
-        - Если таблица не существует → silent fail (не крашит основной flow)
-        - Автоматически удаляет старые записи (оставляет только последние max_records)
     """
     # Проверяем флаг из settings
     if not settings.ENABLE_LLM_RAW_LOGGING:
