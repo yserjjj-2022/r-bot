@@ -827,7 +827,7 @@ class RCoreKernel:
             AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) 
         }
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05\n        
+        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05        
         self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
