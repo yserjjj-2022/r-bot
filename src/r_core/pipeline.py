@@ -152,8 +152,6 @@ class RCoreKernel:
         except Exception as e:
             print(f"[Pipeline] Embedding failed early: {e}")
         
-        # 1. Perception (Still need extraction for context, but save later)
-        extraction_result = await self._mock_perception(message)
         
         # === ✨ PREDICTIVE PROCESSING: Verify Last Prediction (Step 1) ===
         prediction_error = 0.0
@@ -216,14 +214,15 @@ class RCoreKernel:
             preferred_mode = "formal"
 
 
-        # === MOVED MEMORY SAVE TO END (After Council) ===
-
+        # === 3. PERCEPTION & VOLITIONAL DETECTION (Revised) ===
+        # Now that we have context (history), we can run the Volitional Detector
+        extraction_result = await self._perception_stage(message, context.get("chat_history", []))
 
         # === HIPPOCAMPUS TRIGGER ===
         asyncio.create_task(self._check_and_trigger_hippocampus(message.user_id))
 
 
-        # 3. Parliament Debate
+        # 4. Parliament Debate
         council_context_str = self._format_context_for_llm(
             context, 
             limit_history=self.COUNCIL_CONTEXT_DEPTH,
@@ -350,7 +349,8 @@ class RCoreKernel:
         # Ensure extraction_result uses this real score if possible, or override in save
         # Actually memorize_event takes the whole extraction object.
         # We update it here:
-        extraction_result["anchors"][0]["emotion_score"] = real_emotion_score
+        if extraction_result["anchors"]:
+             extraction_result["anchors"][0]["emotion_score"] = real_emotion_score
         
         await self.memory.memorize_event(
             message, 
@@ -767,10 +767,26 @@ class RCoreKernel:
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
 
 
-    async def _mock_perception(self, message: IncomingMessage) -> Dict:
-        await asyncio.sleep(0.05)
+    async def _perception_stage(self, message: IncomingMessage, chat_history: List[Dict]) -> Dict:
+        """
+        🔍 Perception Stage:
+        1. Mock implementation for triples/anchors (Legacy)
+        2. Real Volitional Detection using LLM (NEW)
+        """
+        # Format history string for LLM
+        history_lines = [f"{m['role']}: {m['content']}" for m in chat_history[-6:]]
+        history_str = "\\n".join(history_lines)
+        
+        volitional_pattern = None
+        # Only run detection if history is sufficient
+        if len(chat_history) >= 2:
+             print("[Pipeline] Scanning for volitional patterns...")
+             volitional_pattern = await self.llm.detect_volitional_pattern(message.text, history_str)
+             if volitional_pattern:
+                 print(f"[Pipeline] Pattern DETECTED: {volitional_pattern['trigger']} -> {volitional_pattern['impulse']}")
+        
         return {
             "triples": [], 
             "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
-            "volitional_pattern": None
+            "volitional_pattern": volitional_pattern
         }
