@@ -150,14 +150,17 @@ class RCoreKernel:
         try:
             async with AsyncSessionLocal() as session:
                 # 1. Fetch Agent Profile
+                print(f"[Identity] Searching for profile: '{self.config.name}'")
+                
                 # Try to find by config name first
                 stmt = select(AgentProfileModel).where(AgentProfileModel.name == self.config.name)
                 result = await session.execute(stmt)
                 agent_profile = result.scalar_one_or_none()
                 
-                # If current config is default "R-Bot" but not in DB, fallback to finding ANY profile (e.g. "Lyutik")
-                if not agent_profile and self.config.name == "R-Bot":
-                     print("[Identity] 'R-Bot' not found in DB. Searching for ANY active agent...")
+                # FALLBACK: If specific name not found, try to load the single "Main" profile from DB
+                # This handles cases where config has default "R-Bot" but DB has "Lyutik"
+                if not agent_profile:
+                     print(f"[Identity] Profile '{self.config.name}' not found. Falling back to first available profile.")
                      stmt = select(AgentProfileModel).limit(1)
                      result = await session.execute(stmt)
                      agent_profile = result.scalar_one_or_none()
@@ -169,6 +172,7 @@ class RCoreKernel:
                     self.config.gender = agent_profile.gender or "Neutral"
                     if agent_profile.description:
                         bot_description = agent_profile.description
+                        print(f"[Identity] Loaded description preview: {bot_description[:50]}...")
                     
                     # Update Experimental Controls
                     if hasattr(agent_profile, "intuition_gain"):
@@ -186,7 +190,7 @@ class RCoreKernel:
                         except Exception as e:
                             print(f"[Identity] Failed to apply sliders: {e}")
                 else:
-                    print(f"[Identity] No agent profile found for '{self.config.name}'. Using defaults.")
+                    print(f"[Identity] No agent profile found in DB. Using defaults.")
 
         except Exception as e:
             print(f"[Identity] DB Fetch Failed: {e}")
