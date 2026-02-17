@@ -253,6 +253,7 @@ class LLMService:
         rationale: str, 
         bot_name: str = "R-Bot", 
         bot_gender: str = "Neutral",
+        bot_description: str = "", # ✨ NEW: Full persona description
         user_mode: str = "formal",
         style_instructions: str = "", 
         affective_context: str = ""
@@ -281,11 +282,17 @@ class LLMService:
             address_block = "ADDRESS: Use INFORMAL Russian ('Ты', 'тебя', 'тебе', 'твой').\\n\\n"
         else:
             address_block = "ADDRESS: Use FORMAL Russian ('Вы', 'Вас', 'Вам', 'Ваш').\\n\\n"
+            
+        # ✨ Inject bot description if present
+        description_block = ""
+        if bot_description:
+            description_block = f"PERSONA / DESCRIPTION:\\n{bot_description}\\n"
 
 
         system_prompt = (
             f"IDENTITY: Your name is {bot_name}. Your gender is {bot_gender}.\\n"
-            f"ROLE: {system_persona}\\n"
+            f"{description_block}"
+            f"ROLE (Current Active Agent): {system_persona}\\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\\n"
             "GRAMMAR: Use correct gender endings for yourself (Male/Female/Neutral) consistent with your IDENTITY.\\n\\n"
             f"{address_block}"
