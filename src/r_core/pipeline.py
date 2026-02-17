@@ -2,7 +2,7 @@ import asyncio
 import random
 from typing import Dict, List, Optional
 from datetime import datetime
-from sqlalchemy import text, select
+from sqlalchemy import text, select, desc
 
 
 from .schemas import (
@@ -150,18 +150,22 @@ class RCoreKernel:
         try:
             async with AsyncSessionLocal() as session:
                 # 1. Fetch Agent Profile
-                print(f"[Identity] Searching for profile: '{self.config.name}'")
+                # We prioritize the LATEST active profile in DB, ignoring config.name if it's default "R-Bot"
+                # If config.name is NOT R-Bot, we try to fetch that specific one.
                 
-                # Try to find by config name first
-                stmt = select(AgentProfileModel).where(AgentProfileModel.name == self.config.name)
-                result = await session.execute(stmt)
-                agent_profile = result.scalar_one_or_none()
+                agent_profile = None
                 
-                # FALLBACK: If specific name not found, try to load the single "Main" profile from DB
-                # This handles cases where config has default "R-Bot" but DB has "Lyutik"
+                if self.config.name != "R-Bot":
+                     print(f"[Identity] Searching for specific profile: '{self.config.name}'")
+                     stmt = select(AgentProfileModel).where(AgentProfileModel.name == self.config.name)
+                     result = await session.execute(stmt)
+                     agent_profile = result.scalar_one_or_none()
+                
+                # FALLBACK: If specific name not found OR name is default "R-Bot", load the LATEST profile
                 if not agent_profile:
-                     print(f"[Identity] Profile '{self.config.name}' not found. Falling back to first available profile.")
-                     stmt = select(AgentProfileModel).limit(1)
+                     print(f"[Identity] Config name '{self.config.name}' not found or default. Fetching LATEST profile.")
+                     # Sort by updated_at desc to get the most recently active/edited bot
+                     stmt = select(AgentProfileModel).order_by(desc(AgentProfileModel.updated_at)).limit(1)
                      result = await session.execute(stmt)
                      agent_profile = result.scalar_one_or_none()
 
@@ -172,7 +176,7 @@ class RCoreKernel:
                     self.config.gender = agent_profile.gender or "Neutral"
                     if agent_profile.description:
                         bot_description = agent_profile.description
-                        print(f"[Identity] Loaded description preview: {bot_description[:50]}...")
+                        # print(f"[Identity] Loaded description preview: {bot_description[:50]}...")
                     
                     # Update Experimental Controls
                     if hasattr(agent_profile, "intuition_gain"):
@@ -258,8 +262,10 @@ class RCoreKernel:
         
         user_profile = context.get("user_profile", {})
         
+        # === ✨ USER PROFILE FIX: Respect preferred_mode from DB ===
+        # If DB says "informal"/"ты", use it. Otherwise default to "formal".
         raw_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
-        if raw_mode and raw_mode.lower() in ["ты", "informal", "casual", "friendly"]:
+        if raw_mode and str(raw_mode).lower() in ["ты", "informal", "casual", "friendly", "true"]:
             preferred_mode = "informal"
         else:
             preferred_mode = "formal"
@@ -366,6 +372,11 @@ class RCoreKernel:
         
         # 5. Response Generation 
         response_context_str = self._format_context_for_llm(context)
+        
+        # === ✨ CRITICAL FIX: Use config name (Loaded from DB) ===
+        # If we loaded "Lyutik" from DB, self.config.name is "Lyutik".
+        # If we failed and it's default, it's "R-Bot".
+        
         bot_gender = getattr(self.config, "gender", "Neutral")
         
         mechanical_style_instruction = self.neuromodulation.get_style_instruction()
@@ -376,14 +387,15 @@ class RCoreKernel:
         affective_context_str = self._format_affective_context(affective_warnings)
         
         # ✨ Generate Response + Prediction
+        # IMPORTANT: We pass self.config.name, which was updated from DB above.
         response_text, predicted_reaction = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
             context_str=response_context_str, 
             rationale=winner.rationale_short,
-            bot_name=self.config.name,
-            bot_gender=bot_gender,
-            bot_description=bot_description, # ✨ NEW: Pass the DB description
+            bot_name=self.config.name,        # <--- Uses DB-loaded name (e.g. "Lyutik")
+            bot_gender=bot_gender,            # <--- Uses DB-loaded gender
+            bot_description=bot_description,  # <--- Uses DB-loaded description ("трубадур")
             user_mode=preferred_mode,
             style_instructions=final_style_instructions, 
             affective_context=affective_context_str
