@@ -583,7 +583,7 @@ else:
         pred_thresh = st.slider("Threshold (µ)", 0.1, 1.0, st.session_state.sliders.pred_threshold, help="Порог 'хорошей' ошибки. Выше = бот реже паникует.")
         pred_sens = st.slider("Sensitivity (k)", 1.0, 20.0, st.session_state.sliders.pred_sensitivity, help="Резкость реакции. Выше = сильнее награда/штраф.")
         
-        use_unified_council = st.checkbox("🔄 Unified Council", value=False)
+        use_unified_council = st.checkbox("🔄 Unified Council", value=True)
 
         st.session_state.sliders = PersonalitySliders(
             empathy_bias=empathy,
