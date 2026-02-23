@@ -867,3 +867,109 @@ class Hippocampus:
                 print(f"[Hippocampus] DEBUG: Prediction {prediction_id} Verified & Committed.")
         except Exception as e:
              print(f"[Hippocampus] ❌ FATAL DB ERROR in verify_prediction: {e}")
+
+    # =========================================================================
+    # Stage 3: The Bifurcation Engine - Vector Methods
+    # =========================================================================
+    
+    async def get_semantic_neighbors(self, user_id: int, current_embedding: List[float], limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Vector 1: Semantic Neighbor
+        
+        Finds related semantic memories using vector similarity (Cosine Distance).
+        Returns items where distance is between 0.35 and 0.65 (related, but not identical).
+        
+        Args:
+            user_id: User ID
+            current_embedding: Current message embedding
+            limit: Maximum number of results
+            
+        Returns:
+            List of semantic neighbor memories as dictionaries
+        """
+        async with AsyncSessionLocal() as session:
+            try:
+                emb_str = "[" + ",".join(map(str, current_embedding)) + "]"
+                
+                # Use vector_cosine_ops to find similar memories
+                # Distance 0.35-0.65 means related but not identical
+                result = await session.execute(
+                    text("""
+                        SELECT id, topic, content, vector_cosine_ops(embedding, :emb::vector) as distance
+                        FROM semantic_memory
+                        WHERE user_id = :user_id
+                          AND vector_cosine_ops(embedding, :emb::vector) BETWEEN 0.35 AND 0.65
+                        ORDER BY distance ASC
+                        LIMIT :limit
+                    """),
+                    {"user_id": user_id, "emb": emb_str, "limit": limit}
+                )
+                rows = result.fetchall()
+                
+                neighbors = []
+                for row in rows:
+                    neighbors.append({
+                        "id": row[0],
+                        "topic": row[1],
+                        "content": row[2],
+                        "distance": row[3],
+                        "vector_type": "semantic_neighbor"
+                    })
+                
+                print(f"[Hippocampus] get_semantic_neighbors: Found {len(neighbors)} neighbors for user {user_id}")
+                return neighbors
+                
+            except Exception as e:
+                print(f"[Hippocampus] ❌ Error in get_semantic_neighbors: {e}")
+                return []
+    
+    async def get_zeigarnik_returns(self, user_id: int, limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Vector 3: Zeigarnik Return
+        
+        Finds recent episodic memories with high prediction_error or unresolved tags.
+        These are "unfinished business" topics that the user might want to return to.
+        
+        Args:
+            user_id: User ID
+            limit: Maximum number of results
+            
+        Returns:
+            List of unresolved memories as dictionaries
+        """
+        async with AsyncSessionLocal() as session:
+            try:
+                # Query chat_history for unresolved topics
+                # High emotion_score or specific markers indicate unresolved
+                result = await session.execute(
+                    text("""
+                        SELECT id, content, emotion_score, created_at,
+                               COALESCE(prediction_error, 0.5) as pe
+                        FROM chat_history
+                        WHERE user_id = :user_id
+                          AND (emotion_score > 0.7 OR emotion_score < -0.7 
+                               OR COALESCE(prediction_error, 0.5) > 0.6)
+                        ORDER BY created_at DESC
+                        LIMIT :limit
+                    """),
+                    {"user_id": user_id, "limit": limit}
+                )
+                rows = result.fetchall()
+                
+                zeigarnik_returns = []
+                for row in rows:
+                    zeigarnik_returns.append({
+                        "id": row[0],
+                        "content": row[1],
+                        "emotion_score": row[2],
+                        "created_at": row[3],
+                        "prediction_error": row[4],
+                        "vector_type": "zeigarnik_return"
+                    })
+                
+                print(f"[Hippocampus] get_zeigarnik_returns: Found {len(zeigarnik_returns)} unresolved topics for user {user_id}")
+                return zeigarnik_returns
+                
+            except Exception as e:
+                print(f"[Hippocampus] ❌ Error in get_zeigarnik_returns: {e}")
+                return []

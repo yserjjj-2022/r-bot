@@ -61,6 +61,10 @@ class AbstractMemoryStore:
         """Получить эмоциональное отношение пользователя к сущности"""
         raise NotImplementedError
 
+    async def search_by_sentiment(self, user_id: int, min_intensity: float = 0.7, limit: int = 10) -> List[Dict]:
+        """Поиск воспоминаний с высокой эмоциональной интенсивностью"""
+        raise NotImplementedError
+
 # --- Postgres Implementation ---
 
 class PostgresMemoryStore(AbstractMemoryStore):
@@ -256,6 +260,43 @@ class PostgresMemoryStore(AbstractMemoryStore):
                     "intensity": abs(row.sentiment.get("valence", 0.0))
                 }
             return None
+
+    async def search_by_sentiment(self, user_id: int, min_intensity: float = 0.7, limit: int = 10) -> List[Dict]:
+        """
+        ✨ NEW: Поиск воспоминаний с высокой эмоциональной интенсивностью.
+        Используется для Bifurcation Engine (Vector 2: Emotional Anchor).
+        """
+        async with AsyncSessionLocal() as session:
+            # Ищем записи с ненулевым sentiment (простой запрос, сортируем в Python)
+            stmt = select(SemanticModel).where(
+                SemanticModel.user_id == user_id,
+                SemanticModel.sentiment.isnot(None)
+            ).limit(limit * 2)  # Get more to filter in Python
+            
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            
+            results = []
+            for r in rows:
+                sentiment = r.sentiment or {}
+                valence = sentiment.get("valence", 0.0)
+                arousal = sentiment.get("arousal", 0.0)
+                intensity = max(abs(valence), arousal)
+                
+                if intensity >= min_intensity:
+                    results.append({
+                        "id": r.id,
+                        "topic": r.object,  # Use object as topic
+                        "content": f"{r.subject} {r.predicate} {r.object}",
+                        "sentiment": sentiment,
+                        "valence": valence,
+                        "arousal": arousal,
+                        "intensity": intensity
+                    })
+                    
+            # Sort by intensity in Python
+            results.sort(key=lambda x: x.get("intensity", 0), reverse=True)
+            return results[:limit]
 
     async def get_volitional_patterns(self, user_id: int) -> List[VolitionalPattern]:
         async with AsyncSessionLocal() as session:
@@ -527,7 +568,7 @@ class MemorySystem:
         """
         if not profile or not profile.get("attributes"):
             return []
-            
+
         traits = profile["attributes"].get("personality_traits", [])
         if not traits:
             return []
@@ -555,3 +596,51 @@ class MemorySystem:
     async def update_user_profile(self, user_id: int, updates: Dict):
         """Service method to update profile"""
         await self.store.update_user_profile(user_id, updates)
+
+    # =========================================================================
+    # Stage 3: The Bifurcation Engine - Emotional Anchor (Vector 2)
+    # =========================================================================
+    
+    async def get_emotional_anchors(self, user_id: int, limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Vector 2: Emotional Anchor
+        
+        Finds semantic memories with high affective intensity (sentiment > 0.7 or < -0.7).
+        These are emotionally charged topics that can be used to re-engage the user.
+        
+        Args:
+            user_id: User ID
+            limit: Maximum number of results
+            
+        Returns:
+            List of emotional anchor memories as dictionaries
+        """
+        try:
+            # Use new search_by_sentiment method
+            results = await self.store.search_by_sentiment(
+                user_id=user_id,
+                min_intensity=0.7,
+                limit=limit
+            )
+            
+            emotional_anchors = []
+            for item in results:
+                emotional_anchors.append({
+                    "id": item.get("id"),
+                    "topic": item.get("topic"),
+                    "content": item.get("content"),
+                    "valence": item.get("valence", 0.0),
+                    "arousal": item.get("arousal", 0.0),
+                    "intensity": item.get("intensity", 0.0),
+                    "vector_type": "emotional_anchor"
+                })
+            
+            # Sort by intensity (highest first)
+            emotional_anchors.sort(key=lambda x: x.get("intensity", 0), reverse=True)
+            
+            print(f"[MemorySystem] get_emotional_anchors: Found {len(emotional_anchors)} anchors for user {user_id}")
+            return emotional_anchors
+            
+        except Exception as e:
+            print(f"[MemorySystem] ❌ Error in get_emotional_anchors: {e}")
+            return []

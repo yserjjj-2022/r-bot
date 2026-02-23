@@ -303,7 +303,7 @@ class RCoreKernel:
         # ✨ Affective Extraction Processing
         affective_extracts = council_report.get("affective_extraction", [])
         affective_triggers_count = 0
-        if affective_extracts:
+        if affective_extracts and isinstance(affective_extracts, list):
             await self._process_affective_extraction(message, affective_extracts)
             affective_triggers_count = len(affective_extracts)
         
@@ -327,6 +327,77 @@ class RCoreKernel:
             current_tec = dominant_volition.get("topic_engagement", 1.0)
         lc_mode = self.neuromodulation.get_lc_mode(current_tec)
         print(f"[LC-NE] TEC={current_tec:.2f}, Mode={lc_mode}")
+        
+        # === Stage 3: The Bifurcation Engine ===
+        # Trigger when LC mode is "tonic" (low engagement, exploration needed)
+        bifurcation_candidates = []
+        predicted_bifurcation_topic = None
+        semantic_candidates = []
+        emotional_candidates = []
+        zeigarnik_candidates = []
+        
+        if lc_mode == "tonic":
+            print("[Bifurcation Engine] Tonic LC detected. Generating topic switch hypotheses...")
+            
+            try:
+                # 1. Fetch all 3 vectors concurrently (check embedding exists)
+                if current_embedding:
+                    semantic_task = self.hippocampus.get_semantic_neighbors(message.user_id, current_embedding, limit=3)
+                else:
+                    async def empty_semantic():
+                        return []
+                    semantic_task = empty_semantic()
+                    
+                zeigarnik_task = self.hippocampus.get_zeigarnik_returns(message.user_id, limit=3)
+                emotional_task = self.memory.get_emotional_anchors(message.user_id, limit=3)
+                
+                semantic_candidates, zeigarnik_candidates, emotional_candidates = await asyncio.gather(
+                    semantic_task, zeigarnik_task, emotional_task
+                )
+                
+                # 2. Score and combine candidates
+                # Semantic: weight 0.5 (based on similarity: distance 0.35-0.65 is ideal)
+                for item in semantic_candidates:
+                    score = 0.5 * (1.0 - abs(item.get("distance", 0.5) - 0.5) * 2)  # Higher score for distance closer to 0.5
+                    bifurcation_candidates.append({
+                        "topic": item.get("topic", "Unknown"),
+                        "content": item.get("content", ""),
+                        "score": score,
+                        "vector": "semantic_neighbor",
+                        "distance": item.get("distance")
+                    })
+                
+                # Emotional: weight 0.3 (based on intensity)
+                for item in emotional_candidates:
+                    score = 0.3 * item.get("intensity", 0.5)
+                    bifurcation_candidates.append({
+                        "topic": item.get("topic", "Unknown"),
+                        "content": item.get("content", ""),
+                        "score": score,
+                        "vector": "emotional_anchor",
+                        "intensity": item.get("intensity")
+                    })
+                
+                # Zeigarnik: weight 0.2 (based on recency - more recent = higher score)
+                for i, item in enumerate(zeigarnik_candidates):
+                    recency_score = 1.0 / (i + 1)  # More recent = higher score
+                    score = 0.2 * recency_score * item.get("prediction_error", 0.5)
+                    bifurcation_candidates.append({
+                        "topic": item.get("content", "Unknown")[:50],  # Use content as topic
+                        "content": item.get("content", ""),
+                        "score": score,
+                        "vector": "zeigarnik_return",
+                        "prediction_error": item.get("prediction_error")
+                    })
+                
+                # 3. Sort by score and select top candidate
+                if bifurcation_candidates:
+                    bifurcation_candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+                    predicted_bifurcation_topic = bifurcation_candidates[0].get("topic", "General")
+                    print(f"[Bifurcation Engine] Selected topic: {predicted_bifurcation_topic} (score={bifurcation_candidates[0].get('score', 0):.3f})")
+                    
+            except Exception as e:
+                print(f"[Bifurcation Engine] ❌ Error: {e}")
         
         volitional_instruction = ""
         if dominant_volition:
@@ -401,7 +472,19 @@ class RCoreKernel:
         bot_gender = getattr(self.config, "gender", "Neutral")
         
         mechanical_style_instruction = self.neuromodulation.get_style_instruction()
-        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str + volitional_instruction
+        
+        # === Stage 3: Inject Bifurcation Directive into LLM Prompt ===
+        bifurcation_instruction = ""
+        if predicted_bifurcation_topic:
+            bifurcation_instruction = (
+                f"\\n\\nPROACTIVE MIRRORING (Topic Switch Recommended):\\n"
+                f"- The user's engagement with the current topic is depleted (TEC={current_tec:.2f}).\\n"
+                f"- Gently pivot the conversation towards: {predicted_bifurcation_topic}\\n"
+                f"- Use natural transition, acknowledge the previous topic briefly, then bridge to the new one.\\n"
+            )
+            print(f"[Bifurcation Engine] Injecting directive: pivot to '{predicted_bifurcation_topic}'")
+            
+        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str + volitional_instruction + bifurcation_instruction
         
         # Affective Context for LLM
         affective_warnings = context.get("affective_context", [])
@@ -491,7 +574,20 @@ class RCoreKernel:
             # === Task 3: LC-NE Metrics Logging ===
             "lc_mode": lc_mode,
             "topic_engagement": current_tec,
+            # === Stage 3: Bifurcation Metrics ===
+            "bifurcation_triggered": lc_mode == "tonic",
+            "bifurcation_target": predicted_bifurcation_topic,
+            "bifurcation_candidates_count": len(bifurcation_candidates),
+            "bifurcation_vectors": {
+                "semantic": len(semantic_candidates) if lc_mode == "tonic" else 0,
+                "emotional": len(emotional_candidates) if lc_mode == "tonic" else 0,
+                "zeigarnik": len(zeigarnik_candidates) if lc_mode == "tonic" else 0,
+            } if lc_mode == "tonic" else None,
         }
+
+        # Debug: Print bifurcation summary
+        if lc_mode == "tonic" and predicted_bifurcation_topic:
+            print(f"[Bifurcation Engine] Summary: {len(bifurcation_candidates)} candidates, target='{predicted_bifurcation_topic}'")
 
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
