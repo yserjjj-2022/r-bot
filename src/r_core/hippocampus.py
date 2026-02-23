@@ -34,13 +34,13 @@ from src.r_core.config import settings
 
 # === Stage 1: TEC Decay Map (Nature Taxonomy) ===
 # Base decay rate per turn for each intent category
-# Nature-based: Phatic (social bonds) decays slowest, Task decays fastest
+# From attention-engagement-theory.md spec
 BASE_DECAY_MAP = {
-    "Phatic": 0.03,    # Social rituals: very stable, slow decay
-    "Casual": 0.06,    # Small talk: moderate decay
-    "Narrative": 0.09, # Stories: faster decay
-    "Deep": 0.12,      # Deep topics: moderate-fast decay
-    "Task": 0.15,      # Task-oriented: fastest decay (tool use)
+    "Phatic": 1.0,     # Social rituals: very stable
+    "Casual": 0.4,     # Small talk: moderate decay
+    "Narrative": 0.15, # Stories: faster decay
+    "Deep": 0.05,      # Deep topics: slow decay (engaging)
+    "Task": 0.0,       # Task-oriented: no automatic decay
 }
 
 
@@ -570,6 +570,19 @@ class Hippocampus:
                 
                 if existing:
                     # ✨ REINFORCE / MERGE with TEC
+                    # === Stage 1: Calculate situational_multiplier ===
+                    # response_density = min(len(user_text.split()) / 50.0, 1.0)
+                    # Assume current_PE = 1 - topic_engagement (prediction error)
+                    current_PE = 1.0 - existing.topic_engagement
+                    response_density = min(len(messages[-1].content.split()) / 50.0, 1.0) if messages else 0.5
+                    situational_multiplier = (0.5 + (1 - current_PE) * 0.5) * (2.0 - response_density)
+                    
+                    # Calculate effective decay
+                    effective_decay = base_decay * situational_multiplier
+                    
+                    # Apply decay to topic_engagement
+                    existing.topic_engagement = max(0.0, existing.topic_engagement - effective_decay)
+                    
                     # Fuel update: apply decay first, then reinforce
                     existing.fuel = max(0.0, existing.fuel - effective_decay)
                     
@@ -583,7 +596,6 @@ class Hippocampus:
                     
                     # Update TEC fields
                     existing.intent_category = intent_category
-                    existing.topic_engagement = topic_engagement
                     existing.complexity_modifier = complexity_modifier
                     existing.base_decay_rate = base_decay
                     existing.emotional_load = p_data.get("emotional_load", 0.0)
@@ -592,8 +604,12 @@ class Hippocampus:
                     # Intensity: max(old, new)
                     existing.intensity = max(existing.intensity, p_data.get("intensity", 0.5))
                     
-                    # Update learned_delta (small boost for recurrence)
-                    existing.learned_delta = min(1.0, existing.learned_delta + 0.05)
+                    # === Stage 1: Updated learned_delta logic ===
+                    # Only reinforce if topic_engagement > 0.5 (not exhausted)
+                    reinforcement_rate = existing.reinforcement_rate if hasattr(existing, 'reinforcement_rate') else 0.05
+                    if current_PE < 0.2 and existing.topic_engagement > 0.5:
+                        existing.learned_delta = min(1.0, existing.learned_delta + reinforcement_rate)
+                    
                     existing.last_activated_at = datetime.utcnow()
                     existing.turns_active += 1
                     
@@ -615,7 +631,7 @@ class Hippocampus:
                         is_active=True,
                         # === Stage 1: TEC/Taxonomy fields ===
                         intent_category=intent_category,
-                        topic_engagement=topic_engagement,
+                        topic_engagement=1.0,  # Fresh start - full engagement
                         base_decay_rate=base_decay,
                         complexity_modifier=complexity_modifier,
                         emotional_load=p_data.get("emotional_load", 0.0),

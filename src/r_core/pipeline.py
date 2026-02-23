@@ -320,6 +320,14 @@ class RCoreKernel:
         volitional_patterns = context.get("volitional_patterns", [])
         dominant_volition = self._select_dominant_volition(volitional_patterns, message.user_id)
         
+        # === Task 2.1: Extract current TEC and determine LC Mode ===
+        current_tec = 1.0  # Default to full engagement
+        lc_mode = "phasic"
+        if dominant_volition:
+            current_tec = dominant_volition.get("topic_engagement", 1.0)
+        lc_mode = self.neuromodulation.get_lc_mode(current_tec)
+        print(f"[LC-NE] TEC={current_tec:.2f}, Mode={lc_mode}")
+        
         volitional_instruction = ""
         if dominant_volition:
             impulse = dominant_volition.get("impulse", "UNKNOWN")
@@ -332,7 +340,7 @@ class RCoreKernel:
                 f"- STRATEGY: {dominant_volition.get('resolution_strategy')}\\n"
             )
             print(f"[Volition] Selected dominant pattern: {impulse} (fuel={fuel:.2f})")
-
+            
 
         # ✨ Apply Hormonal Modulation BEFORE arbitration
         signals = self._apply_hormonal_modulation(signals)
@@ -344,6 +352,16 @@ class RCoreKernel:
         
         # ✨ Apply CHAOS Injection (Entropy) BEFORE arbitration
         signals = self._apply_chaos(signals)
+
+        # === Task 2.4: Modify Prefrontal Agent Score (Exploration Bias) ===
+        # If lc_mode == "tonic", increase Prefrontal score by 10% (capped at 10.0)
+        if lc_mode == "tonic":
+            for signal in signals:
+                if signal.agent_name == AgentType.PREFRONTAL:
+                    signal.score = min(10.0, signal.score * 1.1)
+                    signal.rationale_short += " [Tonic Exploration Boost]"
+                    print(f"[LC-NE] Tonic mode: Prefrontal score boosted to {signal.score:.2f}")
+                    break
 
 
         # 4. Arbitration & Mood Update
@@ -370,7 +388,7 @@ class RCoreKernel:
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
             elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 
         
-        self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name)
+        self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name, current_tec=current_tec)
         
         
         # 5. Response Generation 
@@ -469,7 +487,10 @@ class RCoreKernel:
             "council_mode": "FULL" if has_affective else "LIGHT",
             "prediction_error": prediction_error, 
             "next_prediction": predicted_reaction,
-            "user_emotion_score": real_emotion_score # ✨ Log for debug
+            "user_emotion_score": real_emotion_score,
+            # === Task 3: LC-NE Metrics Logging ===
+            "lc_mode": lc_mode,
+            "topic_engagement": current_tec,
         }
 
 
