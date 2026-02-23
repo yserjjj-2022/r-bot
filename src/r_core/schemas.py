@@ -97,7 +97,7 @@ class EpisodicAnchor(BaseModel):
 class VolitionalPattern(BaseModel):
     """
     Represents a learned behavioral pattern or habit.
-    Updated for Phase 2.2 with Target & Fuel.
+    Updated for Stage 1: Taxonomy & TEC Decay.
     """
     id: Optional[int] = None
     trigger: str
@@ -120,10 +120,19 @@ class VolitionalPattern(BaseModel):
     reinforcement_rate: float = 0.05
     energy_cost: float = 0.1 # ✨ NEW: Cost per turn
     
-    # Legacy
+    # Legacy (Data Contract: nullable or safe defaults)
     conflict_detected: bool = False
-    resolution_strategy: str = ""
-    action_taken: str = ""
+    resolution_strategy: Optional[str] = None
+    action_taken: Optional[str] = None
+    
+    # === Stage 1: TEC/Taxonomy Fields ===
+    intent_category: str = "Casual"  # Phatic, Casual, Narrative, Deep, Task
+    topic_engagement: float = 1.0  # TEC: 0.0-1.0
+    base_decay_rate: float = 0.12  # Nature-based decay
+    complexity_modifier: float = 1.0  # Topic complexity factor
+    emotional_load: float = 0.0  # Emotional intensity
+    recovery_rate: float = 0.05  # TEC recovery rate
+    
     last_activated_at: Optional[datetime] = None
 
 # --- Pipeline IO ---

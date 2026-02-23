@@ -77,10 +77,18 @@ class VolitionalModel(Base):
     reinforcement_rate: Mapped[float] = mapped_column(Float, default=0.05)
     energy_cost: Mapped[float] = mapped_column(Float, default=0.1) # ✨ NEW: Cost per turn
     
-    # === Legacy ===
-    conflict_detected: Mapped[bool] = mapped_column(default=False)
-    resolution_strategy: Mapped[str] = mapped_column(String(255), default="")
-    action_taken: Mapped[str] = mapped_column(Text, default="")
+    # === Legacy (Data Contract: nullable=True or safe defaults) ===
+    conflict_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolution_strategy: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
+    action_taken: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    
+    # === Stage 1: TEC/Taxonomy Fields ===
+    intent_category: Mapped[str] = mapped_column(String(50), default="Casual")  # Phatic, Casual, Narrative, Deep, Task
+    topic_engagement: Mapped[float] = mapped_column(Float, default=1.0)  # TEC: 0.0-1.0
+    base_decay_rate: Mapped[float] = mapped_column(Float, default=0.12)  # Nature-based decay
+    complexity_modifier: Mapped[float] = mapped_column(Float, default=1.0)  # Topic complexity factor
+    emotional_load: Mapped[float] = mapped_column(Float, default=0.0)  # Emotional intensity
+    recovery_rate: Mapped[float] = mapped_column(Float, default=0.05)  # TEC recovery rate
     
     last_activated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -263,6 +271,37 @@ async def init_models():
             print("[DB Init] ✅ Volitional System fields added (Migration 006+007)")
         except Exception as e:
             print(f"[DB Init] Schema update (volitional 006+007): {e}")
+
+        # ✨ NEW Migration 008: Stage 1 - TEC/Taxonomy Fields
+        try:
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS intent_category VARCHAR(50) DEFAULT 'Casual'"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS topic_engagement FLOAT DEFAULT 1.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS base_decay_rate FLOAT DEFAULT 0.12"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS complexity_modifier FLOAT DEFAULT 1.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS emotional_load FLOAT DEFAULT 0.0"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ADD COLUMN IF NOT EXISTS recovery_rate FLOAT DEFAULT 0.05"
+            ))
+            # Fix legacy fields: make nullable
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ALTER COLUMN resolution_strategy DROP NOT NULL"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE volitional_patterns ALTER COLUMN action_taken DROP NOT NULL"
+            ))
+            print("[DB Init] ✅ Stage 1: TEC/Taxonomy fields added (Migration 008)")
+        except Exception as e:
+            print(f"[DB Init] Schema update (volitional 008 - TEC/Taxonomy): {e}")
 
 # --- Helper Methods ---
 

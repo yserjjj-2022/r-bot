@@ -18,7 +18,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Set, Tuple, Union
+from typing import List, Dict, Any, Optional, Set, Tuple, Union, Sequence
 from sqlalchemy import select, text, delete, and_, update, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.r_core.infrastructure.db import (
@@ -30,6 +30,18 @@ from src.r_core.infrastructure.db import (
     ChatHistoryModel
 )
 from src.r_core.config import settings
+
+
+# === Stage 1: TEC Decay Map (Nature Taxonomy) ===
+# Base decay rate per turn for each intent category
+# Nature-based: Phatic (social bonds) decays slowest, Task decays fastest
+BASE_DECAY_MAP = {
+    "Phatic": 0.03,    # Social rituals: very stable, slow decay
+    "Casual": 0.06,    # Small talk: moderate decay
+    "Narrative": 0.09, # Stories: faster decay
+    "Deep": 0.12,      # Deep topics: moderate-fast decay
+    "Task": 0.15,      # Task-oriented: fastest decay (tool use)
+}
 
 
 @dataclass
@@ -440,7 +452,7 @@ class Hippocampus:
                 "duplicates_skipped": duplicates_skipped
             }
     
-    async def _llm_extract_themes(self, episodes: List[EpisodicModel]) -> List[Dict[str, Any]]:
+    async def _llm_extract_themes(self, episodes: Sequence[EpisodicModel]) -> List[Dict[str, Any]]:
         """
         LLM анализирует эпизоды и извлекает повторяющиеся темы/интересы пользователя.
         """
@@ -491,17 +503,18 @@ class Hippocampus:
     
     async def _update_volitional_patterns(self, user_id: int) -> Dict[str, Any]:
         """
-        Task 3: Semantic Intent Analysis.
+        Task 3: Semantic Intent Analysis - Stage 1: Taxonomy & TEC Decay.
         
         Выделяет структуру волевого акта из последних сообщений:
         - Trigger (контекст)
         - Impulse (сопротивление/желание)
         - Target (объект цели)
-        - Resolution Strategy
+        - Intent Category (Nature Taxonomy: Phatic, Casual, Narrative, Deep, Task)
         
-        Reinforcement:
-        - Если паттерн найден (похожий target), пополняем fuel, обновляем strategy.
-        - Если нет, создаем новый.
+        TEC Decay Logic:
+        - effective_decay = base_decay * complexity_modifier
+        - fuel = max(0, fuel - effective_decay)
+        - Recovery: fuel += recovery_rate if pattern is reinforced
         """
         async with AsyncSessionLocal() as session:
             # 1. Загружаем последние 25 сообщений (User + Assistant)
@@ -519,7 +532,7 @@ class Hippocampus:
             if len(messages) < 5:
                 return {"status": "skip", "reason": "too_few_messages", "count": len(messages)}
             
-            # 2. LLM извлекает волевые паттерны
+            # 2. LLM извлекает волевые паттерны (updated for Stage 1)
             patterns_data = await self._llm_extract_volitional_intent(messages)
             
             if not patterns_data:
@@ -528,14 +541,13 @@ class Hippocampus:
             patterns_updated = 0
             patterns_created = 0
             
-            # 3. Merging logic
+            # 3. Merging logic with TEC Decay
             for p_data in patterns_data:
                 target = p_data.get("target")
                 if not target:
                     continue
                 
                 # Поиск похожего паттерна по Target (case-insensitive)
-                # В будущем можно добавить embedding поиск, пока simple text match
                 existing_pattern = await session.execute(
                     select(VolitionalModel).where(
                         and_(
@@ -547,20 +559,39 @@ class Hippocampus:
                 )
                 existing = existing_pattern.scalar_one_or_none()
                 
+                # === Stage 1: Get intent category and TEC fields ===
+                intent_category = p_data.get("intent_category", "Casual")
+                topic_engagement = p_data.get("topic_engagement", 1.0)
+                complexity_modifier = p_data.get("complexity_modifier", 1.0)
+                
+                # === Calculate effective decay ===
+                base_decay = BASE_DECAY_MAP.get(intent_category, BASE_DECAY_MAP["Casual"])
+                effective_decay = base_decay * complexity_modifier
+                
                 if existing:
-                    # ✨ REINFORCE / MERGE
-                    # Fuel update with inertia: 0.7 * old + 0.3 * new
+                    # ✨ REINFORCE / MERGE with TEC
+                    # Fuel update: apply decay first, then reinforce
+                    existing.fuel = max(0.0, existing.fuel - effective_decay)
+                    
+                    # Reinforce with inertia: 0.7 * old + 0.3 * new
                     new_fuel = p_data.get("fuel", 0.5)
                     existing.fuel = 0.7 * existing.fuel + 0.3 * new_fuel
+                    
+                    # Apply recovery rate after reinforcement
+                    recovery_rate = p_data.get("recovery_rate", 0.05)
+                    existing.fuel = min(1.0, existing.fuel + recovery_rate)
+                    
+                    # Update TEC fields
+                    existing.intent_category = intent_category
+                    existing.topic_engagement = topic_engagement
+                    existing.complexity_modifier = complexity_modifier
+                    existing.base_decay_rate = base_decay
+                    existing.emotional_load = p_data.get("emotional_load", 0.0)
+                    existing.recovery_rate = recovery_rate
                     
                     # Intensity: max(old, new)
                     existing.intensity = max(existing.intensity, p_data.get("intensity", 0.5))
                     
-                    # Strategy: Append unique
-                    new_strat = p_data.get("resolution_strategy")
-                    if new_strat and new_strat.lower() not in existing.resolution_strategy.lower():
-                        existing.resolution_strategy += f", {new_strat}"
-                        
                     # Update learned_delta (small boost for recurrence)
                     existing.learned_delta = min(1.0, existing.learned_delta + 0.05)
                     existing.last_activated_at = datetime.utcnow()
@@ -568,7 +599,7 @@ class Hippocampus:
                     
                     patterns_updated += 1
                 else:
-                    # ✨ CREATE NEW
+                    # ✨ CREATE NEW with TEC fields
                     new_pattern = VolitionalModel(
                         user_id=user_id,
                         trigger=p_data.get("trigger", "unknown"),
@@ -581,7 +612,14 @@ class Hippocampus:
                         learned_delta=0.0,
                         last_activated_at=datetime.utcnow(),
                         turns_active=1,
-                        is_active=True
+                        is_active=True,
+                        # === Stage 1: TEC/Taxonomy fields ===
+                        intent_category=intent_category,
+                        topic_engagement=topic_engagement,
+                        base_decay_rate=base_decay,
+                        complexity_modifier=complexity_modifier,
+                        emotional_load=p_data.get("emotional_load", 0.0),
+                        recovery_rate=p_data.get("recovery_rate", 0.05),
                     )
                     session.add(new_pattern)
                     patterns_created += 1
@@ -593,7 +631,9 @@ class Hippocampus:
                 "messages_analyzed": len(messages),
                 "patterns_extracted": len(patterns_data),
                 "updated": patterns_updated,
-                "created": patterns_created
+                "created": patterns_created,
+                "tec_decay_applied": True,
+                "base_decay_map": BASE_DECAY_MAP
             }
 
     async def _llm_extract_volitional_intent(self, messages: List[ChatHistoryModel]) -> List[Dict[str, Any]]:
@@ -768,7 +808,8 @@ class Hippocampus:
                     keys = result.keys()
                     data = dict(zip(keys, row))
                 
-                print(f"[Hippocampus] DEBUG: ✅ Matched Prediction. ID={data.get('id')}, Predicted='{data.get('predicted_reaction')[:50]}...'")
+                predicted = data.get('predicted_reaction') or ''
+                print(f"[Hippocampus] DEBUG: ✅ Matched Prediction. ID={data.get('id')}, Predicted='{predicted[:50]}...'")
                 return data
                 
         except Exception as e:

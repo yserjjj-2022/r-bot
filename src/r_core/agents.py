@@ -21,6 +21,8 @@ class AbstractLLMClient(ABC):
         pass
 
 class BaseAgent(ABC):
+    agent_type: AgentType  # Define in subclass
+    
     def __init__(self, llm: Optional[LLMService] = None):
         self.llm = llm or LLMService()
 

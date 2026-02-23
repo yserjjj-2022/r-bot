@@ -54,6 +54,9 @@ class LLMService:
                     print(f"[LLMService] Embedding Failed Final: {e}")
                     raise e
             
+        # Fallback return - should never reach here if retry logic works
+        raise RuntimeError("Embedding failed after all retries")
+            
     async def embed(self, text: str) -> List[float]:
         """Alias for get_embedding to satisfy Hippocampus protocol"""
         return await self.get_embedding(text)
@@ -74,6 +77,59 @@ class LLMService:
              return str(response) if not isinstance(response, str) else response
         except Exception as e:
              return f"Error: {str(e)}"
+
+
+    async def generate_signal(self, system_prompt: str, user_text: str, agent_name: AgentType) -> AgentSignal:
+        """
+        Generate a single agent signal for legacy mode.
+        Used by agents that need direct LLM scoring.
+        """
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"User message: '{user_text}'\n\n"
+            "OUTPUT FORMAT (JSON Only):\n"
+            "{ 'score': float(0-10), 'rationale': 'string(max 10 words)', 'confidence': float(0-1) }"
+        )
+
+        try:
+            response_data = await self._safe_chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                json_mode=True
+            )
+            
+            if isinstance(response_data, str):
+                try:
+                    data = json.loads(response_data)
+                except:
+                    return self._get_fallback_signal(agent_name)
+            else:
+                data = response_data
+
+            return AgentSignal(
+                agent_name=agent_name,
+                score=float(data.get("score", 5.0)),
+                rationale_short=data.get("rationale", "Default"),
+                confidence=float(data.get("confidence", 0.5)),
+                latency_ms=0,
+                style_instruction=""
+            )
+            
+        except Exception as e:
+            print(f"[LLM] generate_signal failed: {e}")
+            return self._get_fallback_signal(agent_name)
+
+
+    def _get_fallback_signal(self, agent_name: AgentType) -> AgentSignal:
+        """Return a neutral fallback signal"""
+        return AgentSignal(
+            agent_name=agent_name,
+            score=5.0,
+            rationale_short="Fallback: neutral",
+            confidence=0.5,
+            latency_ms=0,
+            style_instruction=""
+        )
 
 
     def _build_council_prompt_base(self, context_summary: str) -> str:
@@ -373,29 +429,39 @@ class LLMService:
 
     async def detect_volitional_pattern(self, user_text: str, history_str: str) -> Optional[Dict[str, Any]]:
         """
-        🔍 Volitional Pattern Detector.
-        Analyzes the current message in context of history to find repetitive behavioral loops.
+        🔍 Volitional Pattern Detector - Stage 1: Taxonomy & TEC.
+        Analyzes the current message to track topic and classify intent into Nature Taxonomy.
+        
+        Categories (Nature Taxonomy):
+        - Phatic: Greetings, goodbyes, pure social rituals
+        - Casual: Small talk, weather, brief factual exchanges
+        - Narrative: Storytelling, recounting day's events
+        - Deep: Core values, fears, identity, philosophy
+        - Task: Instrumental goals, coding, debugging, planning
         """
         system_prompt = (
-            "You are a Behavioral Psychologist AI observing a user.\\n"
-            "TASK: Detect if the user is exhibiting a REPETITIVE behavioral or emotional pattern (Volitional Loop) based on their history.\\n"
-            "LOOK FOR:\\n"
-            "1. Procrastination loops ('I'll do it later' -> Anxiety -> Avoidance)\\n"
-            "2. Fear/Avoidance loops ('Scared to call' -> Avoidance)\\n"
-            "3. Anger/Venting loops ('I hate X' -> Rage)\\n"
-            "4. Routine/Boredom loops ('Nothing to do' -> Apathy)\\n\\n"
-            "INPUT:\\\\n"
+            "You are a Topic & Intent Classifier AI.\\n"
+            "TASK: Analyze the user's message and classify it according to the Nature Taxonomy.\\n\\n"
+            "INTENT CATEGORIES:\\n"
+            "- Phatic: Greetings, goodbyes, pure social rituals (e.g., 'Hi!', 'Bye!', 'Good morning!')\\n"
+            "- Casual: Small talk, weather, brief factual exchanges (e.g., 'How are you?', 'Nice weather today')\\n"
+            "- Narrative: Storytelling, recounting events, describing experiences (e.g., 'Then I went to...', 'Yesterday I did...')\\n"
+            "- Deep: Core values, fears, identity, philosophy discussions (e.g., 'I believe...', 'I'm afraid of...', 'My philosophy is...')\\n"
+            "- Task: Instrumental goals, coding, debugging, planning, problem-solving (e.g., 'Help me fix this bug', 'Write a function...')\\n\\n"
+            "INPUT:\\n"
             f"History Context:\\n{history_str}\\n\\n"
-            "Current Message:\\\\n"
+            "Current Message:\\n"
             f"'{user_text}'\\n\\n"
             "OUTPUT FORMAT (JSON Only):\\n"
-            "If a pattern is detected, return:\\n"
-            "{ 'pattern_found': true, 'trigger': 'Brief trigger description (e.g. Phone Call)', 'impulse': 'Brief reaction (e.g. Avoidance)', 'target': 'Specific object if any (e.g. Client)' }\\n"
-            "If NO clear pattern or just a one-off event, return:\\n"
+            "For meaningful messages, return:\\n"
+            "{ 'pattern_found': true, 'topic': 'Brief 1-3 word topic name (e.g. Python Async)', 'intent_category': 'Phatic|Casual|Narrative|Deep|Task' }\\n"
+            "For empty/meaningless noise (e.g. 'asdf', '???', empty), return:\\n"
             "{ 'pattern_found': false }\\n\\n"
-            "CONSTRAINTS:\\\\n"
-            "- Be abstract with Trigger/Impulse (use standard psychological terms where possible).\\n"
-            "- 'target' should be specific to the context."
+            "CONSTRAINTS:\\n"
+            "- Topic should be 1-3 words summarizing the main subject.\\n"
+            "- intent_category must be exactly one of: Phatic, Casual, Narrative, Deep, Task\\n"
+            "- If message is ambiguous, choose the DEEPER category (Deep > Narrative > Casual > Phatic)\\n"
+            "- Empty, garbled, or meaningless messages should return pattern_found: false"
         )
 
         try:
@@ -416,14 +482,17 @@ class LLMService:
 
             if data.get("pattern_found"):
                 return {
-                    "trigger": data.get("trigger", "Unknown"),
-                    "impulse": data.get("impulse", "Unknown"),
-                    "target": data.get("target", "General"),
-                    "intensity": 0.5, # Default starting intensity
-                    "fuel": 1.0       # Full fuel for new/confirmed pattern
+                    "topic": data.get("topic", "General"),
+                    "intent_category": data.get("intent_category", "Casual"),
+                    "topic_engagement": 1.0,  # Fresh start - full engagement
+                    "fuel": 1.0,               # Full fuel for new/confirmed pattern
+                    "intensity": 0.5,          # Default starting intensity
+                    "trigger": data.get("topic", "General"),  # Legacy field
+                    "impulse": data.get("intent_category", "Casual"),  # Legacy field
+                    "target": data.get("topic", "General"),  # Legacy field
                 }
             return None
-            
+
         except Exception as e:
             print(f"[LLM] Volitional Detection failed: {e}")
             return None
