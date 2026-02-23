@@ -2,7 +2,7 @@ import asyncio
 import random
 from typing import Dict, List, Optional
 from datetime import datetime
-from sqlalchemy import text
+from sqlalchemy import text, select, desc
 
 
 from .schemas import (
@@ -19,7 +19,7 @@ from .schemas import (
 )
 from .memory import MemorySystem
 from .infrastructure.llm import LLMService
-from .infrastructure.db import log_turn_metrics, AsyncSessionLocal
+from .infrastructure.db import log_turn_metrics, AsyncSessionLocal, AgentProfileModel, UserProfileModel
 from .agents import (
     IntuitionAgent,
     AmygdalaAgent,
@@ -92,6 +92,9 @@ class RCoreKernel:
             "turns_remaining": 0,
             "user_id": None
         }
+        
+        # Counter for Volitional Detection throttling
+        self.volition_check_counter = 0
 
 
     def get_architecture_snapshot(self) -> Dict:
@@ -145,6 +148,61 @@ class RCoreKernel:
 
         # --- CORTICAL MODE (Full Architecture) ---
         
+        # === ✨ RESTORE IDENTITY: Fetch Active Agent Profile from DB ===
+        bot_description = ""
+        try:
+            async with AsyncSessionLocal() as session:
+                # 1. Fetch Agent Profile
+                # We prioritize the LATEST active profile in DB, ignoring config.name if it's default "R-Bot"
+                # If config.name is NOT R-Bot, we try to fetch that specific one.
+                
+                agent_profile = None
+                
+                if self.config.name != "R-Bot":
+                     print(f"[Identity] Searching for specific profile: '{self.config.name}'")
+                     stmt = select(AgentProfileModel).where(AgentProfileModel.name == self.config.name)
+                     result = await session.execute(stmt)
+                     agent_profile = result.scalar_one_or_none()
+                
+                # FALLBACK: If specific name not found OR name is default "R-Bot", load the LATEST profile
+                if not agent_profile:
+                     print(f"[Identity] Config name '{self.config.name}' not found or default. Fetching LATEST profile.")
+                     # Sort by updated_at desc to get the most recently active/edited bot
+                     stmt = select(AgentProfileModel).order_by(desc(AgentProfileModel.updated_at)).limit(1)
+                     result = await session.execute(stmt)
+                     agent_profile = result.scalar_one_or_none()
+
+                if agent_profile:
+                    print(f"[Identity] Loaded Profile: {agent_profile.name} (Gender: {agent_profile.gender})")
+                    # Update Config in Runtime
+                    self.config.name = agent_profile.name
+                    self.config.gender = agent_profile.gender or "Neutral"
+                    if agent_profile.description:
+                        bot_description = agent_profile.description
+                        # print(f"[Identity] Loaded description preview: {bot_description[:50]}...")
+                    
+                    # Update Experimental Controls
+                    if hasattr(agent_profile, "intuition_gain"):
+                        self.config.intuition_gain = agent_profile.intuition_gain
+                    if hasattr(agent_profile, "use_unified_council"):
+                        self.config.use_unified_council = agent_profile.use_unified_council
+                    
+                    # Update Sliders (if present and valid)
+                    if agent_profile.sliders_preset:
+                        try:
+                            # Assuming sliders_preset matches Schema structure partially
+                            for k, v in agent_profile.sliders_preset.items():
+                                if hasattr(self.config.sliders, k):
+                                    setattr(self.config.sliders, k, float(v))
+                        except Exception as e:
+                            print(f"[Identity] Failed to apply sliders: {e}")
+                else:
+                    print(f"[Identity] No agent profile found in DB. Using defaults.")
+
+        except Exception as e:
+            print(f"[Identity] DB Fetch Failed: {e}")
+
+
         # 0. Precompute Embedding 
         current_embedding = None
         try:
@@ -152,8 +210,6 @@ class RCoreKernel:
         except Exception as e:
             print(f"[Pipeline] Embedding failed early: {e}")
         
-        # 1. Perception (Still need extraction for context, but save later)
-        extraction_result = await self._mock_perception(message)
         
         # === ✨ PREDICTIVE PROCESSING: Verify Last Prediction (Step 1) ===
         prediction_error = 0.0
@@ -209,21 +265,24 @@ class RCoreKernel:
         
         user_profile = context.get("user_profile", {})
         
+        # === ✨ USER PROFILE FIX: Respect preferred_mode from DB ===
+        # If DB says "informal"/"ты", use it. Otherwise default to "formal".
         raw_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
-        if raw_mode and raw_mode.lower() in ["ты", "informal", "casual", "friendly"]:
+        if raw_mode and str(raw_mode).lower() in ["ты", "informal", "casual", "friendly", "true"]:
             preferred_mode = "informal"
         else:
             preferred_mode = "formal"
 
 
-        # === MOVED MEMORY SAVE TO END (After Council) ===
-
+        # === 3. PERCEPTION & VOLITIONAL DETECTION (Revised) ===
+        # Now that we have context (history), we can run the Volitional Detector
+        extraction_result = await self._perception_stage(message, context.get("chat_history", []))
 
         # === HIPPOCAMPUS TRIGGER ===
         asyncio.create_task(self._check_and_trigger_hippocampus(message.user_id))
 
 
-        # 3. Parliament Debate
+        # 4. Parliament Debate
         council_context_str = self._format_context_for_llm(
             context, 
             limit_history=self.COUNCIL_CONTEXT_DEPTH,
@@ -316,6 +375,11 @@ class RCoreKernel:
         
         # 5. Response Generation 
         response_context_str = self._format_context_for_llm(context)
+        
+        # === ✨ CRITICAL FIX: Use config name (Loaded from DB) ===
+        # If we loaded "Lyutik" from DB, self.config.name is "Lyutik".
+        # If we failed and it's default, it's "R-Bot".
+        
         bot_gender = getattr(self.config, "gender", "Neutral")
         
         mechanical_style_instruction = self.neuromodulation.get_style_instruction()
@@ -326,13 +390,15 @@ class RCoreKernel:
         affective_context_str = self._format_affective_context(affective_warnings)
         
         # ✨ Generate Response + Prediction
+        # IMPORTANT: We pass self.config.name, which was updated from DB above.
         response_text, predicted_reaction = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
             context_str=response_context_str, 
             rationale=winner.rationale_short,
-            bot_name=self.config.name,
-            bot_gender=bot_gender,
+            bot_name=self.config.name,        # <--- Uses DB-loaded name (e.g. "Lyutik")
+            bot_gender=bot_gender,            # <--- Uses DB-loaded gender
+            bot_description=bot_description,  # <--- Uses DB-loaded description ("трубадур")
             user_mode=preferred_mode,
             style_instructions=final_style_instructions, 
             affective_context=affective_context_str
@@ -350,7 +416,8 @@ class RCoreKernel:
         # Ensure extraction_result uses this real score if possible, or override in save
         # Actually memorize_event takes the whole extraction object.
         # We update it here:
-        extraction_result["anchors"][0]["emotion_score"] = real_emotion_score
+        if extraction_result["anchors"]:
+             extraction_result["anchors"][0]["emotion_score"] = real_emotion_score
         
         await self.memory.memorize_event(
             message, 
@@ -760,8 +827,7 @@ class RCoreKernel:
             AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) 
         }
         impact = impact_map.get(winner_signal.agent_name, MoodVector())
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05
-        
+        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05        
         self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
         self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
         self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
@@ -773,4 +839,34 @@ class RCoreKernel:
             "triples": [], 
             "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
             "volitional_pattern": None
+        }
+
+    async def _perception_stage(self, message: IncomingMessage, chat_history: List[Dict]) -> Dict:
+        """
+        🔍 Perception Stage:
+        1. Mock implementation for triples/anchors (Legacy)
+        2. Real Volitional Detection using LLM (NEW)
+        """
+        # Format history string for LLM
+        history_lines = [f"{m['role']}: {m['content']}" for m in chat_history[-6:]]
+        history_str = "\\n".join(history_lines)
+        
+        volitional_pattern = None
+        
+        # Increase counter
+        self.volition_check_counter += 1
+        
+        # Only run detection if history is sufficient AND Throttled (1 in 5)
+        if len(chat_history) >= 2 and (self.volition_check_counter % 5 == 0):
+             print(f"[Pipeline] Scanning for volitional patterns (Turn {self.volition_check_counter})...")
+             volitional_pattern = await self.llm.detect_volitional_pattern(message.text, history_str)
+             if volitional_pattern:
+                 print(f"[Pipeline] Pattern DETECTED: {volitional_pattern['trigger']} -> {volitional_pattern['impulse']}")
+        else:
+             print(f"[Pipeline] Volition scan skipped (Turn {self.volition_check_counter})")
+        
+        return {
+            "triples": [], 
+            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
+            "volitional_pattern": volitional_pattern
         }
