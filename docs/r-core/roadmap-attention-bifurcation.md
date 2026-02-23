@@ -17,7 +17,7 @@
 
 Мы вводим два новых основных принципа обработки диалога:
 
-1. **Topic Engagement Capacity (TEC)**: диалог всегда работает в двух измерениях: ЧТО говорят И насколько ещё вовлечёны в это.
+1. **Topic Engagement Capacity (TEC)**: диалог всегда работает в двух измерениях: ЧТО говорят И насколько ещё вовлечёны в это. Скорость истощения зависит от априорной разметки интента (Phatic/Casual/Deep).
 2. **Bifurcation Engine**: система не ждёт, пока пользователь переключится, а предсказывает момент и направление перехода.
 
 ---
@@ -30,9 +30,10 @@
 
 ```
 NEW FIELDS in VolitionalPattern:
+  intent_category: str = "Casual"   # Phatic, Casual, Narrative, Deep, Task
   topic_engagement: float = 1.0     # TEC: 0.0-1.0
-  base_decay_rate: float = 0.12     # базовый decay за ход
-  complexity_modifier: float = 1.0  # >1.0 для технических тем
+  base_decay_rate: float = 0.12     # вычисляется из intent_category
+  complexity_modifier: float = 1.0  # >1.0 для технических тем (Novelty/Importance)
   emotional_load: float = 0.0       # >0.5 для травматичных тем
   recovery_rate: float = 0.05       # восстановление TEC
 ```
@@ -77,18 +78,19 @@ IF TEC < 0.3:
 
 ## 3. Этапы реализации
 
-### Этап 1: TEC Decay (2-3 дня)
+### Этап 1: Таксономия и TEC Decay (2-3 дня)
 
-**Цель**: Ввести TEC-переменную в модель данных и выправить PE-reinforcement.
+**Цель**: Ввести LLM-классификацию интентов, TEC-переменную и выправить PE-reinforcement.
 
 Изменяемые файлы:
-- `models.py` / VolitionalPattern: 5 новых полей.
-- `pipeline.py` / `_update_volitional_patterns()`: вызов `update_tec()` после каждой реплики.
+- `models.py` / VolitionalPattern: 6 новых полей (включая `intent_category`).
+- `llm.py`: Добавить в промпт Council Report инструкцию по классификации интента по таксономии (Phatic/Casual/Narrative/Deep/Task) для определения `base_decay_rate`.
+- `pipeline.py` / `_update_volitional_patterns()`: Добавить расчёт модификаторов Важности и Новизны из памяти перед вычислением `effective_decay`.
 - `pipeline.py` / `_apply_reinforcement()`: проверка TEC > 0.5 перед reinforcement.
-- Миграция БД: новая колонка `topic_engagement` в `volitional_patterns`.
-- Логирование: `rcore_metrics` + поля `tec_value`, `tec_decay_effective`.
+- Миграция БД: новая колонка `topic_engagement` и `intent_category` в `volitional_patterns`.
+- Логирование: `rcore_metrics` + поля `tec_value`, `intent_category`.
 
-**KPI**: TEC падает до < 0.5 за 5-7 подряд однотемных реплик.
+**KPI**: TEC падает до < 0.5 за 5-7 подряд однотемных реплик (для Casual). Phatic выгорает за 1 ход.
 
 ---
 
@@ -176,7 +178,7 @@ POST-факт: после следующей реплики `actual_topic_switch
 ## 4. Что НЕ меняем в этом цикле
 
 - Структура Council Report / парламент агентов — не меняем.
-- TTL-механизм (Topic Fatigue) — остаётся как fallback для быстрых фазических тем.
+- TTL-механизм (Topic Fatigue) — остаётся как fallback.
 - Логика semantic_memory / Anchors / chat_history — не меняем, только добавляем метод `get_bifurcation_hypotheses()`.
 - Шкала гормонов и куб Лёвхайма — не меняем.
 
@@ -189,7 +191,7 @@ POST-факт: после следующей реплики `actual_topic_switch
           |
     pipeline.py
           |
-    [1] update_tec(pattern, pe, response_density)
+    [1] update_tec(pattern, pe, response_density, taxonomy_class)
           | => TEC в VolitionalPattern
     [2] neuromodulation.apply_tec(tec)
           | => Tonic NE boost если TEC < 0.3
@@ -212,10 +214,10 @@ POST-факт: после следующей реплики `actual_topic_switch
 
 | Файл | Изменения |
 |------|----------|
-| `src/r_core/models.py` | Добавить поля TEC в VolitionalPattern |
+| `src/r_core/models.py` | Добавить поля `intent_category` и TEC в VolitionalPattern |
 | `src/r_core/pipeline.py` | `update_tec()`, `_run_bifurcation_engine()`, `inject_proactive_bridge()` |
-| `src/r_core/memory.py` | `get_bifurcation_hypotheses()` |
+| `src/r_core/memory.py` | Расчёт Importance/Novelty; `get_bifurcation_hypotheses()` |
 | `src/r_core/infrastructure/neuromodulation.py` | `apply_tec()`, `get_lc_mode()` |
-| `src/r_core/infrastructure/llm.py` | Параметр `proactive_topic_bridge` в `generate_response()` |
+| `src/r_core/infrastructure/llm.py` | Промпт для таксономии; Параметр `proactive_topic_bridge` |
 | `app_streamlit.py` | Секция TEC Monitor |
-| Миграция БД | Колонка `topic_engagement` в `volitional_patterns` |
+| Миграция БД | Колонки `topic_engagement`, `intent_category` в `volitional_patterns` |
