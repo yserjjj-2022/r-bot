@@ -2,6 +2,7 @@ import asyncio
 import random
 from typing import Dict, List, Optional
 from datetime import datetime
+import numpy as np
 from numpy import dot
 from numpy.linalg import norm
 from sqlalchemy import text, select, desc
@@ -100,10 +101,11 @@ class RCoreKernel:
 
         # ✨ NEW: Topic Tracker (independent from volitional patterns)
         self.current_topic_state = {
-            "topic_embedding": None,         # Vector of current topic
+            "topic_embedding": None,         # Усредненный вектор (Centroid) текущей темы
             "topic_text": "",                # Text summary of topic
             "tec": 1.0,                      # Topic Engagement Capacity [0.0, 1.0]
             "turns_on_topic": 0,             # Turns spent on this topic
+            "messages_in_topic": 0,          # Счетчик сообщений для расчета центроида
             "intent_category": "Casual",     # Nature taxonomy: Phatic/Casual/Narrative/Deep/Task
             "last_prediction_error": 0.5     # PE from last turn (for decay calculation)
         }
@@ -292,46 +294,76 @@ class RCoreKernel:
         # Now that we have context (history), we can run the Volitional Detector
         extraction_result = await self._perception_stage(message, context.get("chat_history", []))
 
-        # ========== ✨ NEW: Topic Tracker Update ==========
-        # This block updates TEC based on prediction error and response density
-        # Get intent_category from volitional detection if available
+        # ========== ✨ TOPIC TRACKER UPDATE (Centroid Architecture) ==========
+        # Этот блок обновляет TEC на основе предсказания ошибки и плотности ответа
+        # Использует архитектуру усредненного вектора темы (Topic Centroid)
+        
+        # Получаем intent_category из volitional detection
         intent_cat = "Casual"
         if extraction_result and extraction_result.get("volitional_pattern"):
             intent_cat = extraction_result["volitional_pattern"].get("intent_category", "Casual")
 
-        # Step 1: Check if topic has changed (compare embeddings)
+        # === Защита от коротких фраз (Phatic Bypass) ===
+        is_short_or_phatic = False
+        word_count = 0
+        if message.text:
+            word_count = len(message.text.split())
+            # Список фатических фраз (phatic messages) - короткие ответы без смысловой нагрузки
+            phatic_patterns = ["ага", "ясно", "ок", "да", "нет", "хм", "мм", "угу", "ну", "понятно", "окей", "ладно", "чё", "да?", "и что?", "и что теперь?"]
+            is_phatic = any(pattern in message.text.lower() for pattern in phatic_patterns)
+            if word_count < 4 or is_phatic:
+                is_short_or_phatic = True
+
+        # === Проверка смены темы ===
         topic_changed = False
+        
         if self.current_topic_state["topic_embedding"] is not None and current_embedding is not None:
-            # Calculate cosine similarity between current message and tracked topic
-            topic_emb = self.current_topic_state["topic_embedding"]
+            if not is_short_or_phatic:
+                # Вычисляем косинусное сходство с центроидом
+                topic_emb = self.current_topic_state["topic_embedding"]
+                similarity = dot(current_embedding, topic_emb) / (norm(current_embedding) * norm(topic_emb))
 
-            # Cosine similarity
-            similarity = dot(current_embedding, topic_emb) / (norm(current_embedding) * norm(topic_emb))
-
-            if similarity < 0.5:
-                # Topic has changed significantly
-                topic_changed = True
-                print(f"[TopicTracker] 🔄 Topic Change Detected (similarity={similarity:.2f}). Resetting TEC.")
+                # Новый порог 0.40 (ранее был 0.5)
+                if similarity < 0.40:
+                    topic_changed = True
+                    print(f"[TopicTracker] 🔄 Topic Change Detected (similarity={similarity:.2f}). Resetting TEC.")
+            else:
+                # Пропускаем вычисление similarity для коротких фраз
+                print(f"[TopicTracker] ⏭️ Skipping similarity check (short/phatic message: {word_count} words)")
         else:
-            # First turn or no embedding, initialize topic
+            # Первый ход или нет embedding - инициализируем тему
             topic_changed = True
 
-        # Step 2: Reset TEC if topic changed, otherwise apply decay
+        # === Сброс или обновление состояния темы ===
         if topic_changed:
             self.current_topic_state = {
                 "topic_embedding": current_embedding,
-                "topic_text": message.text[:100] if message.text else "",  # First 100 chars as summary
+                "topic_text": message.text[:100] if message.text else "",
                 "tec": 1.0,
                 "turns_on_topic": 1,
+                "messages_in_topic": 1,
                 "intent_category": intent_cat,
                 "last_prediction_error": prediction_error
             }
             print(f"[TopicTracker] 🔵 New Topic Started: TEC=1.0, intent={intent_cat}")
         else:
-            # Apply TEC decay formula (from attention-engagement-theory.md Section 4.3)
+            # === Обновление центроида (Centroid Update) ===
+            count = self.current_topic_state["messages_in_topic"]
+            old_centroid = self.current_topic_state["topic_embedding"]
+            
+            old_arr = np.array(old_centroid)
+            curr_arr = np.array(current_embedding)
+            
+            # Формула: new_centroid = (old_centroid * count + current_embedding) / (count + 1)
+            new_centroid = ((old_arr * count) + curr_arr) / (count + 1)
+            # Нормализация
+            new_centroid = new_centroid / np.linalg.norm(new_centroid)
+            
+            self.current_topic_state["topic_embedding"] = new_centroid.tolist()
+            self.current_topic_state["messages_in_topic"] += 1
             self.current_topic_state["turns_on_topic"] += 1
 
-            # Base decay by intent category (Nature Taxonomy)
+            # === Применяем decay формулу ===
             BASE_DECAY_MAP = {
                 "Phatic": 1.0,      # Social rituals: instant burn
                 "Casual": 0.4,      # Small talk: fast decay
@@ -343,15 +375,12 @@ class RCoreKernel:
             intent = self.current_topic_state["intent_category"]
             base_decay = BASE_DECAY_MAP.get(intent, 0.3)
 
-            # Situational multiplier (formula from attention-engagement-theory.md)
-            # High PE = user is disengaged → faster decay
-            # Short replies (low response_density) → faster decay
+            # Situational multiplier
             response_density = min(len(message.text.split()) / 50.0, 1.0) if message.text else 0.0
             situational_multiplier = (0.5 + (1 - prediction_error) * 0.5) * (2.0 - response_density)
 
             effective_decay = base_decay * situational_multiplier
 
-            # Apply decay
             old_tec = self.current_topic_state["tec"]
             self.current_topic_state["tec"] = max(0.0, old_tec - effective_decay)
             self.current_topic_state["last_prediction_error"] = prediction_error
@@ -364,7 +393,8 @@ class RCoreKernel:
         print(f"[TopicTracker] State: topic='{self.current_topic_state['topic_text'][:30]}...', "
               f"intent={self.current_topic_state['intent_category']}, "
               f"TEC={self.current_topic_state['tec']:.2f}, "
-              f"turns={self.current_topic_state['turns_on_topic']}")
+              f"turns={self.current_topic_state['turns_on_topic']}, "
+              f"messages={self.current_topic_state['messages_in_topic']}")
         # ========== END Topic Tracker Update ==========
 
         # === HIPPOCAMPUS TRIGGER ===
