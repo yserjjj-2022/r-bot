@@ -38,7 +38,7 @@ current_tec = dominant_volition.get("topic_engagement", 1.0)
 
 ---
 
-## Task 1: Add Topic Tracker State in `Pipeline`
+## Task 1: Add Topic Tracker State in `RCoreKernel`
 
 **File:** `src/r_core/pipeline.py`
 
@@ -46,8 +46,8 @@ current_tec = dominant_volition.get("topic_engagement", 1.0)
 Add a new instance variable to track the current topic:
 
 ```python
-class Pipeline:
-    def __init__(self, ...):
+class RCoreKernel:
+    def __init__(self, config: BotConfig):
         # ... existing code ...
         
         # ✨ NEW: Topic Tracker (independent from volitional patterns)
@@ -104,7 +104,7 @@ if topic_changed:
         "topic_text": message.text[:100],  # First 100 chars as summary
         "tec": 1.0,
         "turns_on_topic": 1,
-        "intent_category": extraction.get("intent_category", "Casual"),  # From LLM extraction
+        "intent_category": extraction_result.get("intent_category", "Casual"),  # From LLM extraction
         "last_prediction_error": prediction_error
     }
 else:
@@ -178,16 +178,16 @@ if current_tec < 0.3:
 
 ## Task 4: Extract Intent Category from LLM Response
 
-**File:** `src/r_core/pipeline.py`, method `process_message`
+**File:** `src/r_core/pipeline.py`, method `process_message` / `_perception_stage`
 
-### 4.1 Add Intent Category to Extraction Prompt
-Locate where you call LLM for memory extraction (the prompt that asks for triples, episodic anchors, etc.).
+### 4.1 Pass `extraction_result` correctly
+Note that the `_perception_stage` method returns the `extraction_result`. Ensure that the `Topic Tracker Update` block in Task 2 is placed **AFTER** `extraction_result = await self._perception_stage(...)`.
 
-**Add this instruction to the prompt:**
-```python
-extraction_prompt = f"""
-... existing instructions ...
+### 4.2 Add Intent Category to Volitional Extraction Prompt
+Locate where the LLM prompt for volitional pattern detection is defined (likely in `src/r_core/infrastructure/llm.py` or similar).
 
+**Update the prompt instructions to return an `intent_category`:**
+```
 Additionally, classify the user's message intent into ONE category:
 - Phatic: Greetings, goodbyes, ritual phrases ("hi", "how are you")
 - Casual: Small talk, weather, daily routines
@@ -195,18 +195,8 @@ Additionally, classify the user's message intent into ONE category:
 - Deep: Values, emotions, existential topics
 - Task: Problem-solving, information seeking
 
-Return format:
-{{
-    "triples": [...],
-    "anchors": [...],
-    "volitional_pattern": {{...}},
-    "intent_category": "Casual"  // ✨ NEW FIELD
-}}
-"""
+Ensure the JSON output includes an "intent_category" field alongside any "volitional_pattern".
 ```
-
-### 4.2 Store Intent Category in Topic Tracker
-The intent category will be used in Task 2 when calculating base decay.
 
 ---
 
@@ -244,7 +234,7 @@ Turn 4: "Понятно" (Casual, very short)
 [TopicTracker] TEC: 0.60 → 0.20 (decay=0.40, PE=0.7, turns=3)
 [LC-NE] TEC=0.20, Mode=tonic
 [LC-NE] Tonic mode: Prefrontal score boosted to 0.60
-[Bifurcation Engine] Tonic LC detected. Generating topic switch hypotheses...
+[Bifurcation Engine] Tonic LC detected. Generating hypotheses...
 ```
 
 ---
