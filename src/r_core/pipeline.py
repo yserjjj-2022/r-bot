@@ -2,6 +2,8 @@ import asyncio
 import random
 from typing import Dict, List, Optional
 from datetime import datetime
+from numpy import dot
+from numpy.linalg import norm
 from sqlalchemy import text, select, desc
 
 
@@ -95,6 +97,16 @@ class RCoreKernel:
         
         # Counter for Volitional Detection throttling
         self.volition_check_counter = 0
+
+        # ✨ NEW: Topic Tracker (independent from volitional patterns)
+        self.current_topic_state = {
+            "topic_embedding": None,         # Vector of current topic
+            "topic_text": "",                # Text summary of topic
+            "tec": 1.0,                      # Topic Engagement Capacity [0.0, 1.0]
+            "turns_on_topic": 0,             # Turns spent on this topic
+            "intent_category": "Casual",     # Nature taxonomy: Phatic/Casual/Narrative/Deep/Task
+            "last_prediction_error": 0.5     # PE from last turn (for decay calculation)
+        }
 
 
     def get_architecture_snapshot(self) -> Dict:
@@ -251,6 +263,8 @@ class RCoreKernel:
             except Exception as e:
                 print(f"[Predictive] ❌ DB WRITE ERROR: Failed to verify prediction {last_prediction['id']}: {e}")
 
+            # [Topic Tracker Update moved to after _perception_stage]
+
 
         # 2. Retrieval 
         context = await self.memory.recall_context(
@@ -277,6 +291,81 @@ class RCoreKernel:
         # === 3. PERCEPTION & VOLITIONAL DETECTION (Revised) ===
         # Now that we have context (history), we can run the Volitional Detector
         extraction_result = await self._perception_stage(message, context.get("chat_history", []))
+
+        # ========== ✨ NEW: Topic Tracker Update ==========
+        # This block updates TEC based on prediction error and response density
+        # Get intent_category from volitional detection if available
+        intent_cat = "Casual"
+        if extraction_result and extraction_result.get("volitional_pattern"):
+            intent_cat = extraction_result["volitional_pattern"].get("intent_category", "Casual")
+
+        # Step 1: Check if topic has changed (compare embeddings)
+        topic_changed = False
+        if self.current_topic_state["topic_embedding"] is not None and current_embedding is not None:
+            # Calculate cosine similarity between current message and tracked topic
+            topic_emb = self.current_topic_state["topic_embedding"]
+
+            # Cosine similarity
+            similarity = dot(current_embedding, topic_emb) / (norm(current_embedding) * norm(topic_emb))
+
+            if similarity < 0.5:
+                # Topic has changed significantly
+                topic_changed = True
+                print(f"[TopicTracker] 🔄 Topic Change Detected (similarity={similarity:.2f}). Resetting TEC.")
+        else:
+            # First turn or no embedding, initialize topic
+            topic_changed = True
+
+        # Step 2: Reset TEC if topic changed, otherwise apply decay
+        if topic_changed:
+            self.current_topic_state = {
+                "topic_embedding": current_embedding,
+                "topic_text": message.text[:100] if message.text else "",  # First 100 chars as summary
+                "tec": 1.0,
+                "turns_on_topic": 1,
+                "intent_category": intent_cat,
+                "last_prediction_error": prediction_error
+            }
+            print(f"[TopicTracker] 🔵 New Topic Started: TEC=1.0, intent={intent_cat}")
+        else:
+            # Apply TEC decay formula (from attention-engagement-theory.md Section 4.3)
+            self.current_topic_state["turns_on_topic"] += 1
+
+            # Base decay by intent category (Nature Taxonomy)
+            BASE_DECAY_MAP = {
+                "Phatic": 1.0,      # Social rituals: instant burn
+                "Casual": 0.4,      # Small talk: fast decay
+                "Narrative": 0.15,  # Stories: moderate
+                "Deep": 0.05,       # Deep topics: slow decay
+                "Task": 0.0         # Task-oriented: no decay until resolved
+            }
+
+            intent = self.current_topic_state["intent_category"]
+            base_decay = BASE_DECAY_MAP.get(intent, 0.3)
+
+            # Situational multiplier (formula from attention-engagement-theory.md)
+            # High PE = user is disengaged → faster decay
+            # Short replies (low response_density) → faster decay
+            response_density = min(len(message.text.split()) / 50.0, 1.0) if message.text else 0.0
+            situational_multiplier = (0.5 + (1 - prediction_error) * 0.5) * (2.0 - response_density)
+
+            effective_decay = base_decay * situational_multiplier
+
+            # Apply decay
+            old_tec = self.current_topic_state["tec"]
+            self.current_topic_state["tec"] = max(0.0, old_tec - effective_decay)
+            self.current_topic_state["last_prediction_error"] = prediction_error
+            self.current_topic_state["intent_category"] = intent
+
+            print(f"[TopicTracker] TEC: {old_tec:.2f} → {self.current_topic_state['tec']:.2f} "
+                  f"(decay={effective_decay:.2f}, PE={prediction_error:.2f}, turns={self.current_topic_state['turns_on_topic']})")
+
+        # Log Topic Tracker State
+        print(f"[TopicTracker] State: topic='{self.current_topic_state['topic_text'][:30]}...', "
+              f"intent={self.current_topic_state['intent_category']}, "
+              f"TEC={self.current_topic_state['tec']:.2f}, "
+              f"turns={self.current_topic_state['turns_on_topic']}")
+        # ========== END Topic Tracker Update ==========
 
         # === HIPPOCAMPUS TRIGGER ===
         asyncio.create_task(self._check_and_trigger_hippocampus(message.user_id))
@@ -321,10 +410,9 @@ class RCoreKernel:
         dominant_volition = self._select_dominant_volition(volitional_patterns, message.user_id)
         
         # === Task 2.1: Extract current TEC and determine LC Mode ===
-        current_tec = 1.0  # Default to full engagement
+        # ✨ FIX: Use Topic Tracker TEC instead of volitional pattern TEC
+        current_tec = self.current_topic_state["tec"]
         lc_mode = "phasic"
-        if dominant_volition:
-            current_tec = dominant_volition.get("topic_engagement", 1.0)
         lc_mode = self.neuromodulation.get_lc_mode(current_tec)
         print(f"[LC-NE] TEC={current_tec:.2f}, Mode={lc_mode}")
         
