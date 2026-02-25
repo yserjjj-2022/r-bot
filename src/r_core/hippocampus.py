@@ -889,16 +889,21 @@ class Hippocampus:
         """
         async with AsyncSessionLocal() as session:
             try:
-                emb_str = "[" + ",".join(map(str, current_embedding)) + "]"
+                emb_str = self._serialize_vector(current_embedding)
+                if not emb_str:
+                    return []
                 
-                # Use vector_cosine_ops to find similar memories
-                # Distance 0.35-0.65 means related but not identical
+                # ИЗМЕНЕНИЯ:
+                # 1. Используем subject, predicate, object вместо topic/content
+                # 2. Используем оператор <=> вместо vector_cosine_ops и CAST для безопасного кастования
                 result = await session.execute(
                     text("""
-                        SELECT id, topic, content, vector_cosine_ops(embedding, :emb::vector) as distance
+                        SELECT id, subject, predicate, object, 
+                               (embedding <=> CAST(:emb AS vector)) as distance
                         FROM semantic_memory
                         WHERE user_id = :user_id
-                          AND vector_cosine_ops(embedding, :emb::vector) BETWEEN 0.35 AND 0.65
+                          AND embedding IS NOT NULL
+                          AND (embedding <=> CAST(:emb AS vector)) BETWEEN 0.35 AND 0.65
                         ORDER BY distance ASC
                         LIMIT :limit
                     """),
@@ -908,11 +913,12 @@ class Hippocampus:
                 
                 neighbors = []
                 for row in rows:
+                    content_str = f"{row[1]} {row[2]} {row[3]}" # Сборка контента из триплета
                     neighbors.append({
                         "id": row[0],
-                        "topic": row[1],
-                        "content": row[2],
-                        "distance": row[3],
+                        "topic": row[1], # Имитация topic для совместимости с BifurcationEngine
+                        "content": content_str,
+                        "distance": row[4],
                         "vector_type": "semantic_neighbor"
                     })
                 
@@ -927,7 +933,7 @@ class Hippocampus:
         """
         Vector 3: Zeigarnik Return
         
-        Finds recent episodic memories with high prediction_error or unresolved tags.
+        Finds recent episodic memories with high emotion_score (unresolved tension).
         These are "unfinished business" topics that the user might want to return to.
         
         Args:
@@ -939,16 +945,15 @@ class Hippocampus:
         """
         async with AsyncSessionLocal() as session:
             try:
-                # Query chat_history for unresolved topics
-                # High emotion_score or specific markers indicate unresolved
+                # ИЗМЕНЕНИЯ:
+                # Читаем из episodic_memory, где есть поле emotion_score. 
+                # У episodic_memory поле текста называется raw_text
                 result = await session.execute(
                     text("""
-                        SELECT id, content, emotion_score, created_at,
-                               COALESCE(prediction_error, 0.5) as pe
-                        FROM chat_history
+                        SELECT id, raw_text, emotion_score, created_at
+                        FROM episodic_memory
                         WHERE user_id = :user_id
-                          AND (emotion_score > 0.7 OR emotion_score < -0.7 
-                               OR COALESCE(prediction_error, 0.5) > 0.6)
+                          AND (emotion_score > 0.7 OR emotion_score < -0.7)
                         ORDER BY created_at DESC
                         LIMIT :limit
                     """),
@@ -960,10 +965,9 @@ class Hippocampus:
                 for row in rows:
                     zeigarnik_returns.append({
                         "id": row[0],
-                        "content": row[1],
+                        "content": row[1], # Мапим raw_text в content для совместимости
                         "emotion_score": row[2],
                         "created_at": row[3],
-                        "prediction_error": row[4],
                         "vector_type": "zeigarnik_return"
                     })
                 
