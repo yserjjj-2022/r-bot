@@ -35,7 +35,7 @@ class HormonalState(BaseModel):
     """
     cort: float = 0.1     # Cortisol (Stress)
     da: float = 0.5       # Dopamine (Reward/Motivation)
-    ht: float = 0.5       # Serotonin (5-HT, Mood Stability)
+    ht: float = 0.6       # Serotonin (5-HT, Mood Stability) — Changed from 0.5 to 0.6 for CALM start
     ne: float = 0.1       # Norepinephrine (Arousal/Vigilance)
     oxytocin: float = 0.5 # Social Bonding (Extra axis)
     
