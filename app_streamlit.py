@@ -661,7 +661,7 @@ else:
         # Init Kernel
         if st.session_state.kernel_instance is None:
             # FIX: Use empty lists for values if needed, but ensure config is valid
-            config = BotConfig(character_id="streamlit_user", name=st.session_state.bot_name, sliders=st.session_state.sliders, core_values=[], use_unified_council=use_unified_council)
+            config = BotConfig(name=st.session_state.bot_name, sliders=st.session_state.sliders, use_unified_council=use_unified_council)
             config.gender = st.session_state.bot_gender
             st.session_state.kernel_instance = RCoreKernel(config)
         else:
