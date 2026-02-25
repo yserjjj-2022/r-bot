@@ -38,16 +38,18 @@ class NeuroModulationSystem:
         """
         return sigmoid(raw_pe, k=self.SURPRISE_STEEPNESS, mu=self.SURPRISE_MIDPOINT)
 
-    def update_from_stimuli(self, implied_pe: float, winner_agent: AgentType, sliders: PersonalitySliders = None, current_tec: float = 1.0):
+    def update_from_stimuli(self, implied_pe: float, winner_agent: AgentType, sliders: Optional[PersonalitySliders] = None, current_tec: float = 1.0, current_valence: float = 0.0):
         """
         Reactive update based on current turn processing.
         implied_pe: Already processed biological impact (0.0 - 1.0) calculated via compute_surprise_impact.
         sliders: PersonalitySliders (optional) to tune DA reward curve.
         current_tec: Topic Engagement Capacity (0.0-1.0), defaults to 1.0
+        current_valence: Current mood valence (-1.0 to 1.0), used for emotional labor logic
         """
         # 1. Norepinephrine (Surprise / Vigilance)
         # Driven by biological surprise impact
-        if implied_pe > 0.1:
+        # ИЗМЕНЕНО: порог с 0.1 на 0.4 для снижения чувствительности к мелочам
+        if implied_pe > 0.4:
             # Impact 0.5 -> +0.25 NE
             # Impact 0.9 -> +0.45 NE
             spike = implied_pe * 0.5 
@@ -73,9 +75,16 @@ class NeuroModulationSystem:
                 self.state.da = min(1.0, self.state.da + 0.05)
             
         # 3. Serotonin (Consumption vs Recovery)
-        # Social interactions CONSUME serotonin (emotional labor)
+        # ✨ ИСПРАВЛЕНО: Умный Эмоциональный Труд
+        # Позитивное общение (valence >= 0) восстанавливает серотонин
+        # Негативное общение (valence < 0) сжигает серотонин (вынужденная вежливость)
         if winner_agent == AgentType.SOCIAL:
-             self.state.ht = max(0.0, self.state.ht - 0.05)
+             if current_valence >= 0.0:
+                 # Приятное общение восстанавливает серотонин
+                 self.state.ht = min(1.0, self.state.ht + 0.05)
+             else:
+                 # Вынужденная вежливость при плохом настроении (Emotional labor) сжигает его
+                 self.state.ht = max(0.0, self.state.ht - 0.05)
         
         # In Sync (Low Surprise) restores it
         if implied_pe < 0.1:

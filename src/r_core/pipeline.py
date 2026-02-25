@@ -566,7 +566,15 @@ class RCoreKernel:
         
         adverb_context_str = ""
         if adverb_instructions:
-            adverb_context_str = "\\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\\n" + "\\n".join(adverb_instructions)
+            # ✨ NEW: Hormonal Override (Мьютирование второстепенных стилей при сильных эмоциях)
+            extreme_archetypes = ["RAGE", "FEAR", "PANIC", "BURNOUT", "DISGUST", "SHAME"]
+            current_archetype = self.neuromodulation.get_archetype()
+            
+            if current_archetype in extreme_archetypes:
+                print(f"[Tone Hierarchy] Suppressing secondary modifiers due to extreme archetype: {current_archetype}")
+                # Оставляем строку пустой, чтобы гормональный стиль отработал чисто
+            else:
+                adverb_context_str = "\\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\\n" + "\\n".join(adverb_instructions)
         
         self._update_mood(winner)
         
@@ -577,7 +585,12 @@ class RCoreKernel:
             elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
             elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 
         
-        self.neuromodulation.update_from_stimuli(implied_pe, winner.agent_name, current_tec=current_tec)
+        self.neuromodulation.update_from_stimuli(
+            implied_pe, 
+            winner.agent_name, 
+            current_tec=current_tec,
+            current_valence=self.current_mood.valence
+        )
         
         
         # 5. Response Generation 
