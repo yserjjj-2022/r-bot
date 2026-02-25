@@ -1,7 +1,12 @@
 from typing import List, Dict, Optional, Any, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pydantic import BaseModel, Field
+
+
+def _utc_now() -> datetime:
+    """Returns current UTC time as timezone-aware object (replaces deprecated datetime.utcnow)"""
+    return datetime.now(timezone.utc)
 
 # --- Enums ---
 
@@ -39,7 +44,7 @@ class HormonalState(BaseModel):
     ne: float = 0.1       # Norepinephrine (Arousal/Vigilance)
     oxytocin: float = 0.5 # Social Bonding (Extra axis)
     
-    last_update: datetime = Field(default_factory=datetime.utcnow) # ✨ NEW
+    last_update: datetime = Field(default_factory=_utc_now)
 
     def __str__(self):
         return f"NE:{self.ne:.2f} DA:{self.da:.2f} 5HT:{self.ht:.2f} CORT:{self.cort:.2f}"
@@ -141,7 +146,7 @@ class IncomingMessage(BaseModel):
     user_id: int
     session_id: str = "default"
     text: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utc_now)
     message_id: str
 
 class AgentSignal(BaseModel):
