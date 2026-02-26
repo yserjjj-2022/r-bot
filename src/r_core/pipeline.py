@@ -539,7 +539,8 @@ class RCoreKernel:
                 for i, item in enumerate(zeigarnik_candidates):
                     # ✨ Anti-looping check
                     if is_recently_exhausted(item.get("embedding")):
-                        print(f"[Bifurcation Engine] Skipping zeigarnik candidate (recently exhausted): {item.get('content')[:30]}...")
+                        content_preview = (item.get("content") or "")[:30]
+                        print(f"[Bifurcation Engine] Skipping zeigarnik candidate (recently exhausted): {content_preview}...")
                         continue
                     
                     recency_score = 1.0 / (i + 1)  # More recent = higher score
