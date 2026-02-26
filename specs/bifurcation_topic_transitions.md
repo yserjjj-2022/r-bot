@@ -30,6 +30,10 @@ class TopicTransitionModel(Base):
     # Тип прыжка (Zeigarnik, Emotional, Semantic)
     transition_type = Column(String(50))
     
+    # Интенция агента в момент прыжка (для ролевых ботов: "broker_sell", "avatar_support" и т.д.)
+    # Пока может быть None или "casual_chat"
+    agent_intent = Column(String(100), nullable=True)
+    
     # Насколько это было успешно (от 0.0 до 1.0)
     success_weight = Column(Float, default=0.5)
     
@@ -46,7 +50,7 @@ class TopicTransitionModel(Base):
 
 ### Задача Б: Применение микрографа переходов (Vector Search)
 При оценке `score` каждого кандидата, нужно делать запрос к `topic_transitions`:
-- Найти исторические переходы с похожим `source_embedding` и похожим `target_embedding`.
+- Найти исторические переходы с похожим `source_embedding` и похожим `target_embedding` в контексте текущего `agent_intent`.
 - Если такой переход был успешен (`success_weight > 0.6`), умножить `score` кандидата на повышающий коэффициент.
 - Если переход приводил к провалу (`success_weight < 0.4`), умножить на понижающий коэффициент.
 
@@ -56,7 +60,8 @@ class TopicTransitionModel(Base):
 self.current_topic_state["pending_transition"] = {
     "source_embedding": old_topic_embedding,
     "target_embedding": selected_candidate["embedding"],
-    "transition_type": selected_candidate["vector_type"]
+    "transition_type": selected_candidate["vector_type"],
+    "agent_intent": current_agent_intent # из профиля или контекста
 }
 ```
 
@@ -68,5 +73,5 @@ self.current_topic_state["pending_transition"] = {
 
 ## 5. Результат
 1. Бот перестанет возвращаться к темам, которые только что обсуждались.
-2. Бот научится интуитивно подбирать типы тем под каждого пользователя (например, поймет, что после нейтральной болтовни отлично работает резкий эмоциональный якорь).
-3. Нулевые затраты на LLM для этой логики (только математика и SQL).
+2. Бот научится интуитивно подбирать типы тем под каждого пользователя.
+3. Система готова к внедрению целеполагания (Agent Intentions): граф сможет строить маршруты диалога для выполнения конкретных задач (например, подвести к продаже).
