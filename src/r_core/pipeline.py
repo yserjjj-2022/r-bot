@@ -221,12 +221,7 @@ class RCoreKernel:
         # 0. Precompute Embedding 
         current_embedding = None
         try:
-            emb = await self.llm.get_embedding(message.text)
-            # ✨ FIX: Convert numpy array to list to avoid serialization issues
-            if emb is not None and hasattr(emb, 'tolist'):
-                current_embedding = emb.tolist()
-            else:
-                current_embedding = emb
+            current_embedding = await self.llm.get_embedding(message.text)
         except Exception as e:
             print(f"[Pipeline] Embedding failed early: {e}")
         

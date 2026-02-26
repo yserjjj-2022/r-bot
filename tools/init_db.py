@@ -1,14 +1,12 @@
-import asyncio
 from sqlalchemy import text
 from app.modules.database import engine, init_db
-from app.modules.database.session import AsyncSessionLocal
 
 
-async def run_topic_transitions_migration():
+def run_topic_transitions_migration():
     """Создаёт таблицу topic_transitions для Bifurcation Engine"""
-    async with engine.begin() as conn:
+    with engine.begin() as conn:
         try:
-            await conn.execute(text("""
+            conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS topic_transitions (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL,
@@ -22,7 +20,7 @@ async def run_topic_transitions_migration():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            await conn.execute(text(
+            conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_topic_transitions_user_id ON topic_transitions (user_id)"
             ))
             print("[Migration] ✅ topic_transitions table created")
@@ -36,5 +34,5 @@ if __name__ == "__main__":
     print("База данных инициализирована.")
     
     # Запускаем дополнительные миграции
-    asyncio.run(run_topic_transitions_migration())
+    run_topic_transitions_migration()
     print("Миграции выполнены.")
