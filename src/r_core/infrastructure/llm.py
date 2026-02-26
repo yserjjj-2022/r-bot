@@ -429,39 +429,50 @@ class LLMService:
 
     async def detect_volitional_pattern(self, user_text: str, history_str: str) -> Optional[Dict[str, Any]]:
         """
-        🔍 Volitional Pattern Detector - Stage 1: Taxonomy & TEC.
-        Analyzes the current message to track topic and classify intent into Nature Taxonomy.
+        🔍 Volitional Pattern Detector + Dialogue Terminator.
+        Analyzes the current message to:
+        1. Find volitional patterns (Trigger, Impulse, Target, etc.)
+        2. Detect if the dialogue has reached a natural conclusion (Exit Signal)
         
-        Categories (Nature Taxonomy):
-        - Phatic: Greetings, goodbyes, pure social rituals
-        - Casual: Small talk, weather, brief factual exchanges
-        - Narrative: Storytelling, recounting day's events
-        - Deep: Core values, fears, identity, philosophy
-        - Task: Instrumental goals, coding, debugging, planning
+        Returns dict with keys: 'volitional_pattern' and 'exit_signal'
         """
         system_prompt = (
-            "You are a Topic & Intent Classifier AI.\\n"
-            "TASK: Analyze the user's message and classify it according to the Nature Taxonomy.\\n\\n"
-            "INTENT CATEGORIES:\\n"
-            "- Phatic: Greetings, goodbyes, pure social rituals (e.g., 'Hi!', 'Bye!', 'Good morning!')\\n"
-            "- Casual: Small talk, weather, brief factual exchanges (e.g., 'How are you?', 'Nice weather today')\\n"
-            "- Narrative: Storytelling, recounting events, describing experiences (e.g., 'Then I went to...', 'Yesterday I did...')\\n"
-            "- Deep: Core values, fears, identity, philosophy discussions (e.g., 'I believe...', 'I'm afraid of...', 'My philosophy is...')\\n"
-            "- Task: Instrumental goals, coding, debugging, planning, problem-solving (e.g., 'Help me fix this bug', 'Write a function...')\\n\\n"
-            "INPUT:\\n"
-            f"History Context:\\n{history_str}\\n\\n"
-            "Current Message:\\n"
-            f"'{user_text}'\\n\\n"
-            "OUTPUT FORMAT (JSON Only):\\n"
-            "For meaningful messages, return:\\n"
-            "{ 'pattern_found': true, 'topic': 'Brief 1-3 word topic name (e.g. Python Async)', 'intent_category': 'Phatic|Casual|Narrative|Deep|Task' }\\n"
-            "For empty/meaningless noise (e.g. 'asdf', '???', empty), return:\\n"
-            "{ 'pattern_found': false }\\n\\n"
-            "CONSTRAINTS:\\n"
-            "- Topic should be 1-3 words summarizing the main subject.\\n"
-            "- intent_category must be exactly one of: Phatic, Casual, Narrative, Deep, Task\\n"
-            "- If message is ambiguous, choose the DEEPER category (Deep > Narrative > Casual > Phatic)\\n"
-            "- Empty, garbled, or meaningless messages should return pattern_found: false"
+            "Ты - аналитик волевой сферы (Volitional Analyst) и контроллер диалога.\\n"
+            "Твои задачи:\\n"
+            "1. Найти в диалоге следы волевого конфликта/стремления (Trigger, Impulse, Target, Resolution Strategy, Intensity, Fuel).\\n"
+            "2. Оценить, не подошел ли диалог к логическому или эмоциональному завершению (Exit Signal).\\n\\n"
+            "Диалог:\\n"
+            f"{history_str}\\n\\n"
+            "Текущее сообщение пользователя:\\n"
+            f"{user_text}\\n\\n"
+            "Критерии для завершения диалога (should_exit = true):\\n"
+            "- Явное прощание ('пока', 'до завтра', 'спокойной ночи').\\n"
+            "- Выполнение задачи (пользователь получил, что хотел, и благодарит).\\n"
+            "- Застревание в пустых ответах (Phatic loop: 'ок', 'ага').\\n"
+            "- Эмоциональное выгорание/сопротивление общению.\\n\\n"
+            "Инструкция:\\n"
+            "- Анализируй в основном реплики USER.\\n"
+            "- Поля Volitional Pattern оставь null/пустыми, если волевого акта нет.\\n"
+            "- Если диалог нужно завершить, предложи короткую директиву (suggested_message), как боту следует мягко попрощаться.\\n\\n"
+            "Верни JSON формат:\\n"
+            "{\\n"
+            "  'volitional_pattern': {\\n"
+            "    'trigger': '...',\\n"
+            "    'impulse': '...',\\n"
+            "    'target': '...',\\n"
+            "    'resolution_strategy': '...',\\n"
+            "    'intensity': 0.7,\\n"
+            "    'fuel': 0.5\\n"
+            "  },\\n"
+            "  'exit_signal': {\\n"
+            "    'should_exit': true,\\n"
+            "    'exit_type': 'graceful',\\n"
+            "    'reason': 'task_completed',\\n"
+            "    'suggested_message': 'Попрощайся с пользователем, пожелай удачи и закрой текущую тему.'\\n"
+            "  }\\n"
+            "}\\n\\n"
+            "Если волевой паттерн не найден, верни volitional_pattern: null.\\n"
+            "Если диалог не нужно завершать, верни exit_signal: { 'should_exit': false }"
         )
 
         try:
@@ -480,18 +491,30 @@ class LLMService:
             else:
                 data = response_data
 
-            if data.get("pattern_found"):
-                return {
-                    "topic": data.get("topic", "General"),
-                    "intent_category": data.get("intent_category", "Casual"),
-                    "topic_engagement": 1.0,  # Fresh start - full engagement
-                    "fuel": 1.0,               # Full fuel for new/confirmed pattern
-                    "intensity": 0.5,          # Default starting intensity
-                    "trigger": data.get("topic", "General"),  # Legacy field
-                    "impulse": data.get("intent_category", "Casual"),  # Legacy field
-                    "target": data.get("topic", "General"),  # Legacy field
-                }
-            return None
+            # Build result with both volitional_pattern and exit_signal
+            volitional_pattern = data.get("volitional_pattern")
+            exit_signal = data.get("exit_signal", {"should_exit": False})
+            
+            # Normalize exit_signal
+            if not isinstance(exit_signal, dict):
+                exit_signal = {"should_exit": False}
+            
+            # If volitional_pattern exists, ensure it has required fields
+            if volitional_pattern and isinstance(volitional_pattern, dict):
+                # Add legacy fields for compatibility
+                volitional_pattern.setdefault("trigger", volitional_pattern.get("topic", "General"))
+                volitional_pattern.setdefault("impulse", volitional_pattern.get("intent_category", "Casual"))
+                volitional_pattern.setdefault("target", volitional_pattern.get("topic", "General"))
+                volitional_pattern.setdefault("topic", volitional_pattern.get("trigger", "General"))
+                volitional_pattern.setdefault("intent_category", volitional_pattern.get("impulse", "Casual"))
+                volitional_pattern.setdefault("topic_engagement", 1.0)
+                volitional_pattern.setdefault("fuel", volitional_pattern.get("fuel", 0.5))
+                volitional_pattern.setdefault("intensity", volitional_pattern.get("intensity", 0.5))
+            
+            return {
+                "volitional_pattern": volitional_pattern,
+                "exit_signal": exit_signal
+            }
 
         except Exception as e:
             print(f"[LLM] Volitional Detection failed: {e}")

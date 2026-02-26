@@ -295,6 +295,21 @@ class RCoreKernel:
         # Now that we have context (history), we can run the Volitional Detector
         extraction_result = await self._perception_stage(message, context.get("chat_history", []))
 
+        # === Task 3: Extract Exit Signal ===
+        exit_signal = extraction_result.get("exit_signal", {"should_exit": False})
+        
+        # === Task 3: Build Exit Instruction (if termination needed) ===
+        exit_instruction = ""
+        if exit_signal.get("should_exit"):
+            suggested_msg = exit_signal.get("suggested_message", "Попрощайся с пользователем.")
+            exit_instruction = (
+                f"\\n\\n🚪 DIALOGUE TERMINATION DIRECTIVE:\\n"
+                f"- The conversation has reached a natural conclusion.\\n"
+                f"- Exit reason: {exit_signal.get('reason', 'unknown')}\\n"
+                f"- Suggested action: {suggested_msg}\\n"
+            )
+            print(f"[Pipeline] 🚪 Exit Instruction prepared: {exit_signal.get('reason')}")
+
         # ========== ✨ TOPIC TRACKER UPDATE (Centroid Architecture) ==========
         # Этот блок обновляет TEC на основе предсказания ошибки и плотности ответа
         # Использует архитектуру усредненного вектора темы (Topic Centroid)
@@ -755,7 +770,7 @@ class RCoreKernel:
             )
             print(f"[Bifurcation Engine] Injecting directive: pivot to '{predicted_bifurcation_topic}'")
             
-        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str + volitional_instruction + bifurcation_instruction
+        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str + volitional_instruction + bifurcation_instruction + exit_instruction
         
         # Affective Context for LLM
         affective_warnings = context.get("affective_context", [])
@@ -854,6 +869,9 @@ class RCoreKernel:
                 "emotional": len(emotional_candidates) if lc_mode == "tonic" else 0,
                 "zeigarnik": len(zeigarnik_candidates) if lc_mode == "tonic" else 0,
             } if lc_mode == "tonic" else None,
+            # === Task 3: Dialogue Termination Metrics ===
+            "termination_triggered": exit_signal.get("should_exit", False),
+            "termination_reason": exit_signal.get("reason") if exit_signal.get("should_exit") else None,
         }
 
         # Debug: Print bifurcation summary
@@ -1233,28 +1251,46 @@ class RCoreKernel:
         """
         🔍 Perception Stage:
         1. Mock implementation for triples/anchors (Legacy)
-        2. Real Volitional Detection using LLM (NEW)
+        2. Real Volitional Detection + Exit Signal using LLM (Combined Request)
         """
         # Format history string for LLM
         history_lines = [f"{m['role']}: {m['content']}" for m in chat_history[-6:]]
         history_str = "\\n".join(history_lines)
         
         volitional_pattern = None
+        exit_signal = {"should_exit": False}
+        
+        # === Heuristic: Force check on goodbye phrases ===
+        farewell_keywords = ["пока", "до свидания", "спокойной ночи", "до завтра", "прощай", "bye", "goodbye", "see you"]
+        is_farewell = any(kw in message.text.lower() for kw in farewell_keywords)
         
         # Increase counter
         self.volition_check_counter += 1
         
-        # Only run detection if history is sufficient AND Throttled (1 in 5)
-        if len(chat_history) >= 2 and (self.volition_check_counter % 5 == 0):
-             print(f"[Pipeline] Scanning for volitional patterns (Turn {self.volition_check_counter})...")
-             volitional_pattern = await self.llm.detect_volitional_pattern(message.text, history_str)
-             if volitional_pattern:
-                 print(f"[Pipeline] Pattern DETECTED: {volitional_pattern['trigger']} -> {volitional_pattern['impulse']}")
+        # Run detection if:
+        # - history is sufficient AND Throttled (1 in 5) OR
+        # - Force check on farewell phrases
+        force_check = is_farewell and len(chat_history) >= 1
+        
+        if len(chat_history) >= 2 and (self.volition_check_counter % 5 == 0 or force_check):
+             print(f"[Pipeline] Scanning for volitional patterns + exit signal (Turn {self.volition_check_counter}, force={force_check})...")
+             result = await self.llm.detect_volitional_pattern(message.text, history_str)
+             
+             if result:
+                 volitional_pattern = result.get("volitional_pattern")
+                 exit_signal = result.get("exit_signal", {"should_exit": False})
+                 
+                 if volitional_pattern:
+                     print(f"[Pipeline] Volitional Pattern DETECTED: {volitional_pattern.get('trigger')} -> {volitional_pattern.get('impulse')}")
+                 
+                 if exit_signal.get("should_exit"):
+                     print(f"[Pipeline] 🚪 EXIT SIGNAL DETECTED: {exit_signal.get('reason')} - {exit_signal.get('suggested_message')}")
         else:
              print(f"[Pipeline] Volition scan skipped (Turn {self.volition_check_counter})")
         
         return {
             "triples": [], 
             "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
-            "volitional_pattern": volitional_pattern
+            "volitional_pattern": volitional_pattern,
+            "exit_signal": exit_signal
         }
