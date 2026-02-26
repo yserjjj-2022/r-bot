@@ -169,7 +169,30 @@ class TopicTransitionModel(Base):
 async def init_models():
     """Инициализация + автомиграция"""
     async with engine.begin() as conn:
+        # ✨ CRITICAL: Create vector extension first
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        
+        # ✨ CRITICAL: Force create topic_transitions table (may not be created by ORM due to pgvector)
+        try:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS topic_transitions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    source_embedding vector(1536) NOT NULL,
+                    target_embedding vector(1536) NOT NULL,
+                    transition_type VARCHAR(50) NOT NULL,
+                    agent_intent VARCHAR(100),
+                    success_weight FLOAT DEFAULT 0.5,
+                    attempts INTEGER DEFAULT 1,
+                    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            print("[DB Init] ✅ topic_transitions table ensured")
+        except Exception as e:
+            print(f"[DB Init] topic_transitions table creation: {e}")
+        
+        # Create other ORM tables
         await conn.run_sync(Base.metadata.create_all)
         
         # ✨ Migration: Add sentiment column to semantic_memory

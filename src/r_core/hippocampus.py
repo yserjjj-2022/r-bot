@@ -94,27 +94,50 @@ class Hippocampus:
         self.min_theme_frequency = min_theme_frequency
 
     def _ensure_list(self, embedding: Any) -> List[float]:
-        """
-        Helper to ensure embedding is a python list, not numpy array or string.
-        Handles all edge cases including double-serialized vectors.
-        """
-        if embedding is None:
+        """Утилита для гарантии того, что вектор - это список float."""
+        import json
+        if not embedding:
             return []
-        # Handle numpy arrays first
-        if hasattr(embedding, 'tolist'):
+            
+        # 1. Если это уже список
+        if isinstance(embedding, list):
+            if len(embedding) > 0:
+                # Если первый элемент списка - строка, похожая на "[" (следствие двойного парсинга)
+                if isinstance(embedding[0], str) and embedding[0] == "[":
+                    # Собираем символы обратно в строку и парсим
+                    joined_str = "".join(embedding)
+                    try:
+                        return json.loads(joined_str)
+                    except:
+                        pass # Fallback to loop
+                        
+                # Если первый элемент строка-число (например "0.15")
+                if isinstance(embedding[0], str):
+                    try:
+                        return [float(x) for x in embedding if x not in ('[', ']', ',', ' ')]
+                    except:
+                        pass
+                        
+                # Нормальный список float
+                if isinstance(embedding[0], (int, float)):
+                    return [float(x) for x in embedding]
+            return embedding
+            
+        # 2. Если это numpy массив
+        if hasattr(embedding, "tolist"):
             return embedding.tolist()
-        # Handle string (already serialized as JSON)
+            
+        # 3. Если это строка
         if isinstance(embedding, str):
             try:
                 parsed = json.loads(embedding)
                 if isinstance(parsed, list):
-                    return parsed
-            except (json.JSONDecodeError, TypeError):
+                    return [float(x) for x in parsed]
+                if isinstance(parsed, str): # Двойная сериализация
+                    return [float(x) for x in json.loads(parsed)]
+            except json.JSONDecodeError:
                 pass
-            return []
-        # Handle regular list
-        if isinstance(embedding, list):
-            return embedding
+                
         return []
     
     def _serialize_vector(self, embedding: Any) -> Optional[str]:
