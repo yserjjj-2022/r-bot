@@ -94,9 +94,25 @@ class Hippocampus:
         self.min_theme_frequency = min_theme_frequency
 
     def _ensure_list(self, embedding: Any) -> List[float]:
-        """Helper to ensure embedding is a python list, not numpy array"""
+        """
+        Helper to ensure embedding is a python list, not numpy array or string.
+        Handles all edge cases including double-serialized vectors.
+        """
+        if embedding is None:
+            return []
+        # Handle numpy arrays first
         if hasattr(embedding, 'tolist'):
             return embedding.tolist()
+        # Handle string (already serialized as JSON)
+        if isinstance(embedding, str):
+            try:
+                parsed = json.loads(embedding)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+            return []
+        # Handle regular list
         if isinstance(embedding, list):
             return embedding
         return []
@@ -815,7 +831,7 @@ class Hippocampus:
                 if not row:
                     print("[Hippocampus] DEBUG: No unverified predictions found for this bot message.")
                     return None
-                    
+                
                 # Convert row to dict
                 try:
                     data = row._mapping
