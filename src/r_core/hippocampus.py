@@ -96,48 +96,50 @@ class Hippocampus:
     def _ensure_list(self, embedding: Any) -> List[float]:
         """Утилита для гарантии того, что вектор - это список float."""
         import json
-        if not embedding:
+        
+        if embedding is None:
             return []
             
-        # 1. Если это уже список
-        if isinstance(embedding, list):
-            if len(embedding) > 0:
-                # Если первый элемент списка - строка, похожая на "[" (следствие двойного парсинга)
-                if isinstance(embedding[0], str) and embedding[0] == "[":
-                    # Собираем символы обратно в строку и парсим
-                    joined_str = "".join(embedding)
-                    try:
-                        return json.loads(joined_str)
-                    except:
-                        pass # Fallback to loop
-                        
-                # Если первый элемент строка-число (например "0.15")
-                if isinstance(embedding[0], str):
-                    try:
-                        return [float(x) for x in embedding if x not in ('[', ']', ',', ' ')]
-                    except:
-                        pass
-                        
-                # Нормальный список float
-                if isinstance(embedding[0], (int, float)):
-                    return [float(x) for x in embedding]
-            return embedding
-            
-        # 2. Если это numpy массив
-        if hasattr(embedding, "tolist"):
+        # 1. Сначала проверяем numpy array (может быть из БД)
+        if hasattr(embedding, 'tolist'):
             return embedding.tolist()
             
-        # 3. Если это строка
+        # 2. Теперь безопасно проверяем на список
+        if isinstance(embedding, list):
+            if len(embedding) == 0:
+                return []
+    
+            first = embedding[0]
+            
+            # Если первый элемент НЕ строка - это нормальный список чисел
+            if not isinstance(first, str):
+                return [float(x) for x in embedding]
+            
+            # Обработка случая двойной сериализации: ["[", "0", ".", "1", ...
+            if first == "[":
+                joined_str = "".join(embedding)
+                try:
+                    return json.loads(joined_str)
+                except:
+                    pass
+            
+            # Если первый элемент строка-число (например "0.15")
+            try:
+                return [float(x) for x in embedding if x not in ('[', ']', ',', ' ')]
+            except:
+                pass
+            
+            return embedding
+        
+        # 3. Если это строка - парсим JSON
         if isinstance(embedding, str):
             try:
                 parsed = json.loads(embedding)
                 if isinstance(parsed, list):
                     return [float(x) for x in parsed]
-                if isinstance(parsed, str): # Двойная сериализация
-                    return [float(x) for x in json.loads(parsed)]
             except json.JSONDecodeError:
                 pass
-                
+        
         return []
     
     def _serialize_vector(self, embedding: Any) -> Optional[str]:

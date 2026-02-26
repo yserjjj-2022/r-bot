@@ -335,9 +335,14 @@ class RCoreKernel:
         
         if self.current_topic_state["topic_embedding"] is not None and current_embedding is not None:
             if not is_short_or_phatic:
-                # Вычисляем косинусное сходство с центроидом
+                # ✨ FIX: Validate embedding dimensions match
                 topic_emb = self.current_topic_state["topic_embedding"]
-                similarity = dot(current_embedding, topic_emb) / (norm(current_embedding) * norm(topic_emb))
+                if len(topic_emb) != len(current_embedding):
+                    print(f"[TopicTracker] ⚠️ Dimension mismatch: stored={len(topic_emb)}, current={len(current_embedding)}. Resetting topic.")
+                    topic_changed = True
+                else:
+                    # Вычисляем косинусное сходство с центроидом
+                    similarity = dot(current_embedding, topic_emb) / (norm(current_embedding) * norm(topic_emb))
 
                 # Новый порог 0.40 (ранее был 0.5)
                 if similarity < 0.40:
@@ -367,13 +372,20 @@ class RCoreKernel:
             count = self.current_topic_state["messages_in_topic"]
             old_centroid = self.current_topic_state["topic_embedding"]
             
-            old_arr = np.array(old_centroid)
-            curr_arr = np.array(current_embedding)
-            
-            # Формула: new_centroid = (old_centroid * count + current_embedding) / (count + 1)
-            new_centroid = ((old_arr * count) + curr_arr) / (count + 1)
-            # Нормализация
-            new_centroid = new_centroid / np.linalg.norm(new_centroid)
+            # ✨ FIX: Validate dimensions before numpy operations
+            if current_embedding is None:
+                topic_changed = True
+            elif len(old_centroid) != len(current_embedding):
+                print(f"[TopicTracker] ⚠️ Centroid dimension mismatch: {len(old_centroid)} vs {len(current_embedding)}. Starting new topic.")
+                topic_changed = True
+            else:
+                old_arr = np.array(old_centroid)
+                curr_arr = np.array(current_embedding)
+                
+                # Формула: new_centroid = (old_centroid * count + current_embedding) / (count + 1)
+                new_centroid = ((old_arr * count) + curr_arr) / (count + 1)
+                # Нормализация
+                new_centroid = new_centroid / np.linalg.norm(new_centroid)
             
             self.current_topic_state["topic_embedding"] = new_centroid.tolist()
             self.current_topic_state["messages_in_topic"] += 1
@@ -546,21 +558,35 @@ class RCoreKernel:
                 
                 # Helper: Check if candidate is a recently-exhausted topic
                 def is_recently_exhausted(candidate_emb: Optional[List[float]]) -> bool:
-                    if not candidate_emb or not recent_transitions:
+                    if not candidate_emb:
                         return False
+                    if not recent_transitions:
+                        return False
+                    
+                    # ✨ FIX: Validate dimension - use explicit None check for static analyzer
+                    if current_embedding is None:
+                        return False
+                    emb_len = len(candidate_emb)
+                    current_len = len(current_embedding)
+                    if emb_len != current_len:
+                        return False
+                    
                     # Проверяем косинусное сходство с source_embeddings недавних переходов
                     # Если similarity > 0.7, значит мы пытаемся вернуться к недавней теме
                     import numpy as np
                     candidate_arr = np.array(candidate_emb)
                     for trans in recent_transitions:
                         source_emb = trans.get("source_embedding")
-                        if source_emb:
+                        if source_emb and len(source_emb) == emb_len:
                             source_arr = np.array(source_emb)
                             # Cosine similarity
-                            similarity = np.dot(candidate_arr, source_arr) / (np.linalg.norm(candidate_arr) * np.linalg.norm(source_arr))
-                            if similarity > 0.7:
-                                print(f"[Bifurcation Engine] Anti-looping: Candidate matches recent source (similarity={similarity:.2f})")
-                                return True
+                            try:
+                                similarity = np.dot(candidate_arr, source_arr) / (np.linalg.norm(candidate_arr) * np.linalg.norm(source_arr))
+                                if similarity > 0.7:
+                                    print(f"[Bifurcation Engine] Anti-looping: Candidate matches recent source (similarity={similarity:.2f})")
+                                    return True
+                            except Exception:
+                                pass
                     return False
                 
                 # 2. Score and combine candidates (with anti-looping filter and transition modifier)
