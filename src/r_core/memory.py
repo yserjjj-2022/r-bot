@@ -489,9 +489,18 @@ class MemorySystem:
                 print(f"[MemorySystem] Embedding failed: {e}")
 
         # 🎯 NEW: Save Volitional Pattern (если есть)
-        if "volitional_pattern" in extraction_result and extraction_result["volitional_pattern"]:
-            pattern = VolitionalPattern(**extraction_result["volitional_pattern"])
-            await self.store.save_pattern(user_id, pattern)
+        # CRITICAL: Strict validation - check for required fields before Pydantic
+        vol_pattern_data = extraction_result.get("volitional_pattern")
+        if vol_pattern_data is not None and isinstance(vol_pattern_data, dict):
+            # Check if required keys actually exist and are not None before Pydantic validation
+            if vol_pattern_data.get("trigger") and vol_pattern_data.get("impulse"):
+                try:
+                    pattern = VolitionalPattern(**vol_pattern_data)
+                    await self.store.save_pattern(user_id, pattern)
+                except Exception as e:
+                    print(f"[Memory] Failed to save volitional pattern: {e}")
+            else:
+                print("[Memory] Skipped saving empty/null volitional pattern")
 
     async def memorize_bot_response(self, user_id: int, session_id: str, text: str):
         await self.store.save_chat_message(user_id, session_id, "assistant", text)

@@ -499,17 +499,25 @@ class LLMService:
             if not isinstance(exit_signal, dict):
                 exit_signal = {"should_exit": False}
             
-            # If volitional_pattern exists, ensure it has required fields
-            if volitional_pattern and isinstance(volitional_pattern, dict):
-                # Add legacy fields for compatibility
-                volitional_pattern.setdefault("trigger", volitional_pattern.get("topic", "General"))
-                volitional_pattern.setdefault("impulse", volitional_pattern.get("intent_category", "Casual"))
-                volitional_pattern.setdefault("target", volitional_pattern.get("topic", "General"))
-                volitional_pattern.setdefault("topic", volitional_pattern.get("trigger", "General"))
-                volitional_pattern.setdefault("intent_category", volitional_pattern.get("impulse", "Casual"))
-                volitional_pattern.setdefault("topic_engagement", 1.0)
-                volitional_pattern.setdefault("fuel", volitional_pattern.get("fuel", 0.5))
-                volitional_pattern.setdefault("intensity", volitional_pattern.get("intensity", 0.5))
+            # CRITICAL: Handle None/null volitional_pattern from LLM
+            if volitional_pattern is not None and isinstance(volitional_pattern, dict):
+                # If LLM returned a dict with nulls, treat it as "no pattern"
+                trigger = volitional_pattern.get("trigger")
+                impulse = volitional_pattern.get("impulse")
+                
+                if trigger is None or impulse is None or trigger == "" or impulse == "":
+                    volitional_pattern = None
+                else:
+                    # Valid pattern, ensure defaults for missing optional fields
+                    volitional_pattern.setdefault("target", volitional_pattern.get("topic", "General"))
+                    volitional_pattern.setdefault("topic", volitional_pattern.get("trigger", "General"))
+                    volitional_pattern.setdefault("intent_category", "Casual")
+                    volitional_pattern.setdefault("topic_engagement", 1.0)
+                    volitional_pattern.setdefault("fuel", 0.5)
+                    volitional_pattern.setdefault("intensity", 0.5)
+            else:
+                # LLM explicitly returned null or something invalid
+                volitional_pattern = None
             
             return {
                 "volitional_pattern": volitional_pattern,
