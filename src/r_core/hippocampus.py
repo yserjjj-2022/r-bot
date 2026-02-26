@@ -1083,3 +1083,129 @@ class Hippocampus:
             except Exception as e:
                 print(f"[Hippocampus] ❌ Error in get_recent_transitions: {e}")
                 return []
+
+    async def update_transition_weight(
+        self,
+        user_id: int,
+        source_embedding: List[float],
+        target_embedding: List[float],
+        transition_success: float
+    ):
+        """
+        ✨ NEW: Feedback Loop - Обновляет вес перехода на основе успешности.
+        
+        Использует экспоненциальное скользящее среднее (EMA):
+        new_weight = old_weight * 0.7 + transition_success * 0.3
+        """
+        async with AsyncSessionLocal() as session:
+            try:
+                source_str = self._serialize_vector(source_embedding)
+                target_str = self._serialize_vector(target_embedding)
+                
+                if not source_str or not target_str:
+                    print("[Hippocampus] update_transition_weight: Missing embeddings, skipping")
+                    return
+                
+                # Ищем существующую запись по similarity < 0.1
+                result = await session.execute(
+                    text("""
+                        SELECT id, success_weight, attempts
+                        FROM topic_transitions
+                        WHERE user_id = :user_id
+                          AND source_embedding <=> CAST(:source_emb AS vector) < 0.1
+                          AND target_embedding <=> CAST(:target_emb AS vector) < 0.1
+                        LIMIT 1
+                    """),
+                    {"user_id": user_id, "source_emb": source_str, "target_emb": target_str}
+                )
+                row = result.fetchone()
+                
+                if row:
+                    # Обновляем существующую запись
+                    old_weight = row[1]
+                    attempts = row[2]
+                    new_weight = old_weight * 0.7 + transition_success * 0.3
+                    
+                    await session.execute(
+                        text("""
+                            UPDATE topic_transitions
+                            SET success_weight = :new_weight,
+                                attempts = :attempts,
+                                last_used_at = NOW()
+                            WHERE id = :id
+                        """),
+                        {"new_weight": new_weight, "attempts": attempts + 1, "id": row[0]}
+                    )
+                    print(f"[Hippocampus] Updated transition weight: {old_weight:.2f} -> {new_weight:.2f} (attempts={attempts + 1})")
+                else:
+                    # Создаём новую запись (edge case - должна была быть создана ранее)
+                    await session.execute(
+                        text("""
+                            INSERT INTO topic_transitions 
+                            (user_id, source_embedding, target_embedding, transition_type, success_weight, attempts, last_used_at)
+                            VALUES (:user_id, :source_emb, :target_emb, 'feedback_update', :success_weight, 1, NOW())
+                        """),
+                        {
+                            "user_id": user_id,
+                            "source_emb": source_str,
+                            "target_emb": target_str,
+                            "success_weight": transition_success
+                        }
+                    )
+                    print(f"[Hippocampus] Created new transition record (success={transition_success:.2f})")
+                
+                await session.commit()
+                
+            except Exception as e:
+                print(f"[Hippocampus] ❌ Error in update_transition_weight: {e}")
+
+    async def get_transition_modifier(
+        self,
+        user_id: int,
+        current_embedding: List[float],
+        candidate_embedding: List[float]
+    ) -> float:
+        """
+        ✨ NEW: Feedback Loop - Возвращает модификатор score на основе исторических данных.
+        
+        - success_weight > 0.6 -> возвращает 1.5 (повышающий коэффициент)
+        - success_weight < 0.4 -> возвращает 0.5 (понижающий коэффициент)
+        - иначе -> возвращает 1.0
+        """
+        async with AsyncSessionLocal() as session:
+            try:
+                current_str = self._serialize_vector(current_embedding)
+                candidate_str = self._serialize_vector(candidate_embedding)
+                
+                if not current_str or not candidate_str:
+                    return 1.0  # Нет данных - без модификатора
+                
+                # Ищем похожий исторический переход
+                result = await session.execute(
+                    text("""
+                        SELECT success_weight
+                        FROM topic_transitions
+                        WHERE user_id = :user_id
+                          AND source_embedding <=> CAST(:source_emb AS vector) < 0.15
+                          AND target_embedding <=> CAST(:target_emb AS vector) < 0.15
+                        ORDER BY attempts DESC
+                        LIMIT 1
+                    """),
+                    {"user_id": user_id, "source_emb": current_str, "target_emb": candidate_str}
+                )
+                row = result.fetchone()
+                
+                if row:
+                    success_weight = row[0]
+                    if success_weight > 0.6:
+                        print(f"[Hippocampus] Transition modifier: 1.5 (historical success={success_weight:.2f})")
+                        return 1.5
+                    elif success_weight < 0.4:
+                        print(f"[Hippocampus] Transition modifier: 0.5 (historical failure={success_weight:.2f})")
+                        return 0.5
+                
+                return 1.0  # Переход не найден - без модификатора
+                
+            except Exception as e:
+                print(f"[Hippocampus] ❌ Error in get_transition_modifier: {e}")
+                return 1.0

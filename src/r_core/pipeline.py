@@ -107,7 +107,8 @@ class RCoreKernel:
             "turns_on_topic": 0,             # Turns spent on this topic
             "messages_in_topic": 0,          # Счетчик сообщений для расчета центроида
             "intent_category": "Casual",     # Nature taxonomy: Phatic/Casual/Narrative/Deep/Task
-            "last_prediction_error": 0.5     # PE from last turn (for decay calculation)
+            "last_prediction_error": 0.5,    # PE from last turn (for decay calculation)
+            "pending_transition": None       # ✨ NEW: Feedback Loop - pending topic transition
         }
 
 
@@ -389,6 +390,32 @@ class RCoreKernel:
             print(f"[TopicTracker] TEC: {old_tec:.2f} → {self.current_topic_state['tec']:.2f} "
                   f"(decay={effective_decay:.2f}, PE={prediction_error:.2f}, turns={self.current_topic_state['turns_on_topic']})")
 
+            # ✨ FEEDBACK LOOP: Оцениваем успешность предыдущего перехода
+            pending_transition = self.current_topic_state.get("pending_transition")
+            if pending_transition:
+                # Вычисляем success на основе TEC и плотности ответа
+                response_density = min(len(message.text.split()) / 50.0, 1.0) if message.text else 0.0
+                current_tec_for_feedback = self.current_topic_state["tec"]
+                
+                # Базовая формула успеха (от 0.0 до 1.0)
+                transition_success = min(1.0, current_tec_for_feedback * (0.5 + response_density))
+                
+                print(f"[TopicTracker] Feedback Loop: evaluating transition success={transition_success:.2f} (TEC={current_tec_for_feedback:.2f}, density={response_density:.2f})")
+                
+                # Обновляем вес перехода в БД
+                try:
+                    await self.hippocampus.update_transition_weight(
+                        user_id=message.user_id,
+                        source_embedding=pending_transition["source_embedding"],
+                        target_embedding=pending_transition["target_embedding"],
+                        transition_success=transition_success
+                    )
+                except Exception as e:
+                    print(f"[TopicTracker] Failed to update transition weight: {e}")
+                
+                # Очищаем pending_transition
+                self.current_topic_state["pending_transition"] = None
+
         # Log Topic Tracker State
         print(f"[TopicTracker] State: topic='{self.current_topic_state['topic_text'][:30]}...', "
               f"intent={self.current_topic_state['intent_category']}, "
@@ -481,6 +508,27 @@ class RCoreKernel:
                     except Exception as e:
                         print(f"[Bifurcation Engine] Failed to fetch recent transitions: {e}")
                 
+                # ✨ FEEDBACK LOOP: Предварительно получаем модификаторы для всех кандидатов
+                # Создаём мапу candidate_embedding -> modifier
+                transition_modifiers = {}
+                if current_embedding:
+                    # Собираем все embeddings кандидатов
+                    all_candidate_embeddings = []
+                    for item in semantic_candidates + emotional_candidates + zeigarnik_candidates:
+                        if item.get("embedding"):
+                            all_candidate_embeddings.append((id(item), item["embedding"]))
+                    
+                    # Запрашиваем модификатор для каждого уникального embedding
+                    for item_id, cand_emb in all_candidate_embeddings:
+                        try:
+                            modifier = await self.hippocampus.get_transition_modifier(
+                                message.user_id, current_embedding, cand_emb
+                            )
+                            transition_modifiers[item_id] = modifier
+                        except Exception as e:
+                            print(f"[Bifurcation Engine] Failed to get transition modifier: {e}")
+                            transition_modifiers[item_id] = 1.0
+                
                 # Helper: Check if candidate is a recently-exhausted topic
                 def is_recently_exhausted(candidate_emb: Optional[List[float]]) -> bool:
                     if not candidate_emb or not recent_transitions:
@@ -500,7 +548,7 @@ class RCoreKernel:
                                 return True
                     return False
                 
-                # 2. Score and combine candidates (with anti-looping filter)
+                # 2. Score and combine candidates (with anti-looping filter and transition modifier)
                 # Semantic: weight 0.5 (based on similarity: distance 0.35-0.65 is ideal)
                 for item in semantic_candidates:
                     # ✨ Anti-looping check
@@ -509,12 +557,19 @@ class RCoreKernel:
                         continue
                     
                     score = 0.5 * (1.0 - abs(item.get("distance", 0.5) - 0.5) * 2)  # Higher score for distance closer to 0.5
+                    
+                    # ✨ FEEDBACK LOOP: Применяем модификатор на основе исторических данных
+                    item_id = id(item)
+                    transition_mod = transition_modifiers.get(item_id, 1.0)
+                    score *= transition_mod
+                    
                     bifurcation_candidates.append({
                         "topic": item.get("topic", "Unknown"),
                         "content": item.get("content", ""),
                         "score": score,
                         "vector": "semantic_neighbor",
                         "distance": item.get("distance"),
+                        "transition_modifier": transition_mod,  # Логируем для отладки
                         "embedding": item.get("embedding")  # ✨ Pass for transition saving
                     })
                 
@@ -526,12 +581,19 @@ class RCoreKernel:
                         continue
                     
                     score = 0.3 * item.get("intensity", 0.5)
+                    
+                    # ✨ FEEDBACK LOOP: Применяем модификатор
+                    item_id = id(item)
+                    transition_mod = transition_modifiers.get(item_id, 1.0)
+                    score *= transition_mod
+                    
                     bifurcation_candidates.append({
                         "topic": item.get("topic", "Unknown"),
                         "content": item.get("content", ""),
                         "score": score,
                         "vector": "emotional_anchor",
                         "intensity": item.get("intensity"),
+                        "transition_modifier": transition_mod,
                         "embedding": item.get("embedding")  # ✨ Pass for transition saving
                     })
                 
@@ -545,12 +607,19 @@ class RCoreKernel:
                     
                     recency_score = 1.0 / (i + 1)  # More recent = higher score
                     score = 0.2 * recency_score * item.get("emotion_score", 0.5)
+                    
+                    # ✨ FEEDBACK LOOP: Применяем модификатор
+                    item_id = id(item)
+                    transition_mod = transition_modifiers.get(item_id, 1.0)
+                    score *= transition_mod
+                    
                     bifurcation_candidates.append({
                         "topic": item.get("content", "Unknown")[:50],  # Use content as topic
                         "content": item.get("content", ""),
                         "score": score,
                         "vector": "zeigarnik_return",
                         "emotion_score": item.get("emotion_score"),
+                        "transition_modifier": transition_mod,
                         "embedding": item.get("embedding")  # ✨ Pass for transition saving
                     })
                 
@@ -572,6 +641,16 @@ class RCoreKernel:
                                 transition_type=transition_type,
                                 agent_intent=f"bifurcation_to_{predicted_bifurcation_topic}"
                             )
+                            
+                            # ✨ FEEDBACK LOOP: Save pending transition for future evaluation
+                            self.current_topic_state["pending_transition"] = {
+                                "source_embedding": current_embedding,
+                                "target_embedding": selected_candidate["embedding"],
+                                "transition_type": transition_type,
+                                "agent_intent": f"bifurcation_to_{predicted_bifurcation_topic}"
+                            }
+                            print(f"[Bifurcation Engine] Pending transition saved for feedback evaluation")
+                            
                         except Exception as e:
                             print(f"[Bifurcation Engine] Failed to save transition: {e}")
                     
