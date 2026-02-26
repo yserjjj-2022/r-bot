@@ -896,9 +896,10 @@ class Hippocampus:
                 # ИЗМЕНЕНИЯ:
                 # 1. Используем subject, predicate, object вместо topic/content
                 # 2. Используем оператор <=> вместо vector_cosine_ops и CAST для безопасного кастования
+                # 3. Возвращаем embedding для anti-looping проверки
                 result = await session.execute(
                     text("""
-                        SELECT id, subject, predicate, object, 
+                        SELECT id, subject, predicate, object, embedding,
                                (embedding <=> CAST(:emb AS vector)) as distance
                         FROM semantic_memory
                         WHERE user_id = :user_id
@@ -914,11 +915,16 @@ class Hippocampus:
                 neighbors = []
                 for row in rows:
                     content_str = f"{row[1]} {row[2]} {row[3]}" # Сборка контента из триплета
+                    # Извлекаем embedding из PostgreSQL vector
+                    emb = row[4]
+                    emb_list = emb.tolist() if hasattr(emb, 'tolist') else list(emb) if emb else None
+                    
                     neighbors.append({
                         "id": row[0],
                         "topic": row[1], # Имитация topic для совместимости с BifurcationEngine
                         "content": content_str,
-                        "distance": row[4],
+                        "distance": row[5],
+                        "embedding": emb_list,  # ✨ NEW: Возвращаем embedding для anti-looping
                         "vector_type": "semantic_neighbor"
                     })
                 
@@ -948,9 +954,10 @@ class Hippocampus:
                 # ИЗМЕНЕНИЯ:
                 # Читаем из episodic_memory, где есть поле emotion_score. 
                 # У episodic_memory поле текста называется raw_text
+                # ✨ Возвращаем embedding для anti-looping проверки
                 result = await session.execute(
                     text("""
-                        SELECT id, raw_text, emotion_score, created_at
+                        SELECT id, raw_text, emotion_score, created_at, embedding
                         FROM episodic_memory
                         WHERE user_id = :user_id
                           AND (emotion_score > 0.7 OR emotion_score < -0.7)
@@ -963,11 +970,16 @@ class Hippocampus:
                 
                 zeigarnik_returns = []
                 for row in rows:
+                    # Извлекаем embedding из PostgreSQL vector
+                    emb = row[4]
+                    emb_list = emb.tolist() if hasattr(emb, 'tolist') else list(emb) if emb else None
+                    
                     zeigarnik_returns.append({
                         "id": row[0],
                         "content": row[1], # Мапим raw_text в content для совместимости
                         "emotion_score": row[2],
                         "created_at": row[3],
+                        "embedding": emb_list,  # ✨ NEW: Возвращаем embedding для anti-looping
                         "vector_type": "zeigarnik_return"
                     })
                 
@@ -976,4 +988,98 @@ class Hippocampus:
                 
             except Exception as e:
                 print(f"[Hippocampus] ❌ Error in get_zeigarnik_returns: {e}")
+                return []
+
+    async def save_topic_transition(
+        self,
+        user_id: int,
+        source_embedding: List[float],
+        target_embedding: List[float],
+        transition_type: str,
+        agent_intent: Optional[str] = None
+    ):
+        """
+        ✨ NEW: Anti-Looping - Сохраняет переход между темами в граф.
+        
+        Используется для предотвращения "эффекта золотой рыбки" - бесконечного 
+        переключения между одними и теми же темами.
+        
+        Args:
+            user_id: User ID
+            source_embedding: Embedding исчерпанной темы
+            target_embedding: Embedding предложенной новой темы
+            transition_type: Semantic / Emotional / Zeigarnik
+            agent_intent: Намерение агента в момент прыжка
+        """
+        async with AsyncSessionLocal() as session:
+            try:
+                source_str = self._serialize_vector(source_embedding)
+                target_str = self._serialize_vector(target_embedding)
+                
+                if not source_str or not target_str:
+                    print("[Hippocampus] save_topic_transition: Missing embeddings, skipping")
+                    return
+                
+                await session.execute(
+                    text("""
+                        INSERT INTO topic_transitions 
+                        (user_id, source_embedding, target_embedding, transition_type, agent_intent, last_used_at)
+                        VALUES (:user_id, :source_emb, :target_emb, :transition_type, :agent_intent, NOW())
+                    """),
+                    {
+                        "user_id": user_id,
+                        "source_emb": source_str,
+                        "target_emb": target_str,
+                        "transition_type": transition_type,
+                        "agent_intent": agent_intent
+                    }
+                )
+                await session.commit()
+                print(f"[Hippocampus] Topic transition saved: {transition_type} (user={user_id})")
+                
+            except Exception as e:
+                print(f"[Hippocampus] ❌ Error in save_topic_transition: {e}")
+
+    async def get_recent_transitions(self, user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        """
+        ✨ NEW: Anti-Looping - Получает последние переходы между темами.
+        
+        Используется для проверки, не пытаемся ли мы переключиться на тему,
+        которую пользователь недавно покинул.
+        """
+        async with AsyncSessionLocal() as session:
+            try:
+                result = await session.execute(
+                    text("""
+                        SELECT id, source_embedding, target_embedding, transition_type, 
+                               success_weight, attempts, last_used_at
+                        FROM topic_transitions
+                        WHERE user_id = :user_id
+                        ORDER BY last_used_at DESC
+                        LIMIT :limit
+                    """),
+                    {"user_id": user_id, "limit": limit}
+                )
+                rows = result.fetchall()
+                
+                transitions = []
+                for row in rows:
+                    # Извлекаем embeddings
+                    source_emb = row[1]
+                    target_emb = row[2]
+                    
+                    transitions.append({
+                        "id": row[0],
+                        "source_embedding": source_emb.tolist() if hasattr(source_emb, 'tolist') else list(source_emb) if source_emb else None,
+                        "target_embedding": target_emb.tolist() if hasattr(target_emb, 'tolist') else list(target_emb) if target_emb else None,
+                        "transition_type": row[3],
+                        "success_weight": row[4],
+                        "attempts": row[5],
+                        "last_used_at": row[6]
+                    })
+                
+                return transitions
+                
+            except Exception as e:
+                print(f"[Hippocampus] ❌ Error in get_recent_transitions: {e}")
                 return []

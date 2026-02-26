@@ -473,46 +473,106 @@ class RCoreKernel:
                     semantic_task, zeigarnik_task, emotional_task
                 )
                 
-                # 2. Score and combine candidates
+                # ✨ ANTI-LOOPING: Fetch recent transitions BEFORE scoring
+                recent_transitions = []
+                if current_embedding:
+                    try:
+                        recent_transitions = await self.hippocampus.get_recent_transitions(message.user_id, limit=5)
+                    except Exception as e:
+                        print(f"[Bifurcation Engine] Failed to fetch recent transitions: {e}")
+                
+                # Helper: Check if candidate is a recently-exhausted topic
+                def is_recently_exhausted(candidate_emb: Optional[List[float]]) -> bool:
+                    if not candidate_emb or not recent_transitions:
+                        return False
+                    # Проверяем косинусное сходство с source_embeddings недавних переходов
+                    # Если similarity > 0.7, значит мы пытаемся вернуться к недавней теме
+                    import numpy as np
+                    candidate_arr = np.array(candidate_emb)
+                    for trans in recent_transitions:
+                        source_emb = trans.get("source_embedding")
+                        if source_emb:
+                            source_arr = np.array(source_emb)
+                            # Cosine similarity
+                            similarity = np.dot(candidate_arr, source_arr) / (np.linalg.norm(candidate_arr) * np.linalg.norm(source_arr))
+                            if similarity > 0.7:
+                                print(f"[Bifurcation Engine] Anti-looping: Candidate matches recent source (similarity={similarity:.2f})")
+                                return True
+                    return False
+                
+                # 2. Score and combine candidates (with anti-looping filter)
                 # Semantic: weight 0.5 (based on similarity: distance 0.35-0.65 is ideal)
                 for item in semantic_candidates:
+                    # ✨ Anti-looping check
+                    if is_recently_exhausted(item.get("embedding")):
+                        print(f"[Bifurcation Engine] Skipping semantic candidate (recently exhausted): {item.get('topic')}")
+                        continue
+                    
                     score = 0.5 * (1.0 - abs(item.get("distance", 0.5) - 0.5) * 2)  # Higher score for distance closer to 0.5
                     bifurcation_candidates.append({
                         "topic": item.get("topic", "Unknown"),
                         "content": item.get("content", ""),
                         "score": score,
                         "vector": "semantic_neighbor",
-                        "distance": item.get("distance")
+                        "distance": item.get("distance"),
+                        "embedding": item.get("embedding")  # ✨ Pass for transition saving
                     })
                 
                 # Emotional: weight 0.3 (based on intensity)
                 for item in emotional_candidates:
+                    # ✨ Anti-looping check
+                    if is_recently_exhausted(item.get("embedding")):
+                        print(f"[Bifurcation Engine] Skipping emotional candidate (recently exhausted): {item.get('topic')}")
+                        continue
+                    
                     score = 0.3 * item.get("intensity", 0.5)
                     bifurcation_candidates.append({
                         "topic": item.get("topic", "Unknown"),
                         "content": item.get("content", ""),
                         "score": score,
                         "vector": "emotional_anchor",
-                        "intensity": item.get("intensity")
+                        "intensity": item.get("intensity"),
+                        "embedding": item.get("embedding")  # ✨ Pass for transition saving
                     })
                 
                 # Zeigarnik: weight 0.2 (based on recency - more recent = higher score)
                 for i, item in enumerate(zeigarnik_candidates):
+                    # ✨ Anti-looping check
+                    if is_recently_exhausted(item.get("embedding")):
+                        print(f"[Bifurcation Engine] Skipping zeigarnik candidate (recently exhausted): {item.get('content')[:30]}...")
+                        continue
+                    
                     recency_score = 1.0 / (i + 1)  # More recent = higher score
-                    score = 0.2 * recency_score * item.get("prediction_error", 0.5)
+                    score = 0.2 * recency_score * item.get("emotion_score", 0.5)
                     bifurcation_candidates.append({
                         "topic": item.get("content", "Unknown")[:50],  # Use content as topic
                         "content": item.get("content", ""),
                         "score": score,
                         "vector": "zeigarnik_return",
-                        "prediction_error": item.get("prediction_error")
+                        "emotion_score": item.get("emotion_score"),
+                        "embedding": item.get("embedding")  # ✨ Pass for transition saving
                     })
                 
                 # 3. Sort by score and select top candidate
                 if bifurcation_candidates:
                     bifurcation_candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
-                    predicted_bifurcation_topic = bifurcation_candidates[0].get("topic", "General")
-                    print(f"[Bifurcation Engine] Selected topic: {predicted_bifurcation_topic} (score={bifurcation_candidates[0].get('score', 0):.3f})")
+                    selected_candidate = bifurcation_candidates[0]
+                    predicted_bifurcation_topic = selected_candidate.get("topic", "General")
+                    print(f"[Bifurcation Engine] Selected topic: {predicted_bifurcation_topic} (score={selected_candidate.get('score', 0):.3f})")
+                    
+                    # ✨ ANTI-LOOPING: Save successful transition to graph
+                    if current_embedding and selected_candidate.get("embedding"):
+                        try:
+                            transition_type = selected_candidate.get("vector", "semantic_neighbor")
+                            await self.hippocampus.save_topic_transition(
+                                user_id=message.user_id,
+                                source_embedding=current_embedding,
+                                target_embedding=selected_candidate["embedding"],
+                                transition_type=transition_type,
+                                agent_intent=f"bifurcation_to_{predicted_bifurcation_topic}"
+                            )
+                        except Exception as e:
+                            print(f"[Bifurcation Engine] Failed to save transition: {e}")
                     
             except Exception as e:
                 print(f"[Bifurcation Engine] ❌ Error: {e}")

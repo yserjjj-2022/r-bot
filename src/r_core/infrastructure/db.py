@@ -145,6 +145,25 @@ class AgentProfileModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class TopicTransitionModel(Base):
+    """
+    ✨ NEW: Graph of topic transitions for Bifurcation Engine.
+    Stores history of successful/failed topic switches to prevent looping.
+    """
+    __tablename__ = "topic_transitions"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_embedding = mapped_column(Vector(settings.EMBEDDING_DIM))  # Vector of exhausted topic
+    target_embedding = mapped_column(Vector(settings.EMBEDDING_DIM))  # Vector of proposed candidate
+    transition_type: Mapped[str] = mapped_column(String(50))  # Semantic, Emotional, Zeigarnik
+    agent_intent: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # Agent's goal at jump time
+    success_weight: Mapped[float] = mapped_column(Float, default=0.5)  # Success weight (updated by feedback)
+    attempts: Mapped[int] = mapped_column(Integer, default=1)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 # --- Init DB Helper ---
 
 async def init_models():
@@ -302,6 +321,32 @@ async def init_models():
             print("[DB Init] ✅ Stage 1: TEC/Taxonomy fields added (Migration 008)")
         except Exception as e:
             print(f"[DB Init] Schema update (volitional 008 - TEC/Taxonomy): {e}")
+
+        # ✨ NEW Migration 009: Topic Transitions Table for Bifurcation Engine
+        try:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS topic_transitions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    source_embedding vector(1536) NOT NULL,
+                    target_embedding vector(1536) NOT NULL,
+                    transition_type VARCHAR(50) NOT NULL,
+                    agent_intent VARCHAR(100),
+                    success_weight FLOAT DEFAULT 0.5,
+                    attempts INTEGER DEFAULT 1,
+                    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_topic_transitions_user_id ON topic_transitions (user_id)"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_topic_transitions_target_hnsw ON topic_transitions USING hnsw (target_embedding vector_cosine_ops)"
+            ))
+            print("[DB Init] ✅ Topic Transitions table created (Migration 009)")
+        except Exception as e:
+            print(f"[DB Init] Schema update (topic_transitions): {e}")
 
 # --- Helper Methods ---
 

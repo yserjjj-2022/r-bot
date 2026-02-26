@@ -265,6 +265,7 @@ class PostgresMemoryStore(AbstractMemoryStore):
         """
         ✨ NEW: Поиск воспоминаний с высокой эмоциональной интенсивностью.
         Используется для Bifurcation Engine (Vector 2: Emotional Anchor).
+        ✨ Возвращает embedding для anti-looping проверки.
         """
         async with AsyncSessionLocal() as session:
             # Ищем записи с ненулевым sentiment (простой запрос, сортируем в Python)
@@ -284,6 +285,10 @@ class PostgresMemoryStore(AbstractMemoryStore):
                 intensity = max(abs(valence), arousal)
                 
                 if intensity >= min_intensity:
+                    # Извлекаем embedding из PostgreSQL vector
+                    emb = r.embedding
+                    emb_list = emb.tolist() if hasattr(emb, 'tolist') else list(emb) if emb else None
+                    
                     results.append({
                         "id": r.id,
                         "topic": r.object,  # Use object as topic
@@ -291,7 +296,8 @@ class PostgresMemoryStore(AbstractMemoryStore):
                         "sentiment": sentiment,
                         "valence": valence,
                         "arousal": arousal,
-                        "intensity": intensity
+                        "intensity": intensity,
+                        "embedding": emb_list  # ✨ NEW: Возвращаем embedding для anti-looping
                     })
                     
             # Sort by intensity in Python
@@ -632,6 +638,7 @@ class MemorySystem:
                     "valence": item.get("valence", 0.0),
                     "arousal": item.get("arousal", 0.0),
                     "intensity": item.get("intensity", 0.0),
+                    "embedding": item.get("embedding"),  # ✨ NEW: Возвращаем embedding для anti-looping
                     "vector_type": "emotional_anchor"
                 })
             
