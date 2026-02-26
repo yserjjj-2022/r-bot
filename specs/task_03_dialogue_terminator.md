@@ -1,155 +1,127 @@
 # Task 3: Dialogue Terminator Implementation Details
 
 ## Обзор
-Нам нужно добавить модуль `DialogueTerminator`, который будет прерывать паттерн "вечного собеседника" и инициировать завершение диалога. Этот модуль должен встраиваться в `pipeline.py` и использовать LLM для анализа контекста.
+Нам нужно реализовать механизм завершения диалога (Dialogue Terminator), который будет прерывать паттерн "вечного собеседника".
+Чтобы не плодить лишние файлы и дополнительные LLM-вызовы (экономия токенов и latency), мы интегрируем анализ необходимости завершения диалога **прямо в `_perception_stage` (Volitional Detection)**.
+
+Волевой анализатор (который уже анализирует контекст) теперь будет дополнительно возвращать объект `exit_signal`, если диалог пора заканчивать.
 
 ## Шаги для локального агента
 
-### 1. Создание файла `src/r_core/terminator.py`
-Создай новый файл, содержащий класс `DialogueTerminator`.
+### 1. Обновление промпта в `src/r_core/infrastructure/llm.py`
+В методе `detect_volitional_pattern` нужно обновить `prompt`, чтобы он просил LLM помимо волевого паттерна анализировать и возможность естественного завершения диалога.
+
+Обновите инструкцию и JSON-схему:
 ```python
-import json
-from dataclasses import dataclass
-from typing import Dict, List, Optional
-from datetime import datetime
-
-@dataclass
-class ExitSignal:
-    should_exit: bool
-    exit_type: str  # "graceful" | "hard" | "silent" | "none"
-    reason: str
-    suggested_message: str
-
-class DialogueTerminator:
-    def __init__(self, llm_client):
-        self.llm = llm_client
-
-    async def evaluate(
-        self, 
-        current_tec: float, 
-        intent_category: str,
-        phatic_loop_count: int,
-        user_message: str,
-        chat_history: List[Dict]
-    ) -> ExitSignal:
-        """
-        Оценивает необходимость завершения диалога.
-        Эвристики для раннего выхода без LLM:
-        - Если TEC > 0.6 и intent_category не Phatic, возвращаем none.
-        - Если юзер явно прощается (regex: "пока", "до завтра", "спокойной ночи"), можно сразу вернуть graceful/hard.
-        
-        Если эвристики не дали четкого ответа, вызываем LLM-классификатор.
-        """
-        # 1. Быстрые проверки (Эвристики)
-        text_lower = user_message.lower()
-        explicit_exit_markers = ["пока", "до встречи", "до завтра", "спокойной ночи", "пойду спать", "мне пора", "спасибо, я всё"]
-        
-        if any(marker in text_lower for marker in explicit_exit_markers):
-            return ExitSignal(
-                should_exit=True,
-                exit_type="graceful",
-                reason="explicit_exit_intent",
-                suggested_message="Попрощайся с пользователем, пожелай удачи и закрой текущую тему."
-            )
-
-        # Если разговор активен, не прерываем
-        if current_tec > 0.5 and intent_category not in ["Phatic", "Task"]:
-            return ExitSignal(False, "none", "", "")
-
-        # 2. LLM Analysis для сложных случаев (застревание в фатической петле, решение задачи)
-        # Отправляем последние 3-4 сообщения
-        recent_history = "\\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history[-4:]])
-        
         prompt = f"""
-Ты - Dialogue Terminator, модуль контроля завершения диалога.
-Проанализируй текущий контекст и реши, нужно ли боту инициировать завершение беседы.
+Ты - аналитик волевой сферы (Volitional Analyst) и контроллер диалога.
+Твои задачи:
+1. Найти в диалоге следы волевого конфликта/стремления (Trigger, Impulse, Target, Resolution Strategy, Intensity, Fuel).
+2. Оценить, не подошел ли диалог к логическому или эмоциональному завершению (Exit Signal).
 
-Context:
-- User Intent: {intent_category}
-- Topic Engagement (TEC): {current_tec:.2f} (0.0=bored, 1.0=engaged)
-- Phatic Loop Count: {phatic_loop_count} (кол-во коротких/пустых ответов подряд)
-- Recent Dialogue:
-{recent_history}
-- User's last message: "{user_message}"
+Диалог:
+{history_str}
+Текущее сообщение пользователя: {message_text}
 
-Signals to check for termination:
-1. Task completed (user got what they wanted).
-2. Phatic loop exhaustion (repetitive "ok", "yeah", "ага").
-3. Emotional burnout (frustration, giving up).
+Критерии для завершения диалога (should_exit = true):
+- Явное прощание ("пока", "до завтра", "спокойной ночи").
+- Выполнение задачи (пользователь получил, что хотел, и благодарит).
+- Застревание в пустых ответах (Phatic loop: "ок", "ага").
+- Эмоциональное выгорание/сопротивление общению.
 
-Return ONLY JSON:
+Инструкция:
+- Анализируй в основном реплики USER.
+- Поля Volitional Pattern оставь null/пустыми, если волевого акта нет.
+- Если диалог нужно завершить, предложи короткую директиву (suggested_message), как боту следует мягко попрощаться.
+
+Верни JSON формат:
 {{
-    "should_exit": true/false,
-    "exit_type": "graceful" (polite suggestion) or "none",
-    "reason": "task_completed" / "phatic_loop" / "none",
-    "suggested_message": "Instruction for the bot on how to politely end the conversation. Keep it brief."
+  "volitional_pattern": {{
+    "trigger": "...",
+    "impulse": "...",
+    "target": "...",
+    "resolution_strategy": "...",
+    "intensity": 0.7,
+    "fuel": 0.5
+  }},
+  "exit_signal": {{
+    "should_exit": true,
+    "exit_type": "graceful",
+    "reason": "task_completed",
+    "suggested_message": "Попрощайся с пользователем, пожелай удачи и закрой текущую тему."
+  }}
 }}
 """
-        try:
-            response = await self.llm.complete(prompt)
-            cleaned = response.replace("```json", "").replace("```", "").strip()
-            data = json.loads(cleaned)
-            
-            if data.get("should_exit"):
-                return ExitSignal(
-                    should_exit=True,
-                    exit_type=data.get("exit_type", "graceful"),
-                    reason=data.get("reason", "unknown"),
-                    suggested_message=data.get("suggested_message", "Пора закругляться.")
+```
+
+*Обратите внимание: метод `detect_volitional_pattern` должен возвращать теперь весь распарсенный JSON (словарь с ключами `volitional_pattern` и `exit_signal`), а не только паттерн.*
+
+### 2. Изменения в `src/r_core/pipeline.py`
+
+**В `_perception_stage`:**
+Сейчас волевой скан пропускается с помощью `self.volition_check_counter % 5 == 0`.
+Поскольку теперь нам нужно детектировать выход, нам нужно **изменить логику пропуска**:
+- Если сообщение пользователя короткое (меньше 3 слов) или явно содержит слова "пока/спасибо", мы **должны** запустить скан вне очереди (чтобы поймать прощание).
+- Метод `_perception_stage` должен возвращать оба объекта.
+
+Пример обновления `_perception_stage`:
+```python
+    async def _perception_stage(self, message: IncomingMessage, chat_history: List[Dict]) -> Dict:
+        history_lines = [f"{m['role']}: {m['content']}" for m in chat_history[-6:]]
+        history_str = "\\n".join(history_lines)
+        
+        volitional_pattern = None
+        exit_signal = None
+        
+        self.volition_check_counter += 1
+        
+        # Эвристика: форсируем проверку, если юзер пишет прощание
+        explicit_exit_markers = ["пока", "до встречи", "до завтра", "спокойной ночи", "спасибо, я всё"]
+        text_lower = message.text.lower() if message.text else ""
+        force_check = any(marker in text_lower for marker in explicit_exit_markers)
+        
+        if len(chat_history) >= 2 and (force_check or self.volition_check_counter % 5 == 0):
+             print(f"[Pipeline] Scanning for volitional patterns & exit signals (Turn {self.volition_check_counter})...")
+             perception_result = await self.llm.detect_volitional_pattern(message.text, history_str)
+             if perception_result:
+                 volitional_pattern = perception_result.get("volitional_pattern")
+                 exit_signal = perception_result.get("exit_signal")
+                 if volitional_pattern and volitional_pattern.get('trigger'):
+                     print(f"[Pipeline] Pattern DETECTED: {volitional_pattern.get('trigger')} -> {volitional_pattern.get('impulse')}")
+                 if exit_signal and exit_signal.get("should_exit"):
+                     print(f"[Terminator] Exit Intent DETECTED: {exit_signal.get('reason')}")
+        else:
+             print(f"[Pipeline] Volition & Exit scan skipped (Turn {self.volition_check_counter})")
+        
+        return {
+            "triples": [], 
+            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
+            "volitional_pattern": volitional_pattern,
+            "exit_signal": exit_signal
+        }
+```
+
+**В `process_message` (Применение директивы выхода):**
+После вызова `extraction_result = await self._perception_stage(...)`:
+Извлеки `exit_signal`: `exit_signal = extraction_result.get("exit_signal")`
+
+В блоке подготовки промптов (там, где создается `final_style_instructions`, около строки 500):
+```python
+        exit_instruction = ""
+        if exit_signal and exit_signal.get("should_exit"):
+            if exit_signal.get("exit_type") == "graceful":
+                suggested = exit_signal.get("suggested_message", "Пора заканчивать беседу.")
+                exit_instruction = (
+                    f"\\n\\nCONVERSATIONAL EXIT DIRECTIVE:\\n"
+                    f"- The dialogue has reached a natural conclusion ({exit_signal.get('reason', 'unknown')}).\\n"
+                    f"- Follow this instruction to close: {suggested}\\n"
+                    f"- Do NOT start new topics or ask open-ended questions.\\n"
                 )
-        except Exception as e:
-            print(f"[Terminator] LLM Evaluation failed: {e}")
-            
-        return ExitSignal(False, "none", "", "")
 ```
+Затем добавь `exit_instruction` к переменной `final_style_instructions`.
 
-### 2. Интеграция в `src/r_core/pipeline.py`
+**В логгере (internal_stats):**
+Добавь: `"termination_triggered": exit_signal.get("should_exit") if exit_signal else False`
 
-**В `__init__`:**
-Импортируй класс: `from .terminator import DialogueTerminator`
-Инициализируй его: `self.terminator = DialogueTerminator(self.llm)`
-
-В `self.current_topic_state` добавь счетчик `phatic_loop_count`: 0 (чтобы передавать его в Терминатор).
-
-**В `process_message`:**
-В блоке `TopicTracker Update`, когда ты проверяешь `is_short_or_phatic`, обновляй счетчик:
-```python
-if is_short_or_phatic:
-    self.current_topic_state["phatic_loop_count"] += 1
-else:
-    self.current_topic_state["phatic_loop_count"] = 0
-```
-
-Сразу ПОСЛЕ блока TopicTracker Update (и HIPPOCAMPUS TRIGGER) вызови Терминатор:
-```python
-# === 3.5 DIALOGUE TERMINATOR ===
-exit_instruction = ""
-try:
-    exit_signal = await self.terminator.evaluate(
-        current_tec=self.current_topic_state["tec"],
-        intent_category=self.current_topic_state["intent_category"],
-        phatic_loop_count=self.current_topic_state.get("phatic_loop_count", 0),
-        user_message=message.text,
-        chat_history=context.get("chat_history", [])
-    )
-    
-    if exit_signal.should_exit:
-        print(f"[Terminator] Triggered! Type: {exit_signal.exit_type}, Reason: {exit_signal.reason}")
-        if exit_signal.exit_type == "graceful":
-            exit_instruction = (
-                f"\\n\\nCONVERSATIONAL EXIT DIRECTIVE:\\n"
-                f"- The dialogue has reached a natural conclusion ({exit_signal.reason}).\\n"
-                f"- Follow this instruction to close: {exit_signal.suggested_message}\\n"
-                f"- Do NOT start new topics or ask open-ended questions.\\n"
-            )
-except Exception as e:
-    print(f"[Terminator] Error: {e}")
-```
-
-Затем добавь `exit_instruction` к `final_style_instructions` перед генерацией ответа (там, где добавляется `bifurcation_instruction`).
-
-В `internal_stats` добавь:
-`"termination_triggered": exit_signal.should_exit if 'exit_signal' in locals() else False`
-
-## Правила
-Перепиши файлы целиком. Убедись, что Terminator не блокирует генерацию, а именно добавляет директиву в промпт для мягкого выхода.
+## Инструкции по выполнению
+Выполняй изменения, перезаписывая файлы. Не ломай существующую логику Council Debate и генерации.
