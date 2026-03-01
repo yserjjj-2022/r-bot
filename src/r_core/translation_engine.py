@@ -203,6 +203,17 @@ class RCoreKernel:
                     if hasattr(agent_profile, "use_unified_council"):
                         self.config.use_unified_council = agent_profile.use_unified_council
                     
+                    # === Task 8: Apply HEXACO Translation Engine ===
+                    hexaco_profile = getattr(agent_profile, "hexaco_profile", None)
+                    if hexaco_profile and isinstance(hexaco_profile, dict):
+                        print(f"[Translation] Applying HEXACO profile: {hexaco_profile}")
+                        translator = TraitTranslationEngine(hexaco_profile)
+                        self.config = translator.apply_to_bot_config(self.config)
+                        
+                        # Check for dark archetype
+                        if is_dark_archetype(hexaco_profile):
+                            print("[Translation] ⚠️ Dark archetype detected! Behavioral warnings enabled.")
+                    
                     # Update Sliders (if present and valid)
                     if agent_profile.sliders_preset:
                         try:

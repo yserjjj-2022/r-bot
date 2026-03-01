@@ -138,6 +138,16 @@ class AgentProfileModel(Base):
     gender: Mapped[Optional[str]] = mapped_column(String(20), default="Neutral")
     sliders_preset: Mapped[Dict[str, Any]] = mapped_column(JSONB, default={}) 
     
+    # ✨ HEXACO Personality Profile (Task 8)
+    hexaco_profile: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, default={
+        "H": 50,  # Honesty-Humility
+        "E": 50,  # Emotionality
+        "X": 50,  # Extraversion
+        "A": 50,  # Agreeableness
+        "C": 50,  # Conscientiousness
+        "O": 50   # Openness
+    })
+    
     # ✨ Experimental controls
     intuition_gain: Mapped[float] = mapped_column(Float, default=1.0)
     use_unified_council: Mapped[bool] = mapped_column(default=False)
@@ -370,6 +380,15 @@ async def init_models():
             print("[DB Init] ✅ Topic Transitions table created (Migration 009)")
         except Exception as e:
             print(f"[DB Init] Schema update (topic_transitions): {e}")
+
+        # ✨ NEW Migration 010: HEXACO Profile for Agent Profiles (Task 8)
+        try:
+            await conn.execute(text(
+                "ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS hexaco_profile JSONB DEFAULT '{\"H\": 50, \"E\": 50, \"X\": 50, \"A\": 50, \"C\": 50, \"O\": 50}'"
+            ))
+            print("[DB Init] ✅ hexaco_profile column added to agent_profiles (Migration 010)")
+        except Exception as e:
+            print(f"[DB Init] Schema update (hexaco_profile): {e}")
 
 # --- Helper Methods ---
 
