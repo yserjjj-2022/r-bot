@@ -49,6 +49,12 @@ if "bot_name" not in st.session_state:
     st.session_state.bot_name = "R-Bot"
     st.session_state.bot_gender = "Neutral"
 
+if "current_agent_id" not in st.session_state:
+    st.session_state.current_agent_id = None
+
+if "last_agent_name" not in st.session_state:
+    st.session_state.last_agent_name = "Default"
+
 # --- PERSISTENT KERNEL HACK ---
 if "kernel_instance" not in st.session_state:
     st.session_state.kernel_instance = None
@@ -531,37 +537,49 @@ else:
     selected_agent_name = st.sidebar.selectbox("Select Persona", ["Default"] + agent_names)
 
     # Reset kernel if persona changes
-    if "last_agent_name" not in st.session_state:
-        st.session_state.last_agent_name = selected_agent_name
-
     if st.session_state.last_agent_name != selected_agent_name:
         st.session_state.kernel_instance = None
         st.session_state.last_agent_name = selected_agent_name
 
     if selected_agent_name != "Default":
-        st.session_state.bot_name = selected_agent_name
         agent_data = next((a for a in available_agents if a.name == selected_agent_name), None)
         if agent_data:
+            st.session_state.bot_name = agent_data.name
             st.session_state.bot_gender = agent_data.gender or "Neutral"
-            st.sidebar.caption(f"📝 {agent_data.description} | {st.session_state.bot_gender}")
-            preset = agent_data.sliders_preset
+            st.session_state.current_agent_id = agent_data.id
+            
+            # Display character card
+            st.sidebar.info(f"""
+            **{agent_data.name}** ({agent_data.gender or 'Neutral'})
+            
+            {agent_data.description or 'No description'}
+            
+            *ID: {agent_data.id}*
+            """)
+            
+            # Load HEXACO profile if available (Read-Only)
+            if agent_data.hexaco_profile:
+                with st.sidebar.expander("🧬 HEXACO Profile (Read-Only)"):
+                    st.json(agent_data.hexaco_profile)
+            
+            # Load sliders preset
+            preset = agent_data.sliders_preset or {}
             st.session_state.sliders = PersonalitySliders(
                 empathy_bias=preset.get("empathy_bias", 0.5),
                 risk_tolerance=preset.get("risk_tolerance", 0.5),
                 dominance_level=preset.get("dominance_level", 0.5),
                 pace_setting=preset.get("pace_setting", 0.5),
                 neuroticism=preset.get("neuroticism", 0.1),
-                # ✨ NEW: Load Dashboard Controls
                 chaos_level=preset.get("chaos_level", 0.2),
                 learning_speed=preset.get("learning_speed", 0.5),
                 persistence=preset.get("persistence", 0.5),
-                # ✨ NEW: Load Pred Controls
                 pred_threshold=preset.get("pred_threshold", 0.65), 
                 pred_sensitivity=preset.get("pred_sensitivity", 10.0) 
             )
     else:
         st.session_state.bot_name = "R-Bot"
         st.session_state.bot_gender = "Neutral"
+        st.session_state.current_agent_id = None
 
     # --- Sliders Control ---
     with st.sidebar.expander("Personality Tuner", expanded=False):
