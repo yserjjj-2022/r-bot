@@ -1,1344 +1,230 @@
-import asyncio
-import random
-from typing import Dict, List, Optional
-from datetime import datetime
-import numpy as np
-from numpy import dot
-from numpy.linalg import norm
-from sqlalchemy import text, select, desc
+"""
+Trait Translation Engine (Task 8)
+Maps HEXACO personality traits (0-100) to R-Core hyperparameters.
+
+Mathematical Functions:
+- Sigmoid: Used for thresholds and extremes (prevents linear scaling from breaking the Council)
+- Exponential: Used for time/decay parameters (maps linear to logarithmic scale)
+"""
+
+import math
+from typing import Dict, Any, Optional
+from dataclasses import dataclass
 
 
-from .schemas import (
-    IncomingMessage, 
-    CoreResponse, 
-    CoreAction, 
-    BotConfig, 
-    ProcessingMode,
-    AgentType,
-    MoodVector,
-    SemanticTriple,
-    AgentSignal,
-    HormonalState 
-)
-from .memory import MemorySystem
-from .infrastructure.llm import LLMService
-from .infrastructure.db import log_turn_metrics, AsyncSessionLocal, AgentProfileModel, UserProfileModel
-from .agents import (
-    IntuitionAgent,
-    AmygdalaAgent,
-    PrefrontalAgent,
-    SocialAgent,
-    StriatumAgent,
-    UncertaintyAgent
-)
-from .neuromodulation import NeuroModulationSystem
-from .hippocampus import Hippocampus
-from .behavioral_config import behavioral_config
-from .utils import is_phatic_message, cosine_distance 
-from .translation_engine import TraitTranslationEngine, is_dark_archetype 
-
-
-class RCoreKernel:
-    # === КОНФИГУРАЦИЯ КОНТЕКСТА ===
-    COUNCIL_CONTEXT_DEPTH = 1  
+@dataclass
+class TranslatedConfig:
+    """Result of translating HEXACO profile to R-Core parameters."""
+    # Core sliders
+    intuition_gain: float
+    chaos_level: float
+    base_decay_rate: float
+    persistence: float
+    dynamic_phatic_threshold: float
+    social_agent_weight: float
+    pred_sensitivity: float
+    amygdala_multiplier: float
+    striatum_agent_weight: float
     
-    # === AFFECTIVE KEYWORDS ===
-    AFFECTIVE_KEYWORDS = [
-        "ненавижу", "боюсь", "люблю", "обожаю", "презираю", "терпеть не могу", "не выношу",
-        "hate", "fear", "love", "enjoy", "despise", "adore", "can't stand"
-    ]
+    # Volitional strategies
+    force_manipulation_strategies: bool
+    bifurcation_threshold_modifier: float
     
-    # === VOLITIONAL CONSTANTS ===
-    VOLITION_PERSISTENCE_BONUS = 0.3 
-    VOLITION_DECAY_PER_DAY = 0.1      
-    VOLITION_FOCUS_DURATION = 3       
+    # Baseline hormones
+    baseline_cortisol: float
+    baseline_oxytocin: float
 
 
-    # === HORMONAL MODULATION RULES (Introspection Exposed) ===
-    HORMONAL_MODULATION_RULES = {
-        "RAGE": {AgentType.AMYGDALA: 1.6, AgentType.PREFRONTAL: 0.6, AgentType.SOCIAL: 0.8},
-        "FEAR": {AgentType.AMYGDALA: 1.8, AgentType.STRIATUM: 0.4, AgentType.PREFRONTAL: 0.7},
-        "BURNOUT": {AgentType.PREFRONTAL: 0.3, AgentType.INTUITION: 1.5, AgentType.AMYGDALA: 1.2},
-        "SHAME": {AgentType.INTUITION: 1.3},
-        "TRIUMPH": {AgentType.STRIATUM: 1.3, AgentType.AMYGDALA: 0.5, AgentType.PREFRONTAL: 1.1}
+class TraitTranslationEngine:
+    """
+    Translates HEXACO personality model (0-100) to R-Core hyperparameters.
+    
+    HEXACO Traits:
+    - H (Honesty-Humility): 0=Chetrost, 100=Iskrennost
+    - E (Emotionality/Neuroticism): 0=Coldness, 100=Anxiety/Reactivity
+    - X (Extraversion): 0=Reserved, 100=Sociable
+    - A (Agreeableness): 0=Quarrelsome, 100=Agreeable
+    - C (Conscientiousness): 0=Chaotic, 100=Goal-oriented
+    - O (Openness): 0=Conservative, 100=Curious
+    """
+    
+    # Preset configurations (Functional / Light)
+    PRESETS_LIGHT = {
+        "Аналитик": {"H": 70, "E": 20, "X": 60, "A": 50, "C": 90, "O": 60},
+        "Эмпат": {"H": 80, "E": 60, "X": 75, "A": 85, "C": 50, "O": 50},
+        "Мечтатель": {"H": 60, "E": 50, "X": 55, "A": 55, "C": 30, "O": 95},
+        "Педант": {"H": 50, "E": 40, "X": 40, "A": 30, "C": 95, "O": 15},
     }
     
-    def __init__(self, config: BotConfig):
-        self.config = config
-        self.llm = LLMService() 
-        self.memory = MemorySystem(store=None)
-        
-        # --- EHS: Internal State ---
-        self.current_mood = MoodVector(valence=0.1, arousal=0.1, dominance=0.0) 
-        
-        # --- Neuro-Modulation System (Hormonal Physics) ---
-        self.neuromodulation = NeuroModulationSystem()
-        
-        # --- Hippocampus (Lazy Consolidation) ---
-        self.hippocampus = Hippocampus(
-            llm_client=self.llm,
-            embedding_client=self.llm
-        )
-        
-        # Init agents
-        self.agents = [
-            IntuitionAgent(self.llm),
-            AmygdalaAgent(self.llm),
-            PrefrontalAgent(self.llm),
-            SocialAgent(self.llm),
-            StriatumAgent(self.llm),
-            UncertaintyAgent(self.llm) 
-        ]
-        
-        # Volitional State (In-memory cache for session persistence)
-        self.active_focus = {
-            "pattern_id": None,
-            "turns_remaining": 0,
-            "user_id": None
-        }
-        
-        # Counter for Volitional Detection throttling
-        self.volition_check_counter = 0
-
-        # ✨ NEW: Topic Tracker (independent from volitional patterns)
-        self.current_topic_state = {
-            "topic_embedding": None,         # Усредненный вектор (Centroid) текущей темы
-            "topic_text": "",                # Text summary of topic
-            "tec": 1.0,                      # Topic Engagement Capacity [0.0, 1.0]
-            "turns_on_topic": 0,             # Turns spent on this topic
-            "messages_in_topic": 0,          # Счетчик сообщений для расчета центроида
-            "intent_category": "Casual",     # Nature taxonomy: Phatic/Casual/Narrative/Deep/Task
-            "last_prediction_error": 0.5,    # PE from last turn (for decay calculation)
-            "pending_transition": None       # ✨ NEW: Feedback Loop - pending topic transition
-        }
-
-
-    def get_architecture_snapshot(self) -> Dict:
-        """
-        Возвращает текущую структуру управления для визуализации.
-        """
-        return {
-            "active_agents": [
-                {
-                    "name": agent.agent_type.value if hasattr(agent, 'agent_type') else "Unknown",
-                    "class": agent.__class__.__name__,
-                    "description": agent.__doc__.strip().split('\n')[0] if agent.__doc__ else "No docstring"
-                }
-                for agent in self.agents
-            ],
-            "control_sliders": self.config.sliders.dict(),
-            "modulation_rules": self.HORMONAL_MODULATION_RULES,
-            "subsystems": {
-                "hippocampus": "Active" if self.hippocampus else "Disabled",
-                "council_mode": "Unified" if self.config.use_unified_council else "Legacy",
-                "predictive_processing": "Active" 
-            }
-        }
-
-
-    async def process_message(self, message: IncomingMessage, mode: str = "CORTICAL") -> CoreResponse:
-        """
-        Main pipeline entry point.
-        """
-        start_time = datetime.now()
-        
-        # --- 0. Temporal Metabolism (Sense of Time) ---
-        delta_minutes = self.neuromodulation.metabolize_time(message.timestamp)
-        print(f"[Neuro] Time passed: {delta_minutes:.1f} min. New State: {self.neuromodulation.state}")
-        
-        # --- ZOMBIE MODE ---
-        if mode == "ZOMBIE":
-            simple_response, _ = await self.llm.generate_response( 
-                 "prefrontal", message.text, "", "", user_mode="formal"
-            )
-            latency = (datetime.now() - start_time).total_seconds() * 1000
-            
-            return CoreResponse(
-                actions=[CoreAction(type="send_text", payload={"text": str(simple_response)})],
-                winning_agent=AgentType.PREFRONTAL,
-                current_mood=MoodVector(),
-                processing_mode=ProcessingMode.FAST_PATH,
-                internal_stats={"latency_ms": int(latency), "mode": "ZOMBIE"}
-            )
-
-
-        # --- CORTICAL MODE (Full Architecture) ---
-        
-        # === ✨ RESTORE IDENTITY: Fetch Active Agent Profile from DB ===
-        bot_description = ""
-        try:
-            async with AsyncSessionLocal() as session:
-                # 1. Fetch Agent Profile
-                # We prioritize the LATEST active profile in DB, ignoring config.name if it's default "R-Bot"
-                # If config.name is NOT R-Bot, we try to fetch that specific one.
-                
-                agent_profile = None
-                
-                if self.config.name != "R-Bot":
-                     print(f"[Identity] Searching for specific profile: '{self.config.name}'")
-                     stmt = select(AgentProfileModel).where(AgentProfileModel.name == self.config.name)
-                     result = await session.execute(stmt)
-                     agent_profile = result.scalar_one_or_none()
-                
-                # FALLBACK: If specific name not found OR name is default "R-Bot", load the LATEST profile
-                if not agent_profile:
-                     print(f"[Identity] Config name '{self.config.name}' not found or default. Fetching LATEST profile.")
-                     # Sort by updated_at desc to get the most recently active/edited bot
-                     stmt = select(AgentProfileModel).order_by(desc(AgentProfileModel.updated_at)).limit(1)
-                     result = await session.execute(stmt)
-                     agent_profile = result.scalar_one_or_none()
-
-                if agent_profile:
-                    print(f"[Identity] Loaded Profile: {agent_profile.name} (Gender: {agent_profile.gender})")
-                    # Update Config in Runtime
-                    self.config.name = agent_profile.name
-                    self.config.gender = agent_profile.gender or "Neutral"
-                    if agent_profile.description:
-                        bot_description = agent_profile.description
-                        # print(f"[Identity] Loaded description preview: {bot_description[:50]}...")
-                    
-                    # Update Experimental Controls
-                    if hasattr(agent_profile, "intuition_gain"):
-                        self.config.intuition_gain = agent_profile.intuition_gain
-                    if hasattr(agent_profile, "use_unified_council"):
-                        self.config.use_unified_council = agent_profile.use_unified_council
-                    
-                    # === Task 8: Apply HEXACO Translation Engine ===
-                    hexaco_profile = getattr(agent_profile, "hexaco_profile", None)
-                    if hexaco_profile and isinstance(hexaco_profile, dict):
-                        print(f"[Translation] Applying HEXACO profile: {hexaco_profile}")
-                        translator = TraitTranslationEngine(hexaco_profile)
-                        self.config = translator.apply_to_bot_config(self.config)
-                        
-                        # Check for dark archetype
-                        if is_dark_archetype(hexaco_profile):
-                            print("[Translation] ⚠️ Dark archetype detected! Behavioral warnings enabled.")
-                    
-                    # Update Sliders (if present and valid)
-                    if agent_profile.sliders_preset:
-                        try:
-                            # Assuming sliders_preset matches Schema structure partially
-                            for k, v in agent_profile.sliders_preset.items():
-                                if hasattr(self.config.sliders, k):
-                                    setattr(self.config.sliders, k, float(v))
-                        except Exception as e:
-                            print(f"[Identity] Failed to apply sliders: {e}")
-                else:
-                    print(f"[Identity] No agent profile found in DB. Using defaults.")
-
-        except Exception as e:
-            print(f"[Identity] DB Fetch Failed: {e}")
-
-
-        # 0. Precompute Embedding 
-        current_embedding = None
-        try:
-            current_embedding = await self.llm.get_embedding(message.text)
-        except Exception as e:
-            print(f"[Pipeline] Embedding failed early: {e}")
-        
-        
-        # === ✨ PREDICTIVE PROCESSING: Verify Last Prediction (Step 1) ===
-        prediction_error = 0.0
-        last_prediction = await self.hippocampus.get_last_prediction(message.session_id)
-        
-        if last_prediction:
-            # 1. Determine Logic
-            is_phatic = is_phatic_message(message.text)
-            
-            predicted_vec = last_prediction.get("predicted_embedding")
-            if isinstance(predicted_vec, str):
-                import json as j_loader
-                try:
-                    predicted_vec = j_loader.loads(predicted_vec)
-                except:
-                    predicted_vec = None
-            
-            # 2. Calculate Error
-            if not is_phatic and predicted_vec and current_embedding:
-                dist = cosine_distance(predicted_vec, current_embedding)
-                prediction_error = float(dist)
-                print(f"[Predictive] Error Calculated: {prediction_error:.4f} (Prev: '{last_prediction['predicted_reaction']}' vs Real: '{message.text}')")
-            elif is_phatic:
-                print(f"[Predictive] Phatic message detected ('{message.text}'). Force PE=0.0.")
-                prediction_error = 0.0 
-            else:
-                 print("[Predictive] Embeddings missing or invalid, default PE=0.0.")
-
-
-            # 3. ALWAYS Verify in DB (Close the loop)
-            try:
-                print(f"[Predictive] Closing Loop for PredID={last_prediction['id']}. Writing actual_msg='{message.text}'")
-                await self.hippocampus.verify_prediction(
-                    prediction_id=last_prediction["id"],
-                    actual_message=message.text,
-                    actual_embedding=current_embedding,
-                    prediction_error=prediction_error
-                )
-            except Exception as e:
-                print(f"[Predictive] ❌ DB WRITE ERROR: Failed to verify prediction {last_prediction['id']}: {e}")
-
-            # [Topic Tracker Update moved to after _perception_stage]
-
-
-        # 2. Retrieval 
-        context = await self.memory.recall_context(
-            message.user_id, 
-            message.text, 
-            session_id=message.session_id,
-            precomputed_embedding=current_embedding
-        )
-        
-        # Inject Prediction Error into Context for Agents
-        context["prediction_error"] = prediction_error
-        
-        user_profile = context.get("user_profile", {})
-        
-        # === ✨ USER PROFILE FIX: Respect preferred_mode from DB ===
-        # If DB says "informal"/"ты", use it. Otherwise default to "formal".
-        raw_mode = user_profile.get("preferred_mode", "formal") if user_profile else "formal"
-        if raw_mode and str(raw_mode).lower() in ["ты", "informal", "casual", "friendly", "true"]:
-            preferred_mode = "informal"
-        else:
-            preferred_mode = "formal"
-
-
-        # === 3. PERCEPTION & VOLITIONAL DETECTION (Revised) ===
-        # Now that we have context (history), we can run the Volitional Detector
-        extraction_result = await self._perception_stage(message, context.get("chat_history", []))
-
-        # === Task 3: Extract Exit Signal ===
-        exit_signal = extraction_result.get("exit_signal", {"should_exit": False})
-        
-        # === Task 3: Build Exit Instruction (if termination needed) ===
-        exit_instruction = ""
-        if exit_signal.get("should_exit"):
-            suggested_msg = exit_signal.get("suggested_message", "Попрощайся с пользователем.")
-            exit_instruction = (
-                f"\\n\\n🚪 DIALOGUE TERMINATION DIRECTIVE:\\n"
-                f"- The conversation has reached a natural conclusion.\\n"
-                f"- Exit reason: {exit_signal.get('reason', 'unknown')}\\n"
-                f"- Suggested action: {suggested_msg}\\n"
-            )
-            print(f"[Pipeline] 🚪 Exit Instruction prepared: {exit_signal.get('reason')}")
-
-        # ========== ✨ TOPIC TRACKER UPDATE (Centroid Architecture) ==========
-        # Этот блок обновляет TEC на основе предсказания ошибки и плотности ответа
-        # Использует архитектуру усредненного вектора темы (Topic Centroid)
-        
-        # Получаем intent_category из volitional detection
-        intent_cat = "Casual"
-        if extraction_result and extraction_result.get("volitional_pattern"):
-            intent_cat = extraction_result["volitional_pattern"].get("intent_category", "Casual")
-
-        # === Защита от коротких фраз (Phatic Bypass) ===
-        is_short_or_phatic = False
-        word_count = 0
-        if message.text:
-            word_count = len(message.text.split())
-            
-            # Извлекаем статистику пользователя
-            attributes = user_profile.get("attributes", {}) if user_profile else {}
-            avg_word_count = attributes.get("avg_word_count", 5.0)
-            dynamic_phatic_threshold = max(2, min(5, int(avg_word_count * 0.4)))
-            
-            phatic_patterns = ["ага", "ясно", "ок", "да", "нет", "хм", "мм", "угу", "ну", "понятно", "окей", "ладно", "чё", "да?", "и что?", "и что теперь?"]
-            is_phatic_keyword = any(pattern in message.text.lower() for pattern in phatic_patterns)
-            
-            if word_count <= dynamic_phatic_threshold or (word_count <= dynamic_phatic_threshold + 1 and is_phatic_keyword):
-                is_short_or_phatic = True
-                print(f"[TopicTracker] ⏭️ Phatic message detected (words: {word_count}, threshold: {dynamic_phatic_threshold})")
-
-        # === Проверка смены темы ===
-        topic_changed = False
-        
-        if self.current_topic_state["topic_embedding"] is not None and current_embedding is not None:
-            if not is_short_or_phatic:
-                # ✨ FIX: Validate embedding dimensions match
-                topic_emb = self.current_topic_state["topic_embedding"]
-                if len(topic_emb) != len(current_embedding):
-                    print(f"[TopicTracker] ⚠️ Dimension mismatch: stored={len(topic_emb)}, current={len(current_embedding)}. Resetting topic.")
-                    topic_changed = True
-                else:
-                    # Вычисляем косинусное сходство с центроидом
-                    similarity = dot(current_embedding, topic_emb) / (norm(current_embedding) * norm(topic_emb))
-
-                # Новый порог 0.40 (ранее был 0.5)
-                if similarity < 0.40:
-                    topic_changed = True
-                    print(f"[TopicTracker] 🔄 Topic Change Detected (similarity={similarity:.2f}). Resetting TEC.")
-            else:
-                # Пропускаем вычисление similarity для коротких фраз
-                print(f"[TopicTracker] ⏭️ Skipping similarity check (short/phatic message: {word_count} words)")
-        else:
-            # Первый ход или нет embedding - инициализируем тему
-            topic_changed = True
-
-        # === Сброс или обновление состояния темы ===
-        if topic_changed:
-            self.current_topic_state = {
-                "topic_embedding": current_embedding,
-                "topic_text": message.text[:100] if message.text else "",
-                "tec": 1.0,
-                "turns_on_topic": 1,
-                "messages_in_topic": 1,
-                "intent_category": intent_cat,
-                "last_prediction_error": prediction_error
-            }
-            print(f"[TopicTracker] 🔵 New Topic Started: TEC=1.0, intent={intent_cat}")
-        else:
-            # === Обновление центроида (Centroid Update) ===
-            count = self.current_topic_state["messages_in_topic"]
-            old_centroid = self.current_topic_state["topic_embedding"]
-            
-            # ✨ FIX: Validate dimensions before numpy operations
-            if current_embedding is None:
-                topic_changed = True
-            elif len(old_centroid) != len(current_embedding):
-                print(f"[TopicTracker] ⚠️ Centroid dimension mismatch: {len(old_centroid)} vs {len(current_embedding)}. Starting new topic.")
-                topic_changed = True
-            else:
-                old_arr = np.array(old_centroid)
-                curr_arr = np.array(current_embedding)
-                
-                # Формула: new_centroid = (old_centroid * count + current_embedding) / (count + 1)
-                new_centroid = ((old_arr * count) + curr_arr) / (count + 1)
-                # Нормализация
-                new_centroid = new_centroid / np.linalg.norm(new_centroid)
-            
-            self.current_topic_state["topic_embedding"] = new_centroid.tolist()
-            self.current_topic_state["messages_in_topic"] += 1
-            self.current_topic_state["turns_on_topic"] += 1
-
-            # === Применяем decay формулу ===
-            BASE_DECAY_MAP = {
-                "Phatic": 1.0,      # Social rituals: instant burn
-                "Casual": 0.4,      # Small talk: fast decay
-                "Narrative": 0.15,  # Stories: moderate
-                "Deep": 0.05,       # Deep topics: slow decay
-                "Task": 0.0         # Task-oriented: no decay until resolved
-            }
-
-            intent = self.current_topic_state["intent_category"]
-            base_decay = BASE_DECAY_MAP.get(intent, 0.3)
-
-            # Situational multiplier
-            response_density = min(len(message.text.split()) / 50.0, 1.0) if message.text else 0.0
-            situational_multiplier = (0.5 + (1 - prediction_error) * 0.5) * (2.0 - response_density)
-
-            effective_decay = base_decay * situational_multiplier
-
-            old_tec = self.current_topic_state["tec"]
-            self.current_topic_state["tec"] = max(0.0, old_tec - effective_decay)
-            self.current_topic_state["last_prediction_error"] = prediction_error
-            self.current_topic_state["intent_category"] = intent
-
-            print(f"[TopicTracker] TEC: {old_tec:.2f} → {self.current_topic_state['tec']:.2f} "
-                  f"(decay={effective_decay:.2f}, PE={prediction_error:.2f}, turns={self.current_topic_state['turns_on_topic']})")
-
-            # ✨ FEEDBACK LOOP: Оцениваем успешность предыдущего перехода
-            pending_transition = self.current_topic_state.get("pending_transition")
-            if pending_transition:
-                # Вычисляем success на основе TEC и плотности ответа
-                response_density = min(len(message.text.split()) / 50.0, 1.0) if message.text else 0.0
-                current_tec_for_feedback = self.current_topic_state["tec"]
-                
-                # Базовая формула успеха (от 0.0 до 1.0)
-                transition_success = min(1.0, current_tec_for_feedback * (0.5 + response_density))
-                
-                print(f"[TopicTracker] Feedback Loop: evaluating transition success={transition_success:.2f} (TEC={current_tec_for_feedback:.2f}, density={response_density:.2f})")
-                
-                # Обновляем вес перехода в БД
-                try:
-                    await self.hippocampus.update_transition_weight(
-                        user_id=message.user_id,
-                        source_embedding=pending_transition["source_embedding"],
-                        target_embedding=pending_transition["target_embedding"],
-                        transition_success=transition_success
-                    )
-                except Exception as e:
-                    print(f"[TopicTracker] Failed to update transition weight: {e}")
-                
-                # Очищаем pending_transition
-                self.current_topic_state["pending_transition"] = None
-
-        # Log Topic Tracker State
-        print(f"[TopicTracker] State: topic='{self.current_topic_state['topic_text'][:30]}...', "
-              f"intent={self.current_topic_state['intent_category']}, "
-              f"TEC={self.current_topic_state['tec']:.2f}, "
-              f"turns={self.current_topic_state['turns_on_topic']}, "
-              f"messages={self.current_topic_state['messages_in_topic']}")
-        # ========== END Topic Tracker Update ==========
-
-        # === HIPPOCAMPUS TRIGGER ===
-        asyncio.create_task(self._check_and_trigger_hippocampus(message.user_id))
-
-
-        # 4. Parliament Debate
-        council_context_str = self._format_context_for_llm(
-            context, 
-            limit_history=self.COUNCIL_CONTEXT_DEPTH,
-            exclude_episodic=True,   
-            exclude_semantic=True    
-        )
-        
-        # ✨ Conditional Council Mode
-        has_affective = any(keyword in message.text.lower() for keyword in self.AFFECTIVE_KEYWORDS)
-        
-        if has_affective:
-            print("[Council] Using FULL mode (Affective Extraction enabled)")
-            council_report = await self.llm.generate_council_report_full(message.text, council_context_str)
-        else:
-            print("[Council] Using LIGHT mode (agents only)")
-            council_report = await self.llm.generate_council_report_light(message.text, council_context_str)
-        
-        # ✨ Affective Extraction Processing
-        affective_extracts = council_report.get("affective_extraction", [])
-        affective_triggers_count = 0
-        if affective_extracts and isinstance(affective_extracts, list):
-            await self._process_affective_extraction(message, affective_extracts)
-            affective_triggers_count = len(affective_extracts)
-        
-        # ✨ Unified Council + Uncertainty Agent
-        if self.config.use_unified_council:
-            signals = await self._process_unified_council(council_report, message, context) 
-            print(f"[Pipeline] Using UNIFIED COUNCIL mode (intuition_gain={self.config.intuition_gain})")
-        else:
-            signals = await self._process_legacy_council(council_report, message, context)
-            print(f"[Pipeline] Using LEGACY mode")
-
-
-        # === ✨ VOLITIONAL GATING (Step 1: Selection) ===
-        volitional_patterns = context.get("volitional_patterns", [])
-        dominant_volition = self._select_dominant_volition(volitional_patterns, message.user_id)
-        
-        # === Task 2.1: Extract current TEC and determine LC Mode ===
-        # ✨ FIX: Use Topic Tracker TEC instead of volitional pattern TEC
-        current_tec = self.current_topic_state["tec"]
-        lc_mode = "phasic"
-        lc_mode = self.neuromodulation.get_lc_mode(current_tec)
-        print(f"[LC-NE] TEC={current_tec:.2f}, Mode={lc_mode}")
-        
-        # === Stage 3: The Bifurcation Engine ===
-        # Trigger when LC mode is "tonic" (low engagement, exploration needed)
-        # 🛑 CRITICAL FIX: Do NOT trigger Bifurcation if Dialogue Terminator is trying to exit
-        bifurcation_candidates = []
-        predicted_bifurcation_topic = None
-        semantic_candidates = []
-        emotional_candidates = []
-        zeigarnik_candidates = []
-        
-        is_exiting = exit_signal.get("should_exit", False)
-        
-        if lc_mode == "tonic" and not is_exiting:
-            print("[Bifurcation Engine] Tonic LC detected. Generating topic switch hypotheses...")
-            
-            try:
-                # 1. Fetch all 3 vectors concurrently (check embedding exists)
-                if current_embedding:
-                    semantic_task = self.hippocampus.get_semantic_neighbors(message.user_id, current_embedding, limit=3)
-                else:
-                    async def empty_semantic():
-                        return []
-                    semantic_task = empty_semantic()
-                    
-                zeigarnik_task = self.hippocampus.get_zeigarnik_returns(message.user_id, limit=3)
-                emotional_task = self.memory.get_emotional_anchors(message.user_id, limit=3)
-                
-                semantic_candidates, zeigarnik_candidates, emotional_candidates = await asyncio.gather(
-                    semantic_task, zeigarnik_task, emotional_task
-                )
-                
-                # ✨ ANTI-LOOPING: Fetch recent transitions BEFORE scoring
-                recent_transitions = []
-                if current_embedding:
-                    try:
-                        recent_transitions = await self.hippocampus.get_recent_transitions(message.user_id, limit=5)
-                    except Exception as e:
-                        print(f"[Bifurcation Engine] Failed to fetch recent transitions: {e}")
-                
-                # ✨ FEEDBACK LOOP: Предварительно получаем модификаторы для всех кандидатов
-                # Создаём мапу candidate_embedding -> modifier
-                transition_modifiers = {}
-                if current_embedding:
-                    # Собираем все embeddings кандидатов
-                    all_candidate_embeddings = []
-                    for item in semantic_candidates + emotional_candidates + zeigarnik_candidates:
-                        if item.get("embedding"):
-                            all_candidate_embeddings.append((id(item), item["embedding"]))
-                    
-                    # Запрашиваем модификатор для каждого уникального embedding
-                    for item_id, cand_emb in all_candidate_embeddings:
-                        try:
-                            modifier = await self.hippocampus.get_transition_modifier(
-                                message.user_id, current_embedding, cand_emb
-                            )
-                            transition_modifiers[item_id] = modifier
-                        except Exception as e:
-                            print(f"[Bifurcation Engine] Failed to get transition modifier: {e}")
-                            transition_modifiers[item_id] = 1.0
-                
-                # Helper: Check if candidate is a recently-exhausted topic
-                def is_recently_exhausted(candidate_emb: Optional[List[float]]) -> bool:
-                    if not candidate_emb:
-                        return False
-                    if not recent_transitions:
-                        return False
-                    
-                    # ✨ FIX: Validate dimension - use explicit None check for static analyzer
-                    if current_embedding is None:
-                        return False
-                    emb_len = len(candidate_emb)
-                    current_len = len(current_embedding)
-                    if emb_len != current_len:
-                        return False
-                    
-                    # Проверяем косинусное сходство с source_embeddings недавних переходов
-                    # Если similarity > 0.7, значит мы пытаемся вернуться к недавней теме
-                    import numpy as np
-                    candidate_arr = np.array(candidate_emb)
-                    for trans in recent_transitions:
-                        source_emb = trans.get("source_embedding")
-                        if source_emb and len(source_emb) == emb_len:
-                            source_arr = np.array(source_emb)
-                            # Cosine similarity
-                            try:
-                                similarity = np.dot(candidate_arr, source_arr) / (np.linalg.norm(candidate_arr) * np.linalg.norm(source_arr))
-                                if similarity > 0.7:
-                                    print(f"[Bifurcation Engine] Anti-looping: Candidate matches recent source (similarity={similarity:.2f})")
-                                    return True
-                            except Exception:
-                                pass
-                    return False
-                
-                # 2. Score and combine candidates (with anti-looping filter and transition modifier)
-                # Semantic: weight 0.5 (based on similarity: distance 0.35-0.65 is ideal)
-                for item in semantic_candidates:
-                    # ✨ Anti-looping check
-                    if is_recently_exhausted(item.get("embedding")):
-                        print(f"[Bifurcation Engine] Skipping semantic candidate (recently exhausted): {item.get('topic')}")
-                        continue
-                    
-                    score = 0.5 * (1.0 - abs(item.get("distance", 0.5) - 0.5) * 2)  # Higher score for distance closer to 0.5
-                    
-                    # ✨ FEEDBACK LOOP: Применяем модификатор на основе исторических данных
-                    item_id = id(item)
-                    transition_mod = transition_modifiers.get(item_id, 1.0)
-                    score *= transition_mod
-                    
-                    bifurcation_candidates.append({
-                        "topic": item.get("topic", "Unknown"),
-                        "content": item.get("content", ""),
-                        "score": score,
-                        "vector": "semantic_neighbor",
-                        "distance": item.get("distance"),
-                        "transition_modifier": transition_mod,  # Логируем для отладки
-                        "embedding": item.get("embedding")  # ✨ Pass for transition saving
-                    })
-                
-                # Emotional: weight 0.3 (based on intensity)
-                for item in emotional_candidates:
-                    # ✨ Anti-looping check
-                    if is_recently_exhausted(item.get("embedding")):
-                        print(f"[Bifurcation Engine] Skipping emotional candidate (recently exhausted): {item.get('topic')}")
-                        continue
-                    
-                    score = 0.3 * item.get("intensity", 0.5)
-                    
-                    # ✨ FEEDBACK LOOP: Применяем модификатор
-                    item_id = id(item)
-                    transition_mod = transition_modifiers.get(item_id, 1.0)
-                    score *= transition_mod
-                    
-                    bifurcation_candidates.append({
-                        "topic": item.get("topic", "Unknown"),
-                        "content": item.get("content", ""),
-                        "score": score,
-                        "vector": "emotional_anchor",
-                        "intensity": item.get("intensity"),
-                        "transition_modifier": transition_mod,
-                        "embedding": item.get("embedding")  # ✨ Pass for transition saving
-                    })
-                
-                # Zeigarnik: weight 0.2 (based on recency - more recent = higher score)
-                for i, item in enumerate(zeigarnik_candidates):
-                    # ✨ Anti-looping check
-                    if is_recently_exhausted(item.get("embedding")):
-                        content_preview = (item.get("content") or "")[:30]
-                        print(f"[Bifurcation Engine] Skipping zeigarnik candidate (recently exhausted): {content_preview}...")
-                        continue
-                    
-                    recency_score = 1.0 / (i + 1)  # More recent = higher score
-                    score = 0.2 * recency_score * item.get("emotion_score", 0.5)
-                    
-                    # ✨ FEEDBACK LOOP: Применяем модификатор
-                    item_id = id(item)
-                    transition_mod = transition_modifiers.get(item_id, 1.0)
-                    score *= transition_mod
-                    
-                    bifurcation_candidates.append({
-                        "topic": item.get("content", "Unknown")[:50],  # Use content as topic
-                        "content": item.get("content", ""),
-                        "score": score,
-                        "vector": "zeigarnik_return",
-                        "emotion_score": item.get("emotion_score"),
-                        "transition_modifier": transition_mod,
-                        "embedding": item.get("embedding")  # ✨ Pass for transition saving
-                    })
-                
-                # 3. Sort by score and select top candidate
-                if bifurcation_candidates:
-                    bifurcation_candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
-                    selected_candidate = bifurcation_candidates[0]
-                    predicted_bifurcation_topic = selected_candidate.get("topic", "General")
-                    print(f"[Bifurcation Engine] Selected topic: {predicted_bifurcation_topic} (score={selected_candidate.get('score', 0):.3f})")
-                    
-                    # ✨ ANTI-LOOPING: Save successful transition to graph
-                    if current_embedding and selected_candidate.get("embedding"):
-                        try:
-                            transition_type = selected_candidate.get("vector", "semantic_neighbor")
-                            await self.hippocampus.save_topic_transition(
-                                user_id=message.user_id,
-                                source_embedding=current_embedding,
-                                target_embedding=selected_candidate["embedding"],
-                                transition_type=transition_type,
-                                agent_intent=f"bifurcation_to_{predicted_bifurcation_topic}"
-                            )
-                            
-                            # ✨ FEEDBACK LOOP: Save pending transition for future evaluation
-                            self.current_topic_state["pending_transition"] = {
-                                "source_embedding": current_embedding,
-                                "target_embedding": selected_candidate["embedding"],
-                                "transition_type": transition_type,
-                                "agent_intent": f"bifurcation_to_{predicted_bifurcation_topic}"
-                            }
-                            print(f"[Bifurcation Engine] Pending transition saved for feedback evaluation")
-                            
-                        except Exception as e:
-                            print(f"[Bifurcation Engine] Failed to save transition: {e}")
-                    
-            except Exception as e:
-                print(f"[Bifurcation Engine] ❌ Error: {e}")
-        
-        volitional_instruction = ""
-        if dominant_volition:
-            impulse = dominant_volition.get("impulse", "UNKNOWN")
-            fuel = dominant_volition.get("fuel", 0.5)
-            
-            volitional_instruction = (
-                f"\\nVOLITIONAL DIRECTIVE (Focus):\\n"
-                f"- TARGET: {dominant_volition.get('target')}\\n"
-                f"- IMPULSE: {impulse} (Fuel Level: {fuel:.2f})\\n"
-                f"- STRATEGY: {dominant_volition.get('resolution_strategy')}\\n"
-            )
-            print(f"[Volition] Selected dominant pattern: {impulse} (fuel={fuel:.2f})")
-            
-
-        # ✨ Apply Hormonal Modulation BEFORE arbitration
-        signals = self._apply_hormonal_modulation(signals)
-        
-        # === ✨ VOLITIONAL MODULATION (Step 2: Matrix Application) ===
-        # This applies the 'Matrix' multipliers to agent scores
-        if dominant_volition:
-            signals = self._apply_volitional_modulation(signals, dominant_volition)
-        
-        # ✨ Apply CHAOS Injection (Entropy) BEFORE arbitration
-        signals = self._apply_chaos(signals)
-
-        # === Task 2.4: Modify Prefrontal Agent Score (Exploration Bias) ===
-        # If lc_mode == "tonic", increase Prefrontal score by 10% (capped at 10.0)
-        if lc_mode == "tonic":
-            for signal in signals:
-                if signal.agent_name == AgentType.PREFRONTAL:
-                    signal.score = min(10.0, signal.score * 1.1)
-                    signal.rationale_short += " [Tonic Exploration Boost]"
-                    print(f"[LC-NE] Tonic mode: Prefrontal score boosted to {signal.score:.2f}")
-                    break
-
-
-        # 4. Arbitration & Mood Update
-        signals.sort(key=lambda s: s.score, reverse=True)
-        winner = signals[0]
-        
-        strong_losers = [s for s in signals if s.score > 5.0 and s.agent_name != winner.agent_name]
-        
-        adverb_instructions = []
-        for loser in strong_losers:
-            if loser.style_instruction:
-                adverb_instructions.append(f"- {loser.agent_name.name}: {loser.style_instruction}")
-        
-        adverb_context_str = ""
-        if adverb_instructions:
-            # ✨ NEW: Hormonal Override (Мьютирование второстепенных стилей при сильных эмоциях)
-            extreme_archetypes = ["RAGE", "FEAR", "PANIC", "BURNOUT", "DISGUST", "SHAME"]
-            current_archetype = self.neuromodulation.get_archetype()
-            
-            if current_archetype in extreme_archetypes:
-                print(f"[Tone Hierarchy] Suppressing secondary modifiers due to extreme archetype: {current_archetype}")
-                # Оставляем строку пустой, чтобы гормональный стиль отработал чисто
-            else:
-                adverb_context_str = "\\nSECONDARY STYLE MODIFIERS (Neuro-Modulation):\\n" + "\\n".join(adverb_instructions)
-        
-        self._update_mood(winner)
-        
-        # Hormonal Reactive Update
-        implied_pe = prediction_error 
-        if implied_pe < 0.3:
-            if winner.agent_name == AgentType.AMYGDALA: implied_pe = 0.9 
-            elif winner.agent_name == AgentType.INTUITION: implied_pe = 0.2 
-            elif winner.agent_name == AgentType.STRIATUM: implied_pe = 0.1 
-        
-        self.neuromodulation.update_from_stimuli(
-            implied_pe, 
-            winner.agent_name, 
-            current_tec=current_tec,
-            current_valence=self.current_mood.valence
-        )
-        
-        
-        # 5. Response Generation 
-        response_context_str = self._format_context_for_llm(context)
-        
-        # === ✨ CRITICAL FIX: Use config name (Loaded from DB) ===
-        # If we loaded "Lyutik" from DB, self.config.name is "Lyutik".
-        # If we failed and it's default, it's "R-Bot".
-        
-        bot_gender = getattr(self.config, "gender", "Neutral")
-        
-        mechanical_style_instruction = self.neuromodulation.get_style_instruction()
-        
-        # === Stage 3: Inject Bifurcation Directive into LLM Prompt ===
-        bifurcation_instruction = ""
-        if predicted_bifurcation_topic and not is_exiting:  # 🛑 CRITICAL FIX: Don't pivot if exiting
-            bifurcation_instruction = (
-                f"\\n\\nPROACTIVE MIRRORING (Topic Switch Recommended):\\n"
-                f"- The user's engagement with the current topic is depleted (TEC={current_tec:.2f}).\\n"
-                f"- Gently pivot the conversation towards: {predicted_bifurcation_topic}\\n"
-                f"- Use natural transition, acknowledge the previous topic briefly, then bridge to the new one.\\n"
-            )
-            print(f"[Bifurcation Engine] Injecting directive: pivot to '{predicted_bifurcation_topic}'")
-            
-        final_style_instructions = mechanical_style_instruction + "\\n" + adverb_context_str + volitional_instruction + bifurcation_instruction + exit_instruction
-        
-        # Affective Context for LLM
-        affective_warnings = context.get("affective_context", [])
-        affective_context_str = self._format_affective_context(affective_warnings)
-        
-        # ✨ Generate Response + Prediction
-        # IMPORTANT: We pass self.config.name, which was updated from DB above.
-        response_text, predicted_reaction = await self.llm.generate_response(
-            agent_name=winner.agent_name.value,
-            user_text=message.text,
-            context_str=response_context_str, 
-            rationale=winner.rationale_short,
-            bot_name=self.config.name,        # <--- Uses DB-loaded name (e.g. "Lyutik")
-            bot_gender=bot_gender,            # <--- Uses DB-loaded gender
-            bot_description=bot_description,  # <--- Uses DB-loaded description ("трубадур")
-            user_mode=preferred_mode,
-            style_instructions=final_style_instructions, 
-            affective_context=affective_context_str
-        )
-        
-        # === 6.1 SAVE MEMORY with REAL Emotion Score (Moved from start) ===
-        # Calculate max intensity from emotional agents (Amygdala, Striatum, Social)
-        hot_scores = [
-            s.score for s in signals 
-            if s.agent_name in [AgentType.AMYGDALA, AgentType.STRIATUM, AgentType.SOCIAL]
-        ]
-        max_hot = max(hot_scores) if hot_scores else 0.0
-        real_emotion_score = max_hot / 10.0
-        
-        # Ensure extraction_result uses this real score if possible, or override in save
-        # Actually memorize_event takes the whole extraction object.
-        # We update it here:
-        if extraction_result["anchors"]:
-             extraction_result["anchors"][0]["emotion_score"] = real_emotion_score
-        
-        await self.memory.memorize_event(
-            message, 
-            extraction_result,
-            precomputed_embedding=current_embedding
-        )
-        
-        # === 6.2 SAVE BOT RESPONSE ===
-        await self.memory.memorize_bot_response(
-            message.user_id, 
-            message.session_id, 
-            response_text
-        )
-        
-        # === 6.3 SAVE PREDICTION ===
-        if predicted_reaction:
-            try:
-                pred_emb = await self.llm.get_embedding(predicted_reaction)
-                
-                await self.hippocampus.save_prediction(
-                    user_id=message.user_id,
-                    session_id=message.session_id,
-                    bot_message=response_text,
-                    predicted_reaction=predicted_reaction,
-                    predicted_embedding=pred_emb
-                )
-                print(f"[Predictive] Saved hypothesis: '{predicted_reaction}'")
-            except Exception as e:
-                print(f"[Predictive] Failed to save prediction: {e}")
-        
-        latency = (datetime.now() - start_time).total_seconds() * 1000
-        
-        internal_stats = {
-            "latency_ms": int(latency),
-            "winner_agent": winner.agent_name.value, # ✨ FIXED: Explicitly save winner name
-            "winner_score": winner.score,
-            "winner_reason": winner.rationale_short,
-            "all_scores": {s.agent_name.value: round(s.score, 2) for s in signals},
-            "mood_state": str(self.current_mood),
-            "hormonal_state": str(self.neuromodulation.state), 
-            "hormonal_archetype": self.neuromodulation.get_archetype(),
-            "active_style": final_style_instructions,
-            "affective_triggers_detected": affective_triggers_count,
-            "sentiment_context_used": bool(affective_warnings),
-            "volition_selected": dominant_volition.get("impulse") if dominant_volition else None,
-            "volition_persistence_active": self.active_focus["turns_remaining"] > 0,
-            "modulators": [s.agent_name.value for s in strong_losers],
-            "mode": "UNIFIED" if self.config.use_unified_council else "LEGACY",
-            "council_mode": "FULL" if has_affective else "LIGHT",
-            "prediction_error": prediction_error, 
-            "next_prediction": predicted_reaction,
-            "user_emotion_score": real_emotion_score,
-            # === Task 3: LC-NE Metrics Logging ===
-            "lc_mode": lc_mode,
-            "topic_engagement": current_tec,
-            # === Stage 3: Bifurcation Metrics ===
-            "bifurcation_triggered": lc_mode == "tonic",
-            "bifurcation_target": predicted_bifurcation_topic,
-            "bifurcation_candidates_count": len(bifurcation_candidates),
-            "bifurcation_vectors": {
-                "semantic": len(semantic_candidates) if lc_mode == "tonic" else 0,
-                "emotional": len(emotional_candidates) if lc_mode == "tonic" else 0,
-                "zeigarnik": len(zeigarnik_candidates) if lc_mode == "tonic" else 0,
-            } if lc_mode == "tonic" else None,
-            # === Task 3: Dialogue Termination Metrics ===
-            "termination_triggered": exit_signal.get("should_exit", False),
-            "termination_reason": exit_signal.get("reason") if exit_signal.get("should_exit") else None,
-        }
-
-        # Debug: Print bifurcation summary
-        if lc_mode == "tonic" and predicted_bifurcation_topic:
-            print(f"[Bifurcation Engine] Summary: {len(bifurcation_candidates)} candidates, target='{predicted_bifurcation_topic}'")
-
-
-        await log_turn_metrics(message.user_id, message.session_id, internal_stats)
-        
-        return CoreResponse(
-            actions=[CoreAction(type="send_text", payload={"text": response_text})],
-            winning_agent=winner.agent_name,
-            current_mood=self.current_mood, 
-            current_hormones=self.neuromodulation.state, 
-            processing_mode=ProcessingMode.SLOW_PATH,
-            internal_stats=internal_stats
-        )
-
-
-    # === HELPER METHODS ===
+    # Preset configurations (Dark / Deviant)
+    PRESETS_DARK = {
+        "Макиавеллист": {"H": 10, "E": 20, "X": 60, "A": 40, "C": 80, "O": 50},
+        "Нарцисс": {"H": 20, "E": 50, "X": 85, "A": 25, "C": 60, "O": 40},
+        "Психопат": {"H": 5, "E": 85, "X": 60, "A": 5, "C": 40, "O": 30},
+        "ТоксичныйТролль": {"H": 15, "E": 90, "X": 80, "A": 15, "C": 20, "O": 45},
+    }
     
-    def _format_affective_context(self, warnings: List[str]) -> str: 
-        """
-        Formats list of affective warnings into a single string for LLM prompt.
-        """
-        if not warnings:
-            return ""
-        
-        warning_str = "\\nAFFECTIVE MEMORY WARNING:\\n"
-        for w in warnings:
-            warning_str += f"⚠️ {w}\\n"
-        return warning_str
-
+    ALL_PRESETS = {**PRESETS_LIGHT, **PRESETS_DARK}
     
-    def _apply_chaos(self, signals: List[AgentSignal]) -> List[AgentSignal]:
+    def __init__(self, hexaco_profile: Optional[Dict[str, int]] = None):
         """
-        🌀 CHAOS INJECTION (Entropy)
+        Initialize with HEXACO profile.
+        
+        Args:
+            hexaco_profile: Dict with keys H, E, X, A, C, O (values 0-100)
         """
-        chaos = getattr(self.config.sliders, "chaos_level", 0.0)
-        
-        if chaos <= 0.05: return signals
-        
-        print(f"[Chaos] Injecting entropy (level={chaos:.2f})")
-        
-        for s in signals:
-            noise = (random.random() - 0.5) * (chaos * 4.0) 
-            s.score = max(0.0, min(10.0, s.score + noise))
-            if abs(noise) > 0.5:
-                s.rationale_short += f" [Entropy {noise:+.1f}]"
-                
-        return signals
+        self.profile = hexaco_profile or {
+            "H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50
+        }
     
-    def _select_dominant_volition(self, patterns: List[Dict], user_id: int) -> Optional[Dict]:
+    # ==================== Mathematical Transfer Functions ====================
+    
+    @staticmethod
+    def sigmoid(x: float, center: float = 0.5, steepness: float = 4.0) -> float:
         """
-        Winner-Takes-Volition mechanism.
+        Sigmoid function for threshold mapping.
+        Returns value between 0 and 1.
         """
-        if not patterns: return None
-        now = datetime.utcnow()
-        candidates = []
-        current_focus_id = None
-        
-        # Check focus persistence
-        if self.active_focus["user_id"] == user_id and self.active_focus["turns_remaining"] > 0:
-            current_focus_id = self.active_focus["pattern_id"]
-            self.active_focus["turns_remaining"] -= 1
-        else:
-            self.active_focus = {"pattern_id": None, "turns_remaining": 0, "user_id": user_id}
-        
-        for p in patterns:
-            if not p.get("is_active", True): continue
-            
-            # Base Score
-            score = p.get("intensity", 0.5) + p.get("learned_delta", 0.0)
-            
-            # Decay
-            last_active = p.get("last_activated_at")
-            if last_active and isinstance(last_active, datetime):
-                days_passed = (now - last_active).days
-                decay_rate = p.get("decay_rate") or self.VOLITION_DECAY_PER_DAY
-                decay_penalty = days_passed * decay_rate
-                score -= decay_penalty
-            
-            # Persistence Bonus
-            if p["id"] == current_focus_id: score += self.VOLITION_PERSISTENCE_BONUS
-            
-            # Affective Filter
-            if self.current_mood.arousal > 0.7 and self.current_mood.dominance < -0.3: score *= 0.2
-            if self.current_mood.arousal > 0.7 and self.current_mood.dominance > 0.5: score *= 1.2
-            
-            candidates.append({**p, "effective_score": score})
-            
-        if not candidates: return None
-        candidates.sort(key=lambda x: x["effective_score"], reverse=True)
-        winner = candidates[0]
-        
-        # Set new focus if strong enough
-        if winner["effective_score"] > 0.6:
-            if winner["id"] != current_focus_id:
-                self.active_focus["pattern_id"] = winner["id"]
-                self.active_focus["turns_remaining"] = self.VOLITION_FOCUS_DURATION
-                print(f"[Volition] New Focus Acquired: {winner['impulse']} (for {self.VOLITION_FOCUS_DURATION} turns)")
-        
-        return winner
-
-    def _apply_volitional_modulation(self, signals: List[AgentSignal], pattern: Dict) -> List[AgentSignal]:
+        x = max(0, min(1, x))  # Clamp to [0, 1]
+        return 1 / (1 + math.exp(-steepness * (x - center)))
+    
+    @staticmethod
+    def exponential(x: float, min_val: float = 0.01, max_val: float = 0.4) -> float:
         """
-        ⚖️ VOLITIONAL STRATEGY MATRIX IMPLEMENTATION
-        Applies multipliers to agents based on Impulse Type and Fuel Level.
-        Ref: docs/volitional_matrix.md
+        Exponential mapping for decay parameters.
+        Maps linear 0-1 to logarithmic scale.
         """
-        impulse = pattern.get("impulse", "").upper()
-        fuel = pattern.get("fuel", 0.5)
+        x = max(0, min(1, x))
+        # Exponential curve: low x -> low min_val, high x -> high max_val
+        return min_val + (max_val - min_val) * (x ** 2)
+    
+    @staticmethod
+    def linear(x: float, min_val: float, max_val: float) -> float:
+        """Simple linear mapping."""
+        x = max(0, min(1, x))
+        return min_val + (max_val - min_val) * x
+    
+    @staticmethod
+    def inverted_linear(x: float, min_val: float, max_val: float) -> float:
+        """Inverted linear mapping: high x -> low value."""
+        x = max(0, min(1, x))
+        return max_val - (max_val - min_val) * x
+    
+    # ==================== Translation Methods ====================
+    
+    def translate(self) -> TranslatedConfig:
+        """Translate HEXACO profile to R-Core configuration."""
+        p = self.profile
         
-        # Default Multipliers (No change)
-        multipliers = {
-            AgentType.INTUITION: 1.0,
-            AgentType.AMYGDALA: 1.0,
-            AgentType.PREFRONTAL: 1.0,
-            AgentType.SOCIAL: 1.0,
-            AgentType.STRIATUM: 1.0
+        # === Openness (O) ===
+        # Maps to intuition_gain: 0.5 to 3.0
+        intuition_gain = self.linear(p["O"], 0.5, 3.0)
+        
+        # Bifurcation threshold: triggers earlier if O > 75
+        bifurcation_threshold_modifier = 1.0 if p["O"] <= 75 else 1.0 + (p["O"] - 75) / 25 * 0.5
+        
+        # === Conscientiousness (C) ===
+        # Maps to base_decay_rate: Low C = High decay (0.4), High C = Low decay (0.01)
+        base_decay_rate = self.exponential(p["C"], min_val=0.01, max_val=0.4)
+        
+        # Persistence: 0.1 to 0.9
+        persistence = self.linear(p["C"], 0.1, 0.9)
+        
+        # === Extraversion (X) ===
+        # Dynamic phatic threshold: maps to expected word count
+        dynamic_phatic_threshold = self.linear(p["X"], 2, 8)
+        
+        # Social agent weight: sigmoid boost
+        social_agent_weight = 0.5 + self.sigmoid(p["X"] / 100) * 1.5
+        
+        # === Agreeableness (A) ===
+        # Prediction sensitivity: inverted sigmoid. Low A = huge multiplier on PE
+        pred_sensitivity = 1.0 + self.inverted_sigmoid(p["A"] / 100) * 2.0
+        
+        # Amygdala multiplier: Low A + High E = Extreme boost
+        amygdala_multiplier = 1.0
+        if p["A"] < 30 and p["E"] > 50:
+            amygdala_multiplier = 1.0 + (50 - p["A"]) / 50 * (p["E"] - 50) / 50 * 2.0
+        
+        # === Neuroticism / Emotionality (E) ===
+        # Chaos level: rises sharply after 70%
+        chaos_level = self.sigmoid(p["E"] / 100, center=0.7, steepness=8.0) * 0.5
+        
+        # Baseline Cortisol: linear mapping
+        baseline_cortisol = self.linear(p["E"], 0.1, 0.8)
+        
+        # === Honesty (H) ===
+        # Strategy selection: if H < 30, force manipulation/challenge strategies
+        force_manipulation_strategies = p["H"] < 30
+        
+        # Striatum agent weight: inverted linear. Low H = High reward-seeking
+        striatum_agent_weight = self.inverted_linear(p["H"], 0.5, 2.0)
+        
+        # Baseline Oxytocin: High H + High A = High baseline
+        baseline_oxytocin = self.linear(p["H"], 0.1, 0.6) if p["A"] > 50 else 0.2
+        
+        return TranslatedConfig(
+            intuition_gain=intuition_gain,
+            chaos_level=chaos_level,
+            base_decay_rate=base_decay_rate,
+            persistence=persistence,
+            dynamic_phatic_threshold=dynamic_phatic_threshold,
+            social_agent_weight=social_agent_weight,
+            pred_sensitivity=pred_sensitivity,
+            amygdala_multiplier=amygdala_multiplier,
+            striatum_agent_weight=striatum_agent_weight,
+            force_manipulation_strategies=force_manipulation_strategies,
+            bifurcation_threshold_modifier=bifurcation_threshold_modifier,
+            baseline_cortisol=baseline_cortisol,
+            baseline_oxytocin=baseline_oxytocin
+        )
+    
+    @staticmethod
+    def inverted_sigmoid(x: float, center: float = 0.5, steepness: float = 4.0) -> float:
+        """Inverted sigmoid: high x -> low value."""
+        return 1.0 - TraitTranslationEngine.sigmoid(x, center, steepness)
+    
+    def apply_to_bot_config(self, bot_config: Any) -> Any:
+        """
+        Apply translated config to BotConfig object.
+        
+        Args:
+            bot_config: BotConfig instance to modify
+            
+        Returns:
+            Modified BotConfig with translated values
+        """
+        translated = self.translate()
+        
+        # Update sliders
+        if hasattr(bot_config, 'sliders'):
+            bot_config.sliders.intuition_gain = translated.intuition_gain
+            bot_config.sliders.chaos_level = translated.chaos_level
+            # Other sliders are mapped via logic in pipeline
+        
+        # Store translated values for pipeline access
+        bot_config._translated_hexaco = {
+            "base_decay_rate": translated.base_decay_rate,
+            "persistence": translated.persistence,
+            "dynamic_phatic_threshold": translated.dynamic_phatic_threshold,
+            "social_agent_weight": translated.social_agent_weight,
+            "pred_sensitivity": translated.pred_sensitivity,
+            "amygdala_multiplier": translated.amygdala_multiplier,
+            "striatum_agent_weight": translated.striatum_agent_weight,
+            "force_manipulation_strategies": translated.force_manipulation_strategies,
+            "bifurcation_threshold_modifier": translated.bifurcation_threshold_modifier,
+            "baseline_cortisol": translated.baseline_cortisol,
+            "baseline_oxytocin": translated.baseline_oxytocin,
         }
         
-        strategy_name = "Standard"
-
-        # === 1. LAZINESS / PROCRASTINATION ===
-        if "LAZI" in impulse or "PROCRAST" in impulse or "APATHY" in impulse:
-            if fuel < 0.4: # Low Fuel -> Baby Steps
-                strategy_name = "Baby Steps (Low Fuel)"
-                multipliers[AgentType.SOCIAL] = 1.5
-                multipliers[AgentType.INTUITION] = 1.3
-                multipliers[AgentType.PREFRONTAL] = 0.5 # Don't push logic
-            elif fuel > 0.7: # High Fuel -> Challenge
-                strategy_name = "Challenge (High Fuel)"
-                multipliers[AgentType.PREFRONTAL] = 1.4
-                multipliers[AgentType.STRIATUM] = 1.2
-                multipliers[AgentType.SOCIAL] = 0.6
-        
-        # === 2. FEAR / ANXIETY ===
-        elif "FEAR" in impulse or "ANXI" in impulse or "SCARE" in impulse:
-            if fuel < 0.4: # Low Fuel -> Safe Space
-                strategy_name = "Safe Space (Low Fuel)"
-                multipliers[AgentType.SOCIAL] = 1.6
-                multipliers[AgentType.AMYGDALA] = 1.2 # Validate fear
-                multipliers[AgentType.PREFRONTAL] = 0.4
-            elif fuel > 0.7: # High Fuel -> Deconstruction
-                strategy_name = "Rationalization (High Fuel)"
-                multipliers[AgentType.PREFRONTAL] = 1.5
-                multipliers[AgentType.INTUITION] = 1.3
-        
-        # === 3. ANGER / RAGE ===
-        elif "ANGER" in impulse or "RAGE" in impulse or "HATE" in impulse:
-            if fuel < 0.4: # Low Fuel -> Ventilation
-                strategy_name = "Ventilation (Low Fuel)"
-                multipliers[AgentType.SOCIAL] = 1.8
-                multipliers[AgentType.PREFRONTAL] = 0.2 # Do not argue
-            elif fuel > 0.7: # High Fuel -> Redirection
-                strategy_name = "Redirection (High Fuel)"
-                multipliers[AgentType.AMYGDALA] = 1.3
-                multipliers[AgentType.STRIATUM] = 1.4
-
-        # === 4. BOREDOM ===
-        elif "BORED" in impulse or "ROUTINE" in impulse:
-            strategy_name = "Gamification"
-            multipliers[AgentType.STRIATUM] = 1.5
-            multipliers[AgentType.INTUITION] = 1.5
-            multipliers[AgentType.PREFRONTAL] = 0.7
-
-        print(f"[Volition] Applying Strategy: {strategy_name} (Fuel={fuel:.2f})")
-        
-        # Apply multipliers
-        for s in signals:
-            mult = multipliers.get(s.agent_name, 1.0)
-            if mult != 1.0:
-                s.score = max(0.0, min(10.0, s.score * mult))
-                s.rationale_short += f" [Volition x{mult}]"
-                
-        return signals
-
-    async def _process_affective_extraction(self, message: IncomingMessage, extracts: List[Dict]):
-        """Helper to process extracted emotions"""
-        for item in extracts:
-            intensity = item.get("intensity", 0.5)
-            predicate = item.get("predicate", "UNKNOWN")
-            
-            if predicate in ["HATES", "DESPISES", "FEARS"]: valence = -intensity
-            elif predicate in ["LOVES", "ENJOYS", "ADORES"]: valence = intensity
-            else: valence = 0.0
-            
-            sentiment_vad = {
-                "valence": valence,
-                "arousal": 0.5 if predicate == "FEARS" else 0.3,
-                "dominance": -0.2 if predicate == "FEARS" else 0.0
-            }
-            
-            # ✨ NEW: Compute embedding
-            fact_text = f"{item.get('subject', 'User')} {predicate} {item.get('object', '')}"
-            try:
-                embedding = await self.llm.get_embedding(fact_text)
-            except Exception as e:
-                print(f"[Pipeline] Embedding generation failed for affective extraction: {e}")
-                embedding = None
-
-            triple = SemanticTriple(
-                subject=item.get("subject", "User"),
-                predicate=predicate,
-                object=item.get("object", ""),
-                confidence=intensity,
-                source_message_id=message.message_id,
-                sentiment=sentiment_vad,
-                embedding=embedding 
-            )
-            
-            await self.memory.store.save_semantic(message.user_id, triple)
-            print(f"[Affective ToM] Saved: {triple.subject} {triple.predicate} {triple.object}")
+        return bot_config
 
 
-    def _format_context_for_llm(self, context: Dict, limit_history: Optional[int] = None, exclude_episodic: bool = False, exclude_semantic: bool = False) -> str:
-        lines = []
-        profile = context.get("user_profile")
-        if profile:
-            lines.append("USER PROFILE (Core Identity):")
-            if profile.get("name"): lines.append(f"- Name: {profile['name']}")
-            if profile.get("gender"): lines.append(f"- Gender: {profile['gender']}")
-            if profile.get("preferred_mode"): lines.append(f"- Address Style: {profile['preferred_mode']}")
-            lines.append("")
-            
-        relevant_traits = context.get("relevant_traits", [])
-        if relevant_traits:
-            lines.append("CONTEXTUALLY RELEVANT TRAITS:")
-            for trait in relevant_traits:
-                lines.append(f"- {trait}")
-            lines.append("")
+def get_preset_profile(preset_name: str) -> Optional[Dict[str, int]]:
+    """Get HEXACO profile for a preset."""
+    return TraitTranslationEngine.ALL_PRESETS.get(preset_name)
 
 
-        if context.get("chat_history"):
-            chat_history = context["chat_history"]
-            if limit_history is not None:
-                chat_history = chat_history[-limit_history:]
-            if chat_history:
-                lines.append("RECENT DIALOGUE:")
-                for msg in chat_history:
-                    role = "User" if msg["role"] == "user" else "Assistant"
-                    lines.append(f"{role}: {msg['content']}")
-                lines.append("") 
-        
-        if not exclude_episodic and context.get("episodic_memory"):
-            lines.append("PAST EPISODES (Long-term memory):")
-            for ep in context["episodic_memory"]:
-                lines.append(f"- {ep.get('raw_text', '')}")
-            lines.append("")
-        
-        if not exclude_semantic and context.get("semantic_facts"):
-            lines.append("KNOWN FACTS:")
-            for fact in context["semantic_facts"]:
-                lines.append(f"- {fact.get('subject')} {fact.get('predicate')} {fact.get('object')}")
-            lines.append("")
-                
-        return "\\n".join(lines) if lines else "No prior context."
-
-
-    async def _check_and_trigger_hippocampus(self, user_id: int):
-        try:
-            async with AsyncSessionLocal() as session:
-                await session.execute(
-                    text("UPDATE user_profiles SET short_term_memory_load = short_term_memory_load + 1 WHERE user_id = :uid"),
-                    {"uid": user_id}
-                )
-                await session.commit()
-                result = await session.execute(
-                    text("SELECT short_term_memory_load FROM user_profiles WHERE user_id = :uid"),
-                    {"uid": user_id}
-                )
-                load = result.scalar() or 0
-                
-                THRESHOLD = 10 
-                
-                if load >= THRESHOLD:
-                    print(f"[Hippocampus] Triggered consolidation for user {user_id} (load={load})")
-                    await self.hippocampus.consolidate(user_id)
-        except Exception as e:
-            print(f"[Pipeline] Hippocampus trigger failed: {e}")
-
-
-    def _apply_hormonal_modulation(self, signals: List[AgentSignal]) -> List[AgentSignal]:
-        archetype = self.neuromodulation.get_archetype()
-        
-        MODULATION_MAP = self.HORMONAL_MODULATION_RULES
-        
-        if archetype not in MODULATION_MAP: return signals
-        print(f"[Hormonal Override] {archetype} is modulating agent scores")
-        
-        modifiers = MODULATION_MAP[archetype]
-        default_mod = 0.8 if archetype == "SHAME" else 1.0
-        
-        for signal in signals:
-            mod = modifiers.get(signal.agent_name, default_mod)
-            signal.score = max(0.0, min(10.0, signal.score * mod))
-        return signals
-
-
-    async def _process_unified_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]: 
-        signals = []
-        agent_map = {
-            "intuition": (self.agents[0], AgentType.INTUITION),
-            "amygdala": (self.agents[1], AgentType.AMYGDALA),
-            "prefrontal": (self.agents[2], AgentType.PREFRONTAL),
-            "social": (self.agents[3], AgentType.SOCIAL),
-            "striatum": (self.agents[4], AgentType.STRIATUM)
-        }
-        
-        uncertainty_agent = self.agents[5] 
-        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) 
-        if u_signal:
-             signals.append(u_signal)
-
-
-        for key, (agent, agent_type) in agent_map.items():
-            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal", "confidence": 0.5})
-            base_score = report_data.get("score", 0.0)
-            final_score = base_score * self.config.intuition_gain if key == "intuition" else base_score
-            final_score = max(0.0, min(10.0, final_score))
-            signal = agent.process_from_report(report_data, self.config.sliders)
-            signal.score = final_score
-            signals.append(signal)
-            
-        return signals
-
-
-    async def _process_legacy_council(self, council_report: Dict, message: IncomingMessage, context: Dict) -> List[AgentSignal]:
-        intuition_signal = await self.agents[0].process(message, context, self.config.sliders)
-        signals = [intuition_signal]
-        agent_map = {
-            "amygdala": self.agents[1],
-            "prefrontal": self.agents[2],
-            "social": self.agents[3],
-            "striatum": self.agents[4]
-        }
-        for key, agent in agent_map.items():
-            report_data = council_report.get(key, {"score": 0.0, "rationale": "No signal"})
-            signals.append(agent.process_from_report(report_data, self.config.sliders))
-            
-        uncertainty_agent = self.agents[5]
-        u_signal = await uncertainty_agent.process(message, context, self.config.sliders) 
-        if u_signal:
-             signals.append(u_signal)
-             
-        return signals
-
-
-    def _update_mood(self, winner_signal):
-        INERTIA = 0.7
-        SENSITIVITY = 0.3
-        impact_map = {
-            AgentType.AMYGDALA:  MoodVector(valence=-0.8, arousal=0.9, dominance=0.8),
-            AgentType.STRIATUM:  MoodVector(valence=0.8, arousal=0.7, dominance=0.3),
-            AgentType.SOCIAL:    MoodVector(valence=0.5, arousal=-0.2, dominance=-0.1),
-            AgentType.PREFRONTAL:MoodVector(valence=0.0, arousal=-0.5, dominance=0.1),
-            AgentType.INTUITION: MoodVector(valence=0.0, arousal=0.1, dominance=0.0),
-            AgentType.UNCERTAINTY: MoodVector(valence=-0.2, arousal=0.4, dominance=-0.3) 
-        }
-        impact = impact_map.get(winner_signal.agent_name, MoodVector())
-        force = SENSITIVITY if winner_signal.score > 4.0 else 0.05        
-        self.current_mood.valence = max(-1.0, min(1.0, (self.current_mood.valence * INERTIA) + (impact.valence * force)))
-        self.current_mood.arousal = max(-1.0, min(1.0, (self.current_mood.arousal * INERTIA) + (impact.arousal * force)))
-        self.current_mood.dominance = max(-1.0, min(1.0, (self.current_mood.dominance * INERTIA) + (impact.dominance * force)))
-
-
-    async def _mock_perception(self, message: IncomingMessage) -> Dict:
-        await asyncio.sleep(0.05)
-        return {
-            "triples": [], 
-            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
-            "volitional_pattern": None
-        }
-
-    async def _perception_stage(self, message: IncomingMessage, chat_history: List[Dict]) -> Dict:
-        """
-        🔍 Perception Stage:
-        1. Mock implementation for triples/anchors (Legacy)
-        2. Real Volitional Detection + Exit Signal using LLM (Combined Request)
-        """
-        # Format history string for LLM
-        history_lines = [f"{m['role']}: {m['content']}" for m in chat_history[-6:]]
-        history_str = "\\n".join(history_lines)
-        
-        volitional_pattern = None
-        exit_signal = {"should_exit": False}
-        
-        # === Heuristic: Force check on goodbye phrases ===
-        farewell_keywords = ["пока", "до свидания", "спокойной ночи", "до завтра", "прощай", "bye", "goodbye", "see you"]
-        is_farewell = any(kw in message.text.lower() for kw in farewell_keywords)
-        
-        # Increase counter
-        self.volition_check_counter += 1
-        
-        # Run detection if:
-        # - history is sufficient AND Throttled (1 in 5) OR
-        # - Force check on farewell phrases
-        force_check = is_farewell and len(chat_history) >= 1
-        
-        if len(chat_history) >= 2 and (self.volition_check_counter % 5 == 0 or force_check):
-             print(f"[Pipeline] Scanning for volitional patterns + exit signal (Turn {self.volition_check_counter}, force={force_check})...")
-             result = await self.llm.detect_volitional_pattern(message.text, history_str)
-             
-             if result:
-                 volitional_pattern = result.get("volitional_pattern")
-                 exit_signal = result.get("exit_signal", {"should_exit": False})
-                 
-                 if volitional_pattern:
-                     print(f"[Pipeline] Volitional Pattern DETECTED: {volitional_pattern.get('trigger')} -> {volitional_pattern.get('impulse')}")
-                 
-                 if exit_signal.get("should_exit"):
-                     print(f"[Pipeline] 🚪 EXIT SIGNAL DETECTED: {exit_signal.get('reason')} - {exit_signal.get('suggested_message')}")
-        else:
-             print(f"[Pipeline] Volition scan skipped (Turn {self.volition_check_counter})")
-        
-        return {
-            "triples": [], 
-            "anchors": [{"raw_text": message.text, "emotion_score": 0.5, "tags": ["auto"]}], 
-            "volitional_pattern": volitional_pattern,
-            "exit_signal": exit_signal
-        }
+def is_dark_archetype(profile: Dict[str, int]) -> bool:
+    """Check if profile represents a dark/deviant archetype."""
+    return profile.get("H", 50) < 25 and profile.get("A", 50) < 25
