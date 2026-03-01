@@ -324,11 +324,18 @@ class RCoreKernel:
         word_count = 0
         if message.text:
             word_count = len(message.text.split())
-            # Список фатических фраз (phatic messages) - короткие ответы без смысловой нагрузки
+            
+            # Извлекаем статистику пользователя
+            attributes = user_profile.get("attributes", {}) if user_profile else {}
+            avg_word_count = attributes.get("avg_word_count", 5.0)
+            dynamic_phatic_threshold = max(2, min(5, int(avg_word_count * 0.4)))
+            
             phatic_patterns = ["ага", "ясно", "ок", "да", "нет", "хм", "мм", "угу", "ну", "понятно", "окей", "ладно", "чё", "да?", "и что?", "и что теперь?"]
-            is_phatic = any(pattern in message.text.lower() for pattern in phatic_patterns)
-            if word_count < 4 or is_phatic:
+            is_phatic_keyword = any(pattern in message.text.lower() for pattern in phatic_patterns)
+            
+            if word_count <= dynamic_phatic_threshold or (word_count <= dynamic_phatic_threshold + 1 and is_phatic_keyword):
                 is_short_or_phatic = True
+                print(f"[TopicTracker] ⏭️ Phatic message detected (words: {word_count}, threshold: {dynamic_phatic_threshold})")
 
         # === Проверка смены темы ===
         topic_changed = False
@@ -502,13 +509,16 @@ class RCoreKernel:
         
         # === Stage 3: The Bifurcation Engine ===
         # Trigger when LC mode is "tonic" (low engagement, exploration needed)
+        # 🛑 CRITICAL FIX: Do NOT trigger Bifurcation if Dialogue Terminator is trying to exit
         bifurcation_candidates = []
         predicted_bifurcation_topic = None
         semantic_candidates = []
         emotional_candidates = []
         zeigarnik_candidates = []
         
-        if lc_mode == "tonic":
+        is_exiting = exit_signal.get("should_exit", False)
+        
+        if lc_mode == "tonic" and not is_exiting:
             print("[Bifurcation Engine] Tonic LC detected. Generating topic switch hypotheses...")
             
             try:
@@ -787,7 +797,7 @@ class RCoreKernel:
         
         # === Stage 3: Inject Bifurcation Directive into LLM Prompt ===
         bifurcation_instruction = ""
-        if predicted_bifurcation_topic:
+        if predicted_bifurcation_topic and not is_exiting:  # 🛑 CRITICAL FIX: Don't pivot if exiting
             bifurcation_instruction = (
                 f"\\n\\nPROACTIVE MIRRORING (Topic Switch Recommended):\\n"
                 f"- The user's engagement with the current topic is depleted (TEC={current_tec:.2f}).\\n"

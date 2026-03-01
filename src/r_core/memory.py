@@ -378,6 +378,8 @@ class PostgresMemoryStore(AbstractMemoryStore):
         Implementation of Smart Trait Competition (Winner-Takes-Slot).
         Uses simple fuzzy matching (string based for MVP) to prevent duplicates,
         and manages a limit of 7 slots.
+        
+        FIX: Now preserves non-trait attributes (like avg_word_count, messages_analyzed).
         """
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(UserProfileModel).where(UserProfileModel.user_id == user_id))
@@ -394,51 +396,39 @@ class PostgresMemoryStore(AbstractMemoryStore):
             
             # --- Smart Trait Competition Logic ---
             if "attributes" in data: 
-                # Load existing traits
-                # Expected format in DB: {"personality_traits": [{"name": "Romantic", "weight": 0.8}, ...]}
                 current_attrs = dict(profile.attributes) if profile.attributes else {}
-                traits = current_attrs.get("personality_traits", [])
                 
-                # New candidate traits from update
-                new_traits_data = data["attributes"].get("personality_traits", [])
+                # 1. Обновляем обычные ключи (например, avg_word_count)
+                non_trait_data = {k: v for k, v in data["attributes"].items() if k != "personality_traits"}
+                current_attrs.update(non_trait_data)
                 
-                # MVP: If just a dict update (legacy), fallback to merge
-                # But if structured list, run competition
-                if isinstance(new_traits_data, list):
-                    MAX_SLOTS = 7
+                # 2. Логика для traits
+                if "personality_traits" in data["attributes"]:
+                    traits = current_attrs.get("personality_traits", [])
+                    new_traits_data = data["attributes"]["personality_traits"]
                     
-                    for candidate in new_traits_data:
-                        # 1. Check duplicates (Simple String Matching for MVP, Vector TODO)
-                        match_found = False
-                        for existing in traits:
-                            # Fuzzy match: "Romantic" == "romantic"
-                            if existing.get("name", "").lower() == candidate.get("name", "").lower():
-                                # Reinforce existing
-                                existing["weight"] = min(1.0, existing.get("weight", 0.5) + 0.1)
-                                existing["last_reinforced"] = datetime.utcnow().isoformat()
-                                match_found = True
-                                break
+                    if isinstance(new_traits_data, list):
+                        MAX_SLOTS = 7
+                        for candidate in new_traits_data:
+                            match_found = False
+                            for existing in traits:
+                                if existing.get("name", "").lower() == candidate.get("name", "").lower():
+                                    existing["weight"] = min(1.0, existing.get("weight", 0.5) + 0.1)
+                                    existing["last_reinforced"] = datetime.utcnow().isoformat()
+                                    match_found = True
+                                    break
+                            
+                            if not match_found:
+                                candidate["weight"] = candidate.get("weight", 0.5)
+                                candidate["last_reinforced"] = datetime.utcnow().isoformat()
+                                traits.append(candidate)
                         
-                        if not match_found:
-                            # 2. Add new trait
-                            candidate["weight"] = candidate.get("weight", 0.5) # Default weight
-                            candidate["last_reinforced"] = datetime.utcnow().isoformat()
-                            traits.append(candidate)
-                    
-                    # 3. Competition / Eviction
-                    if len(traits) > MAX_SLOTS:
-                        # Sort by weight (descending) -> Keep top N
-                        traits.sort(key=lambda x: x.get("weight", 0.0), reverse=True)
-                        traits = traits[:MAX_SLOTS]
-                
-                else:
-                    # Legacy update behavior for non-trait attributes
-                    current_attrs.update(data["attributes"])
-                
-                # Save back
-                if isinstance(new_traits_data, list):
-                    current_attrs["personality_traits"] = traits
-                    
+                        if len(traits) > MAX_SLOTS:
+                            traits.sort(key=lambda x: x.get("weight", 0.0), reverse=True)
+                            traits = traits[:MAX_SLOTS]
+                        
+                        current_attrs["personality_traits"] = traits
+
                 profile.attributes = current_attrs
                 
             await session.commit()
@@ -455,6 +445,11 @@ class MemorySystem:
         await self.store.save_chat_message(
             message.user_id, message.session_id, "user", message.text
         )
+
+        # Update verbosity stats for Dynamic Phatic Threshold
+        if message.text:
+            word_count = len(message.text.split())
+            await self.update_verbosity_stats(message.user_id, word_count)
 
         # 2. Semantic & Episodic (LTM)
         user_id = message.user_id
@@ -504,6 +499,22 @@ class MemorySystem:
 
     async def memorize_bot_response(self, user_id: int, session_id: str, text: str):
         await self.store.save_chat_message(user_id, session_id, "assistant", text)
+
+    async def update_verbosity_stats(self, user_id: int, word_count: int):
+        """Update user's average word count for Dynamic Phatic Threshold."""
+        profile = await self.store.get_user_profile(user_id)
+        if profile:
+            attrs = dict(profile.get("attributes", {}))
+            current_avg = attrs.get("avg_word_count", 5.0)
+            msg_analyzed = attrs.get("messages_analyzed", 0)
+
+            new_msg_analyzed = msg_analyzed + 1
+            new_avg = ((current_avg * msg_analyzed) + word_count) / new_msg_analyzed
+            
+            attrs["avg_word_count"] = float(f"{new_avg:.2f}")
+            attrs["messages_analyzed"] = new_msg_analyzed
+            
+            await self.store.update_user_profile(user_id, {"attributes": attrs})
 
     async def recall_context(self, user_id: int, current_text: str, session_id: str = "default", precomputed_embedding: Optional[List[float]] = None) -> dict:
         # 1. Episodes (RAG)
