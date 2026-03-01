@@ -29,11 +29,11 @@ class HexacoProfileRequest(BaseModel):
 class HexacoProfileResponse(BaseModel):
     """HEXACO profile response."""
     name: str
-    hexaco_profile: Dict[str, int]
-    sliders_preset: Dict[str, Any]
-    description: Optional[str]
-    gender: str
-    is_dark_archetype: bool
+    hexaco_profile: Dict[str, int] = {"H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50}
+    sliders_preset: Dict[str, Any] = {}
+    description: Optional[str] = None
+    gender: str = "Neutral"
+    is_dark_archetype: bool = False
     translated_config: Optional[Dict[str, Any]] = None
 
 
@@ -59,9 +59,9 @@ async def get_character_profile(name: str = "default"):
         if not profile:
             raise HTTPException(status_code=404, detail=f"Profile '{name}' not found")
         
-        hexaco = profile.hexaco_profile or {
-            "H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50
-        }
+        hexaco = profile.hexaco_profile
+        if hexaco is None:
+            hexaco = {"H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50}
         
         # Translate to R-Core config
         translator = TraitTranslationEngine(hexaco)
@@ -190,9 +190,14 @@ async def apply_preset(preset_name: str, profile_name: str = "default"):
         await session.commit()
         await session.refresh(profile)
         
+        # Ensure hexaco_profile is never None
+        hexaco = profile.hexaco_profile
+        if hexaco is None:
+            hexaco = {"H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50}
+        
         return HexacoProfileResponse(
             name=profile.name,
-            hexaco_profile=profile.hexaco_profile,
+            hexaco_profile=hexaco,
             sliders_preset=profile.sliders_preset or {},
             description=profile.description,
             gender=profile.gender or "Neutral",
