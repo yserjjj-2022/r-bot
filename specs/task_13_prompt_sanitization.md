@@ -16,7 +16,7 @@ We need an interceptor that "scrubs" or "sanitizes" the bot's past messages *onl
 4. **Conditional Diminutive Sanitization (Task 12 compatibility):** 
    - If `intimacy_score` < 0.8: The function MUST replace a known list of toxic diminutives (e.g., `Сереженька`, `Сашенька`) with neutral alternatives (e.g., `дружище` or remove them entirely).
    - If `intimacy_score` >= 0.8: Do NOT sanitize diminutives (allow close-friend nicknames if they naturally occur in history).
-5. Apply this function in `pipeline.py` (or `memory.py`) right before the `chat_history` is concatenated into the `context_str` for the LLM prompt.
+5. Apply this function in `pipeline.py` right before the `chat_history` is concatenated into the `context_str` for the LLM prompt.
 6. The database (`chat_history` table) must NOT be modified.
 
 ## Implementation Steps
@@ -41,20 +41,23 @@ def sanitize_bot_history(text: str, intimacy_score: float = 0.0) -> str:
     # 2. ALWAYS remove common action verbs written in italics or loose formatting
     actions_to_remove = [
         \"смеется\", \"улыбается\", \"подмигивает\", \"вздыхает\", 
-        \"кивает\", \"смеется и подмигивает\", \"довольно улыбается\"
+        \"кивает\", \"довольно улыбается\"
     ]
     for action in actions_to_remove:
-        pattern = re.compile(rf'\\b{action}\\b', re.IGNORECASE)
+        # Use regex to replace the action even if it's not a standalone word
+        pattern = re.compile(rf'{re.escape(action)}', re.IGNORECASE)
         text = pattern.sub('', text)
         
     # 3. CONDITIONAL: Replace/Remove diminutives if trust is low/medium
     if intimacy_score < 0.8:
-        diminutives = [\"Сереженька\", \"Сережа\", \"Сашенька\", \"Сергеюшка\"]
+        # List common diminutives to scrub. You can expand this list.
+        diminutives = [\"Сереженька\", \"Сережа\", \"Сашенька\", \"Сергеюшка\", \"Андрюшка\", \"Петрушка\"]
         for dim in diminutives:
-            pattern = re.compile(rf'\\b{dim}\\b', re.IGNORECASE)
-            text = pattern.sub('дружище', text) # Or just '' to remove
+            # Word boundaries (\\b) ensure we only replace the exact word, but we use re.IGNORECASE
+            pattern = re.compile(rf'\\b{re.escape(dim)}\\b', re.IGNORECASE)
+            text = pattern.sub('дружище', text)
             
-    # Clean up double spaces left by replacements
+    # Clean up multiple spaces that might have been left behind
     text = re.sub(r'\\s+', ' ', text).strip()
     
     return text
@@ -67,9 +70,14 @@ Locate the `_format_context_for_llm` method in `src/r_core/pipeline.py`. Ensure 
 from .utils import sanitize_bot_history # Add import at top
 
 # Inside _format_context_for_llm:
+    def _format_context_for_llm(self, context: Dict, limit_history: Optional[int] = None, exclude_episodic: bool = False, exclude_semantic: bool = False) -> str:
+        # ... [existing code] ...
+        
         # Extract intimacy_score (default to 0 if not implemented yet via Task 12)
         profile = context.get("user_profile") or {}
-        intimacy_score = profile.get("intimacy_score", 0.0)
+        # Assuming attributes might contain intimacy_score for now
+        attributes = profile.get("attributes", {})
+        intimacy_score = attributes.get("intimacy_score", 0.0)
 
         if context.get(\"chat_history\"):
             chat_history = context[\"chat_history\"]
@@ -87,6 +95,7 @@ from .utils import sanitize_bot_history # Add import at top
                         
                     lines.append(f\"{role}: {content}\")
                 lines.append(\"\") 
+        # ... [rest of existing code] ...
 ```
 
 ### 3. Verify
