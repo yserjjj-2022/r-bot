@@ -350,13 +350,6 @@ class LLMService:
              )
 
 
-        # === 2. FORMATTING AND ADDRESSING RULES ===
-        formatting_rules = (
-            "COMMUNICATION GUIDELINES:\\n"
-            "1. NO ACTION DESCRIPTIONS: NEVER use asterisks or text to describe actions (e.g. *smiles*, *laughs*, *winks*). Provide only spoken dialogue.\\n"
-            "2. NO EXCESSIVE DIMINUTIVES: Avoid overly familiar or sweet name forms (like 'Сереженька', 'Сашенька') unless explicitly requested.\\n"
-        )
-        
         if user_mode == "informal":
             address_block = (
                 "LANGUAGE RULES (Russian):\\n"
@@ -375,7 +368,6 @@ class LLMService:
         # === 3. FINAL SYSTEM PROMPT ===
         system_prompt = (
             f"{identity_block}\\n"
-            f"{formatting_rules}\\n"
             f"{address_block}\\n"
             f"CURRENT FUNCTIONAL STATE (Active Agent): {system_persona}\\n"
             "INSTRUCTION: Reply to the user in the SAME LANGUAGE as they used (Russian/English/etc).\\n"
@@ -396,6 +388,11 @@ class LLMService:
             "--- INTERNAL DIRECTIVES (Hidden from User) ---\\n"
             f"{style_instructions}\\n"
             f"MOTIVATION: {rationale}\\n\\n"
+            "--- FORMATTING RULES (CRITICAL) ---\\n"
+            "Your response MUST follow these rules:\\n"
+            "1. NO ACTION DESCRIPTIONS: Never use asterisks or text to describe your own actions (e.g. *smiles*, *laughs*, *winks*). Provide ONLY spoken dialogue.\\n"
+            "2. NO EXCESSIVE DIMINUTIVES: Avoid overly familiar or sweet name forms (like 'Сереженька', 'Сашенька') unless explicitly requested by the user.\\n"
+            "3. DIALOGUE ONLY: Respond as if you are speaking aloud. No stage directions, no descriptions of gestures.\\n\\n"
             "--- PREDICTIVE PROCESSING ---\\n"
             "You MUST output JSON with two fields:\\n"
             "1. 'reply': Your actual response to the user.\\n"
