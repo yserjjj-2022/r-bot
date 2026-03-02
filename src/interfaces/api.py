@@ -157,7 +157,7 @@ async def update_character_profile(request: HexacoProfileRequest):
                     "learning_speed": current_sliders.get("learning_speed", 0.5),
                     "pred_threshold": current_sliders.get("pred_threshold", 0.65)
                 }
-            elif sliders_override:
+            elif sliders_override and request.sliders_preset is not None:
                 # Manual override - save as-is
                 profile.sliders_preset = request.sliders_preset
             elif preset_updated:
