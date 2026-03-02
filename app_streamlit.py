@@ -667,57 +667,58 @@ else:
                     st.markdown("### 🎭 Apply Preset")
                     
                     presets = st.session_state.hexaco_presets
-                    
-                    # Light Presets
-                    st.markdown("**✨ Light / Functional Archetypes**")
-                    light_names = list(presets.get("light_presets", {}).keys())
-                    selected_light = st.selectbox("Select Light Preset", ["<none>"] + light_names, key="light_preset_selector")
-                    
-                    if selected_light != "<none>":
-                        if st.button(f"Apply '{selected_light}'", key="apply_light"):
-                            preset_hexaco = apply_preset(selected_light)
-                            if preset_hexaco:
-                                st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
-                                st.session_state.personality_preset = selected_light
-                                st.success(f"Applied preset: {selected_light}")
-                                st.rerun()
-                    
-                    st.markdown("---")
-                    
-                    # Dark Presets
-                    st.markdown("**🌑 Dark / Deviant Archetypes**")
-                    dark_names = list(presets.get("dark_presets", {}).keys())
-                    selected_dark = st.selectbox("Select Dark Preset", ["<none>"] + dark_names, key="dark_preset_selector")
-                    
-                    if selected_dark != "<none>":
-                        if st.button(f"Apply '{selected_dark}'", key="apply_dark"):
-                            preset_hexaco = apply_preset(selected_dark)
-                            if preset_hexaco:
-                                st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
-                                st.session_state.personality_preset = selected_dark
-                                st.success(f"Applied preset: {selected_dark}")
-                                st.rerun()
-                    
-                    st.divider()
-                    
-                    # --- Save Button ---
-                    st.markdown("### 💾 Save Profile")
-                    if st.button("Save HEXACO Profile", type="primary"):
-                        new_hexaco = {"H": H, "E": E, "X": X, "A": A, "C": C, "O": O}
+                    if presets is None:
+                        st.warning("⚠️ Presets unavailable")
+                    else:
+                        # Light Presets
+                        st.markdown("**✨ Light / Functional Archetypes**")
+                        light_names = list(presets.get("light_presets", {}).keys())
+                        selected_light = st.selectbox("Select Light Preset", ["<none>"] + light_names, key="light_preset_selector")
                         
-                        success = save_character_profile(
-                            name=st.session_state.bot_name,
-                            hexaco=new_hexaco,
-                            preset=st.session_state.personality_preset
-                        )
+                        if selected_light != "<none>":
+                            if st.button(f"Apply '{selected_light}'", key="apply_light"):
+                                preset_hexaco = apply_preset(selected_light)
+                                if preset_hexaco:
+                                    st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
+                                    st.session_state.personality_preset = selected_light
+                                    st.success(f"Applied preset: {selected_light}")
+                                    st.rerun()
                         
-                        if success:
-                            st.session_state.hexaco_profile = new_hexaco
-                            st.success("✅ Profile saved successfully!")
-                            # Force kernel reload on next message
-                            st.session_state.kernel_instance = None
-                        else:
-                            st.error("❌ Failed to save profile")
+                        st.markdown("---")
+                        
+                        # Dark Presets
+                        st.markdown("**🌑 Dark / Deviant Archetypes**")
+                        dark_names = list(presets.get("dark_presets", {}).keys())
+                        selected_dark = st.selectbox("Select Dark Preset", ["<none>"] + dark_names, key="dark_preset_selector")
+                        
+                        if selected_dark != "<none>":
+                            if st.button(f"Apply '{selected_dark}'", key="apply_dark"):
+                                preset_hexaco = apply_preset(selected_dark)
+                                if preset_hexaco:
+                                    st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
+                                    st.session_state.personality_preset = selected_dark
+                                    st.success(f"Applied preset: {selected_dark}")
+                                    st.rerun()
+                        
+                        st.divider()
+                        
+                        # --- Save Button ---
+                        st.markdown("### 💾 Save Profile")
+                        if st.button("Save HEXACO Profile", type="primary"):
+                            new_hexaco = {"H": H, "E": E, "X": X, "A": A, "C": C, "O": O}
+                            
+                            success = save_character_profile(
+                                name=st.session_state.bot_name,
+                                hexaco=new_hexaco,
+                                preset=st.session_state.personality_preset
+                            )
+                            
+                            if success:
+                                st.session_state.hexaco_profile = new_hexaco
+                                st.success("✅ Profile saved successfully!")
+                                st.session_state.kernel_instance = None
+                            else:
+                                st.error("❌ Failed to save profile")
             
             # Load sliders preset
             preset = agent_data.sliders_preset or {}
