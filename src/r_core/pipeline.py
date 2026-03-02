@@ -34,7 +34,7 @@ from .agents import (
 from .neuromodulation import NeuroModulationSystem
 from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
-from .utils import is_phatic_message, cosine_distance 
+from .utils import is_phatic_message, cosine_distance, sanitize_bot_history 
 from .translation_engine import TraitTranslationEngine, is_dark_archetype 
 
 
@@ -1148,10 +1148,21 @@ class RCoreKernel:
             if limit_history is not None:
                 chat_history = chat_history[-limit_history:]
             if chat_history:
+                # Extract intimacy_score (default to 0 if not implemented yet)
+                intimacy_score = 0.0
+                if profile:
+                    intimacy_score = getattr(profile, 'intimacy_score', 0.0) or 0.0
+                
                 lines.append("RECENT DIALOGUE:")
                 for msg in chat_history:
                     role = "User" if msg["role"] == "user" else "Assistant"
-                    lines.append(f"{role}: {msg['content']}")
+                    content = msg['content']
+                    
+                    # Sanitize Assistant messages to prevent echo of forbidden patterns
+                    if role == "Assistant":
+                        content = sanitize_bot_history(content, intimacy_score)
+                        
+                    lines.append(f"{role}: {content}")
                 lines.append("") 
         
         if not exclude_episodic and context.get("episodic_memory"):

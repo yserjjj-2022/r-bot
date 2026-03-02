@@ -1,4 +1,5 @@
 import math
+import re
 from typing import List, Union, Optional
 
 # Expected embedding dimension (VseGPT text-embedding-3-small)
@@ -74,3 +75,40 @@ def is_phatic_message(text: str) -> bool:
         return True
         
     return False
+
+
+def sanitize_bot_history(text: str, intimacy_score: float = 0.0) -> str:
+    """
+    Removes roleplay formatting and conditionally removes diminutives from bot messages 
+    before injecting them into the LLM prompt context.
+    """
+    if not text:
+        return text
+        
+    # 1. ALWAYS remove anything between asterisks (e.g., *улыбается*)
+    text = re.sub(r'\*.*?\*', '', text)
+    
+    # 2. ALWAYS remove anything between parentheses if it looks like an action (e.g., (улыбается))
+    text = re.sub(r'\(.*?\)', '', text)
+    
+    # 3. ALWAYS remove common action verbs
+    actions_to_remove = [
+        "смеется", "улыбается", "подмигивает", "вздыхает", 
+        "кивает", "смеется и подмигивает", "довольно улыбается",
+        "smiles", "laughs", "winks", "nods", "sighs"
+    ]
+    for action in actions_to_remove:
+        pattern = re.compile(rf'\b{re.escape(action)}\b', re.IGNORECASE)
+        text = pattern.sub('', text)
+        
+    # 4. CONDITIONAL: Replace/Remove diminutives if trust is low/medium
+    if intimacy_score < 0.8:
+        diminutives = ["Сереженька", "Сережа", "Сашенька", "Сергеюшка", "Андрюшка", "Петрушка"]
+        for dim in diminutives:
+            pattern = re.compile(rf'\b{re.escape(dim)}\b', re.IGNORECASE)
+            text = pattern.sub('дружище', text)
+            
+    # Clean up double spaces left by replacements
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
