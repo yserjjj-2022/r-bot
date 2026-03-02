@@ -1,17 +1,24 @@
 """
-Character Profile API (Task 8)
-Provides endpoints for HEXACO personality profile management.
+R-Bot Character Profile API
+Provides HEXACO personality management endpoints.
 """
 
 from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import select
 
-from .infrastructure.db import AsyncSessionLocal, AgentProfileModel
-from .translation_engine import TraitTranslationEngine, is_dark_archetype
+from src.r_core.infrastructure.db import AsyncSessionLocal, AgentProfileModel
+from src.r_core.translation_engine import TraitTranslationEngine, is_dark_archetype
 
+# Create FastAPI app
+app = FastAPI(
+    title="R-Bot API",
+    description="Character profile management and HEXACO translation",
+    version="1.0.0"
+)
 
+# Create router
 router = APIRouter(prefix="/api/character", tags=["character"])
 
 
@@ -203,3 +210,7 @@ async def apply_preset(preset_name: str, profile_name: str = "default"):
             gender=profile.gender or "Neutral",
             is_dark_archetype=is_dark_archetype(preset)
         )
+
+
+# Mount router to app
+app.include_router(router)
