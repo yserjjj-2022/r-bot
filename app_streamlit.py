@@ -90,8 +90,8 @@ def fetch_presets() -> Optional[dict]:
         print(f"[API] Failed to load presets: {e}")
         return None
 
-def save_character_profile(name: str, hexaco: dict, preset: Optional[str]) -> bool:
-    """POST /api/character/profile"""
+def save_character_profile(name: str, hexaco: dict, preset: Optional[str]) -> Optional[dict]:
+    """POST /api/character/profile. Returns full response with sliders_preset."""
     try:
         payload = {
             "name": name,
@@ -100,15 +100,19 @@ def save_character_profile(name: str, hexaco: dict, preset: Optional[str]) -> bo
         }
         resp = requests.post(f"{API_BASE_URL}/api/character/profile", json=payload, timeout=5)
         resp.raise_for_status()
-        return True
+        return resp.json()
     except Exception as e:
         print(f"[API] Failed to save profile: {e}")
-        return False
+        return None
 
-def apply_preset(preset_name: str) -> Optional[dict]:
+def apply_preset(preset_name: str, profile_name: str = "default") -> Optional[dict]:
     """POST /api/character/presets/{preset_name}"""
     try:
-        resp = requests.post(f"{API_BASE_URL}/api/character/presets/{preset_name}", timeout=5)
+        resp = requests.post(
+            f"{API_BASE_URL}/api/character/presets/{preset_name}",
+            params={"profile_name": profile_name},
+            timeout=5
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -677,10 +681,25 @@ else:
                         
                         if selected_light != "<none>":
                             if st.button(f"Apply '{selected_light}'", key="apply_light"):
-                                preset_hexaco = apply_preset(selected_light)
+                                preset_hexaco = apply_preset(selected_light, st.session_state.bot_name)
                                 if preset_hexaco:
                                     st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
-                                    st.session_state.personality_preset = selected_light
+                                    st.session_state.personality_preset = preset_hexaco.get("personality_preset")
+                                    # Sync sliders from API response
+                                    sliders_data = preset_hexaco.get("sliders_preset", {})
+                                    if sliders_data:
+                                        st.session_state.sliders = PersonalitySliders(
+                                            empathy_bias=sliders_data.get("empathy_bias", 0.5),
+                                            risk_tolerance=sliders_data.get("risk_tolerance", 0.5),
+                                            dominance_level=sliders_data.get("dominance_level", 0.5),
+                                            pace_setting=sliders_data.get("pace_setting", 0.5),
+                                            neuroticism=0.1,
+                                            chaos_level=sliders_data.get("chaos_level", 0.2),
+                                            learning_speed=sliders_data.get("learning_speed", 0.5),
+                                            persistence=sliders_data.get("persistence", 0.5),
+                                            pred_threshold=sliders_data.get("pred_threshold", 0.65),
+                                            pred_sensitivity=sliders_data.get("pred_sensitivity", 10.0)
+                                        )
                                     st.success(f"Applied preset: {selected_light}")
                                     st.rerun()
                         
@@ -693,10 +712,25 @@ else:
                         
                         if selected_dark != "<none>":
                             if st.button(f"Apply '{selected_dark}'", key="apply_dark"):
-                                preset_hexaco = apply_preset(selected_dark)
+                                preset_hexaco = apply_preset(selected_dark, st.session_state.bot_name)
                                 if preset_hexaco:
                                     st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
-                                    st.session_state.personality_preset = selected_dark
+                                    st.session_state.personality_preset = preset_hexaco.get("personality_preset")
+                                    # Sync sliders from API response
+                                    sliders_data = preset_hexaco.get("sliders_preset", {})
+                                    if sliders_data:
+                                        st.session_state.sliders = PersonalitySliders(
+                                            empathy_bias=sliders_data.get("empathy_bias", 0.5),
+                                            risk_tolerance=sliders_data.get("risk_tolerance", 0.5),
+                                            dominance_level=sliders_data.get("dominance_level", 0.5),
+                                            pace_setting=sliders_data.get("pace_setting", 0.5),
+                                            neuroticism=0.1,
+                                            chaos_level=sliders_data.get("chaos_level", 0.2),
+                                            learning_speed=sliders_data.get("learning_speed", 0.5),
+                                            persistence=sliders_data.get("persistence", 0.5),
+                                            pred_threshold=sliders_data.get("pred_threshold", 0.65),
+                                            pred_sensitivity=sliders_data.get("pred_sensitivity", 10.0)
+                                        )
                                     st.success(f"Applied preset: {selected_dark}")
                                     st.rerun()
                         
@@ -707,14 +741,29 @@ else:
                         if st.button("Save HEXACO Profile", type="primary"):
                             new_hexaco = {"H": H, "E": E, "X": X, "A": A, "C": C, "O": O}
                             
-                            success = save_character_profile(
+                            saved_profile = save_character_profile(
                                 name=st.session_state.bot_name,
                                 hexaco=new_hexaco,
                                 preset=st.session_state.personality_preset
                             )
                             
-                            if success:
+                            if saved_profile:
                                 st.session_state.hexaco_profile = new_hexaco
+                                # Sync sliders from API response (one-way from HEXACO)
+                                sliders_data = saved_profile.get("sliders_preset", {})
+                                if sliders_data:
+                                    st.session_state.sliders = PersonalitySliders(
+                                        empathy_bias=sliders_data.get("empathy_bias", 0.5),
+                                        risk_tolerance=sliders_data.get("risk_tolerance", 0.5),
+                                        dominance_level=sliders_data.get("dominance_level", 0.5),
+                                        pace_setting=sliders_data.get("pace_setting", 0.5),
+                                        neuroticism=0.1,
+                                        chaos_level=sliders_data.get("chaos_level", 0.2),
+                                        learning_speed=sliders_data.get("learning_speed", 0.5),
+                                        persistence=sliders_data.get("persistence", 0.5),
+                                        pred_threshold=sliders_data.get("pred_threshold", 0.65),
+                                        pred_sensitivity=sliders_data.get("pred_sensitivity", 10.0)
+                                    )
                                 st.success("✅ Profile saved successfully!")
                                 st.session_state.kernel_instance = None
                             else:

@@ -31,6 +31,7 @@ class HexacoProfileRequest(BaseModel):
     sliders_preset: Optional[Dict[str, float]] = None
     description: Optional[str] = None
     gender: Optional[str] = None
+    personality_preset: Optional[str] = None
 
 
 class HexacoProfileResponse(BaseModel):
@@ -40,6 +41,7 @@ class HexacoProfileResponse(BaseModel):
     sliders_preset: Dict[str, Any] = {}
     description: Optional[str] = None
     gender: str = "Neutral"
+    personality_preset: Optional[str] = None
     is_dark_archetype: bool = False
     translated_config: Optional[Dict[str, Any]] = None
 
@@ -95,6 +97,7 @@ async def get_character_profile(name: str = "default"):
             sliders_preset=profile.sliders_preset or {},
             description=profile.description,
             gender=profile.gender or "Neutral",
+            personality_preset=profile.personality_preset,
             is_dark_archetype=is_dark_archetype(hexaco),
             translated_config=translated_config
         )
@@ -105,6 +108,10 @@ async def update_character_profile(request: HexacoProfileRequest):
     """
     Update character profile.
     Can update HEXACO profile, sliders, description, and gender.
+    
+    CRITICAL: When hexaco_profile is provided, sliders_preset is automatically
+    recalculated via TraitTranslationEngine (one-way sync from HEXACO to sliders).
+    When only sliders_preset is provided, it acts as manual override.
     """
     async with AsyncSessionLocal() as session:
         # Find existing or create new
@@ -124,10 +131,38 @@ async def update_character_profile(request: HexacoProfileRequest):
             session.add(profile)
         else:
             # Update existing
-            if request.hexaco_profile is not None:
+            hexaco_updated = request.hexaco_profile is not None
+            sliders_override = request.sliders_preset is not None
+            preset_updated = request.personality_preset is not None
+            
+            if hexaco_updated:
+                # CRITICAL: One-way sync HEXACO -> sliders_preset
                 profile.hexaco_profile = request.hexaco_profile
-            if request.sliders_preset is not None:
+                profile.personality_preset = None  # Clear preset name on manual edit
+                
+                # Translate HEXACO to sliders
+                translator = TraitTranslationEngine(request.hexaco_profile)
+                translated = translator.translate()
+                
+                # Keep non-HEXACO-dependent fields
+                current_sliders = profile.sliders_preset or {}
+                profile.sliders_preset = {
+                    "empathy_bias": translated.intuition_gain,
+                    "risk_tolerance": translated.persistence,
+                    "dominance_level": translated.striatum_agent_weight,
+                    "pace_setting": translated.social_agent_weight,
+                    "chaos_level": translated.chaos_level,
+                    "persistence": translated.persistence,
+                    "pred_sensitivity": translated.pred_sensitivity,
+                    "learning_speed": current_sliders.get("learning_speed", 0.5),
+                    "pred_threshold": current_sliders.get("pred_threshold", 0.65)
+                }
+            elif sliders_override:
+                # Manual override - save as-is
                 profile.sliders_preset = request.sliders_preset
+            elif preset_updated:
+                profile.personality_preset = request.personality_preset
+            
             if request.description is not None:
                 profile.description = request.description
             if request.gender is not None:
@@ -151,6 +186,7 @@ async def update_character_profile(request: HexacoProfileRequest):
             sliders_preset=profile.sliders_preset or {},
             description=profile.description,
             gender=profile.gender or "Neutral",
+            personality_preset=profile.personality_preset,
             is_dark_archetype=is_dark_archetype(hexaco),
             translated_config={
                 "intuition_gain": translated.intuition_gain,
@@ -175,6 +211,7 @@ async def get_presets():
 async def apply_preset(preset_name: str, profile_name: str = "default"):
     """
     Apply a preset to a character profile.
+    Sets personality_preset name and recalculates sliders_preset from HEXACO.
     """
     preset = TraitTranslationEngine.ALL_PRESETS.get(preset_name)
     if not preset:
@@ -188,11 +225,30 @@ async def apply_preset(preset_name: str, profile_name: str = "default"):
         if not profile:
             profile = AgentProfileModel(
                 name=profile_name,
-                hexaco_profile=preset
+                hexaco_profile=preset,
+                personality_preset=preset_name
             )
             session.add(profile)
         else:
             profile.hexaco_profile = preset
+            profile.personality_preset = preset_name
+        
+        # Translate preset HEXACO to sliders
+        translator = TraitTranslationEngine(preset)
+        translated = translator.translate()
+        
+        current_sliders = profile.sliders_preset or {}
+        profile.sliders_preset = {
+            "empathy_bias": translated.intuition_gain,
+            "risk_tolerance": translated.persistence,
+            "dominance_level": translated.striatum_agent_weight,
+            "pace_setting": translated.social_agent_weight,
+            "chaos_level": translated.chaos_level,
+            "persistence": translated.persistence,
+            "pred_sensitivity": translated.pred_sensitivity,
+            "learning_speed": current_sliders.get("learning_speed", 0.5),
+            "pred_threshold": current_sliders.get("pred_threshold", 0.65)
+        }
         
         await session.commit()
         await session.refresh(profile)
@@ -208,6 +264,7 @@ async def apply_preset(preset_name: str, profile_name: str = "default"):
             sliders_preset=profile.sliders_preset or {},
             description=profile.description,
             gender=profile.gender or "Neutral",
+            personality_preset=profile.personality_preset,
             is_dark_archetype=is_dark_archetype(preset)
         )
 

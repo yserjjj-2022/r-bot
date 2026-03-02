@@ -148,6 +148,9 @@ class AgentProfileModel(Base):
         "O": 50   # Openness
     })
     
+    # ✨ Personality Preset Name (Task 10.6)
+    personality_preset: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
     # ✨ Experimental controls
     intuition_gain: Mapped[float] = mapped_column(Float, default=1.0)
     use_unified_council: Mapped[bool] = mapped_column(default=False)
