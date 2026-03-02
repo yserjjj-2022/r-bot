@@ -17,6 +17,8 @@ from src.r_core.config import settings
 from src.interfaces.ui.hud import render_neuro_hud  # ✨ IMPORT HUD
 import re
 import uuid # ✨ ADDED
+import requests
+from typing import Optional
 
 # --- Setup Page ---
 st.set_page_config(
@@ -55,6 +57,64 @@ if "current_agent_id" not in st.session_state:
 if "last_agent_name" not in st.session_state:
     st.session_state.last_agent_name = "Default"
 
+# --- Task 10: HEXACO Session State ---
+if "hexaco_profile" not in st.session_state:
+    st.session_state.hexaco_profile = None
+
+if "personality_preset" not in st.session_state:
+    st.session_state.personality_preset = None
+
+if "hexaco_presets" not in st.session_state:
+    st.session_state.hexaco_presets = None
+
+# --- API Client Functions (Task 10) ---
+API_BASE_URL = "http://localhost:8000"
+
+def fetch_character_profile(name: str) -> Optional[dict]:
+    """GET /api/character/profile?name={name}"""
+    try:
+        resp = requests.get(f"{API_BASE_URL}/api/character/profile", params={"name": name}, timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[API] Failed to load profile: {e}")
+        return None
+
+def fetch_presets() -> Optional[dict]:
+    """GET /api/character/presets"""
+    try:
+        resp = requests.get(f"{API_BASE_URL}/api/character/presets", timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[API] Failed to load presets: {e}")
+        return None
+
+def save_character_profile(name: str, hexaco: dict, preset: Optional[str]) -> bool:
+    """POST /api/character/profile"""
+    try:
+        payload = {
+            "name": name,
+            "hexaco_profile": hexaco,
+            "personality_preset": preset
+        }
+        resp = requests.post(f"{API_BASE_URL}/api/character/profile", json=payload, timeout=5)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"[API] Failed to save profile: {e}")
+        return False
+
+def apply_preset(preset_name: str) -> Optional[dict]:
+    """POST /api/character/presets/{preset_name}"""
+    try:
+        resp = requests.post(f"{API_BASE_URL}/api/character/presets/{preset_name}", timeout=5)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[API] Failed to apply preset: {e}")
+        return None
+
 # --- PERSISTENT KERNEL HACK ---
 if "kernel_instance" not in st.session_state:
     st.session_state.kernel_instance = None
@@ -81,7 +141,7 @@ async def load_session_data(limit=100):
             {"limit": limit * 2}
         )
         messages = msgs_result.mappings().all()
-        
+
         # 2. Загружаем метрики (с поддержкой нового формата таблицы)
         try:
             metrics_result = await session.execute(
@@ -557,10 +617,107 @@ else:
             *ID: {agent_data.id}*
             """)
             
-            # Load HEXACO profile if available (Read-Only)
-            if agent_data.hexaco_profile:
-                with st.sidebar.expander("🧬 HEXACO Profile (Read-Only)"):
-                    st.json(agent_data.hexaco_profile)
+            # --- Task 10: HEXACO Editor ---
+            # Load HEXACO profile from API
+            profile_data = fetch_character_profile(agent_data.name)
+            if profile_data:
+                st.session_state.hexaco_profile = profile_data.get("hexaco_profile", {"H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50})
+                st.session_state.personality_preset = profile_data.get("personality_preset")
+            else:
+                st.session_state.hexaco_profile = {"H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50}
+                st.session_state.personality_preset = None
+            
+            # Load presets once (cache in session state)
+            if st.session_state.hexaco_presets is None:
+                st.session_state.hexaco_presets = fetch_presets()
+            
+            # Render HEXACO Editor
+            with st.sidebar.expander("🧬 HEXACO Editor", expanded=False):
+                api_available = st.session_state.hexaco_presets is not None
+                
+                if not api_available:
+                    st.warning("⚠️ API unavailable. HEXACO editor is in read-only mode.")
+                    st.json(st.session_state.hexaco_profile)
+                else:
+                    hexaco = st.session_state.hexaco_profile
+                    
+                    st.markdown("### Trait Sliders")
+                    st.caption("Adjust personality dimensions (0-100)")
+                    
+                    H = st.slider("H: Хитрость ⟷ Искренность", 0, 100, hexaco.get("H", 50), help="Honesty-Humility")
+                    E = st.slider("E: Хладнокровие ⟷ Тревожность", 0, 100, hexaco.get("E", 50), help="Emotionality/Neuroticism")
+                    X = st.slider("X: Замкнутость ⟷ Общительность", 0, 100, hexaco.get("X", 50), help="Extraversion")
+                    A = st.slider("A: Сварливость ⟷ Покладистость", 0, 100, hexaco.get("A", 50), help="Agreeableness")
+                    C = st.slider("C: Хаотичность ⟷ Целеустремленность", 0, 100, hexaco.get("C", 50), help="Conscientiousness")
+                    O = st.slider("O: Консерватизм ⟷ Любознательность", 0, 100, hexaco.get("O", 50), help="Openness to Experience")
+                    
+                    # Current preset display
+                    current_preset = st.session_state.personality_preset or "Custom"
+                    st.caption(f"📌 Current Preset: **{current_preset}**")
+                    
+                    # Reset button
+                    if st.button("🔄 Reset to Neutral (50/50)"):
+                        st.session_state.hexaco_profile = {"H": 50, "E": 50, "X": 50, "A": 50, "C": 50, "O": 50}
+                        st.session_state.personality_preset = None
+                        st.rerun()
+                    
+                    st.divider()
+                    
+                    # --- Presets Section ---
+                    st.markdown("### 🎭 Apply Preset")
+                    
+                    presets = st.session_state.hexaco_presets
+                    
+                    # Light Presets
+                    st.markdown("**✨ Light / Functional Archetypes**")
+                    light_names = list(presets.get("light_presets", {}).keys())
+                    selected_light = st.selectbox("Select Light Preset", ["<none>"] + light_names, key="light_preset_selector")
+                    
+                    if selected_light != "<none>":
+                        if st.button(f"Apply '{selected_light}'", key="apply_light"):
+                            preset_hexaco = apply_preset(selected_light)
+                            if preset_hexaco:
+                                st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
+                                st.session_state.personality_preset = selected_light
+                                st.success(f"Applied preset: {selected_light}")
+                                st.rerun()
+                    
+                    st.markdown("---")
+                    
+                    # Dark Presets
+                    st.markdown("**🌑 Dark / Deviant Archetypes**")
+                    dark_names = list(presets.get("dark_presets", {}).keys())
+                    selected_dark = st.selectbox("Select Dark Preset", ["<none>"] + dark_names, key="dark_preset_selector")
+                    
+                    if selected_dark != "<none>":
+                        if st.button(f"Apply '{selected_dark}'", key="apply_dark"):
+                            preset_hexaco = apply_preset(selected_dark)
+                            if preset_hexaco:
+                                st.session_state.hexaco_profile = preset_hexaco.get("hexaco_profile", preset_hexaco)
+                                st.session_state.personality_preset = selected_dark
+                                st.success(f"Applied preset: {selected_dark}")
+                                st.rerun()
+                    
+                    st.divider()
+                    
+                    # --- Save Button ---
+                    st.markdown("### 💾 Save Profile")
+                    if st.button("Save HEXACO Profile", type="primary"):
+                        new_hexaco = {"H": H, "E": E, "X": X, "A": A, "C": C, "O": O}
+                        
+                        success = save_character_profile(
+                            name=st.session_state.bot_name,
+                            hexaco=new_hexaco,
+                            preset=st.session_state.personality_preset
+                        )
+                        
+                        if success:
+                            st.session_state.hexaco_profile = new_hexaco
+                            st.success("✅ Profile saved successfully!")
+                            # Force kernel reload on next message
+                            st.session_state.kernel_instance = None
+                        else:
+                            st.error("❌ Failed to save profile")
             
             # Load sliders preset
             preset = agent_data.sliders_preset or {}
