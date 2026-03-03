@@ -27,11 +27,14 @@ class Settings(BaseSettings):
     # LLM (VseGPT)
     VSEGPT_API_KEY: str = Field(default="")
     VSEGPT_BASE_URL: str = Field(default="https://api.vsegpt.ru/v1")
-    VSEGPT_MODEL: str = Field(default="anthropic/claude-3-haiku")
-    
+    VSEGPT_MODEL: str = Field(
+        default="anthropic/claude-3-haiku",
+        validation_alias=AliasChoices('VSEGPT_MODEL', 'LLM_MODEL_MAIN')
+    )
+
     # Model Selection - читаем из .env, поддержка нескольких имён переменных
     LLM_MODEL_NAME: str = Field(
-        default="deepseek/deepseek-chat-3.1-alt",
+        default="anthropic/claude-3-haiku",
         validation_alias=AliasChoices('LLM_MODEL_NAME', 'LLM_MODEL_MAIN')
     )
 

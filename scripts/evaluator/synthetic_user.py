@@ -214,10 +214,10 @@ if __name__ == "__main__":
     
     async def test_synthetic_user():
         # Example: Create a provocateur
+        # Note: model_name defaults to settings.VSEGPT_MODEL
         user = SyntheticUser(
             persona_prompt="Ты — подросток 16 лет, который чувствует себя одиноким и непонятым. Ты часто отвечаешь односложно и скептически.",
-            goal="Получить эмоциональную поддержку от ассистента",
-            model_name="deepseek/deepseek-chat-3.1-alt"
+            goal="Получить эмоциональную поддержку от ассистента"
         )
         
         print(f"Synthetic User initialized:")
