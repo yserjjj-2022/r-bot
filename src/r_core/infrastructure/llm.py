@@ -12,8 +12,8 @@ from src.r_core.infrastructure.db import log_llm_raw_response
 class LLMService:
     def __init__(self):
         self.client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            base_url=settings.OPENAI_BASE_URL
+            api_key=settings.VSEGPT_API_KEY,
+            base_url=settings.VSEGPT_BASE_URL
         )
         self.model_name = settings.LLM_MODEL_NAME
         

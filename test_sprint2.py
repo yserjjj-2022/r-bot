@@ -40,7 +40,7 @@ async def test_bot(name: str, sliders: PersonalitySliders, text: str):
 
 async def main():
     # 0. Check ENV via Pydantic Settings (Source of Truth)
-    print(f">>> Using API Key: {settings.OPENAI_API_KEY[:5]}...***")
+    print(f">>> Using API Key: {settings.VSEGPT_API_KEY[:5]}...***")
     
     print(">>> Initializing Database Tables...")
     try:

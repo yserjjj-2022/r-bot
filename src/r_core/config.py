@@ -24,12 +24,9 @@ class Settings(BaseSettings):
     TEST_DB_USER: str = Field(default="rbot")
     TEST_DB_PASSWORD: str = Field(default="rbot_password")
     
-    # LLM (VseGPT / DeepSeek / OpenAI)
-    OPENAI_API_KEY: str = Field(validation_alias=AliasChoices('OPENAI_API_KEY', 'VSEGPT_API_KEY'))
-    OPENAI_BASE_URL: str = Field(
-        default="https://api.vsegpt.ru/v1",
-        validation_alias=AliasChoices('OPENAI_BASE_URL', 'VSEGPT_BASE_URL')
-    )
+    # LLM (VseGPT)
+    VSEGPT_API_KEY: str = Field(default="")
+    VSEGPT_BASE_URL: str = Field(default="https://api.vsegpt.ru/v1")
     
     # Model Selection - читаем из .env, поддержка нескольких имён переменных
     LLM_MODEL_NAME: str = Field(
