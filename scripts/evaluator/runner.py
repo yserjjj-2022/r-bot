@@ -13,17 +13,22 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 
-# Add src to path
+# Add project root to path
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+SCRIPTS_DIR = str(Path(__file__).resolve().parents[0])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
 
 from r_core.config import settings
 from r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
 from r_core.pipeline import RCoreKernel
 from r_core.infrastructure.db import reset_test_database
 
-from synthetic_user import SyntheticUser, SimpleLLMClient
+from scripts.evaluator.synthetic_user import SyntheticUser, SimpleLLMClient
 
 
 @dataclass

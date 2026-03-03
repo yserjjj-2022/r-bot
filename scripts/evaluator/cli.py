@@ -10,11 +10,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+# Add project root to path
+PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from runner import EvaluationRunner
-from judge import JudgeLLM
+# Add scripts to path for local imports
+SCRIPTS_DIR = str(Path(__file__).resolve().parents[0])
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
+
+from scripts.evaluator.runner import EvaluationRunner
+from scripts.evaluator.judge import JudgeLLM
 
 
 # --- Vignette Config: The Phatic Wall ---
