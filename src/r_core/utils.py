@@ -112,3 +112,109 @@ def sanitize_bot_history(text: str, intimacy_score: float = 0.0) -> str:
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
+
+
+def calculate_new_intimacy(
+    current_score: float,
+    turn_metrics: dict,
+    last_interaction_timestamp: Optional[str] = None
+) -> float:
+    """
+    Calculates the new intimacy score based on turn events.
+    
+    Growth:
+    - +0.005 per conversation turn (base growth)
+    - +0.02 for each affective trigger detected (emotional bonding)
+    
+    Decay:
+    - -0.05 if user hasn't interacted for > 3 days
+    - -0.1 if Rage/Panic archetype triggered (conflict/toxicity)
+    
+    Args:
+        current_score: Current intimacy_score (0.0 to 1.0)
+        turn_metrics: Dict with keys:
+            - affective_triggers_detected: int
+            - hormonal_archetype: str (e.g., "RAGE", "PANIC", "FEAR", "CALM")
+            - user_emotion_score: float (0.0 to 1.0)
+            - prediction_error: float
+        last_interaction_timestamp: ISO timestamp string of last interaction
+    
+    Returns:
+        New intimacy score (capped between 0.0 and 1.0)
+    """
+    new_score = current_score
+    
+    # 1. Base growth per interaction
+    new_score += 0.005
+    
+    # 2. Emotional bonding (Affective ToM triggers)
+    affective_triggers = turn_metrics.get("affective_triggers_detected", 0)
+    if affective_triggers > 0:
+        new_score += 0.02 * affective_triggers
+    
+    # 3. Bonus for positive emotion score
+    user_emotion = turn_metrics.get("user_emotion_score", 0.0)
+    if user_emotion > 0.6:
+        new_score += 0.01
+    
+    # 4. Penalty for negative archetypes (conflict/toxicity)
+    hormonal_archetype = turn_metrics.get("hormonal_archetype", "")
+    if hormonal_archetype in ["RAGE", "PANIC"]:
+        new_score -= 0.1
+        print(f"[Intimacy] Penalty applied for archetype: {hormonal_archetype}")
+    
+    # 5. Time-based decay (if no interaction for > 3 days)
+    if last_interaction_timestamp:
+        from datetime import datetime, timedelta
+        try:
+            last_ts = datetime.fromisoformat(last_interaction_timestamp.replace("Z", "+00:00"))
+            now = datetime.now(last_ts.tzinfo)
+            days_diff = (now - last_ts).total_seconds() / 86400
+            if days_diff > 3:
+                decay = 0.05 * (days_diff - 3)  # Additional decay per extra day
+                new_score -= decay
+                print(f"[Intimacy] Time decay: {days_diff:.1f} days, penalty: {decay:.3f}")
+        except Exception as e:
+            print(f"[Intimacy] Failed to parse timestamp: {e}")
+    
+    # Cap between 0.0 and 1.0
+    return max(0.0, min(1.0, new_score))
+
+
+def get_trust_stage(intimacy_score: float) -> str:
+    """
+    Returns the trust stage string based on intimacy score.
+    
+    0.0 - 0.3: stranger
+    0.3 - 0.7: acquaintance  
+    0.7 - 1.0: friend
+    """
+    if intimacy_score < 0.3:
+        return "stranger"
+    elif intimacy_score < 0.7:
+        return "acquaintance"
+    else:
+        return "friend"
+
+
+def get_intimacy_instruction(intimacy_score: float) -> str:
+    """
+    Returns dynamic intimacy instruction for LLM based on score.
+    """
+    stage = get_trust_stage(intimacy_score)
+    
+    if stage == "stranger":
+        return (
+            "Keep emotional distance. Be polite, formal, and objective. "
+            "Do not act overly familiar. Use 'Вы' or very respectful 'Ты'."
+        )
+    elif stage == "acquaintance":
+        return (
+            "Act as a friendly acquaintance. You can be warm and casual, "
+            "but respect boundaries. Use 'Ты' naturally."
+        )
+    else:  # friend
+        return (
+            "Act as a close, trusted friend. Be highly empathetic, emotionally open, "
+            "and deeply supportive. Use 'Ты' and show genuine care."
+        )

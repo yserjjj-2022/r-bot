@@ -312,7 +312,8 @@ class LLMService:
         bot_description: str = "", # ✨ NEW: Full persona description
         user_mode: str = "formal",
         style_instructions: str = "", 
-        affective_context: str = ""
+        affective_context: str = "",
+        intimacy_score: float = 0.0  # ✨ NEW: For dynamic addressing
     ) -> Tuple[str, Optional[str]]:
         """
         Generates bot response AND predictive processing hypothesis.
@@ -350,19 +351,43 @@ class LLMService:
              )
 
 
-        if user_mode == "informal":
+        # === ✨ TASK 12: Dynamic Address Block based on Intimacy Score ===
+        # 0.0 - 0.3: Stranger (polite, formal)
+        # 0.3 - 0.7: Acquaintance (casual, friendly)
+        # 0.7 - 1.0: Friend (close, warm)
+        
+        if intimacy_score >= 0.7:
+            # Friend level - close, warm, informal
             address_block = (
                 "LANGUAGE RULES (Russian):\\n"
-                "- You MUST address the user as 'ТЫ' (informal/friendly).\\n"
-                "- Do NOT use 'Вы' (formal).\\n"
-                "- Be natural, direct, and close, but maintain the formatting rules above.\\n"
+                "- Address the user as 'ТЫ' (informal, close).\\n"
+                "- Be warm, supportive, and emotionally open.\\n"
+                "- Show genuine care and empathy.\\n"
+                "- You can use friendly expressions but avoid excessive diminutives unless user requests.\\n"
+            )
+        elif intimacy_score >= 0.3:
+            # Acquaintance level - casual, friendly but respects boundaries
+            address_block = (
+                "LANGUAGE RULES (Russian):\\n"
+                "- Address the user as 'ТЫ' (informal/friendly).\\n"
+                "- Be natural, casual, but maintain healthy boundaries.\\n"
+                "- Avoid overly familiar or sweet expressions.\\n"
             )
         else:
-            address_block = (
-                "LANGUAGE RULES (Russian):\\n"
-                "- You MUST address the user as 'ВЫ' (formal/polite).\\n"
-                "- Maintain professional or respectful distance.\\n"
-            )
+            # Stranger level - polite, formal
+            if user_mode == "informal":
+                address_block = (
+                    "LANGUAGE RULES (Russian):\\n"
+                    "- Address the user as 'ТЫ' but remain respectful and neutral.\\n"
+                    "- Do NOT act overly familiar.\\n"
+                    "- Keep some distance until trust is built.\\n"
+                )
+            else:
+                address_block = (
+                    "LANGUAGE RULES (Russian):\\n"
+                    "- You MUST address the user as 'ВЫ' (formal/polite).\\n"
+                    "- Maintain professional or respectful distance.\\n"
+                )
             
         
         # === 3. FINAL SYSTEM PROMPT ===
@@ -382,7 +407,7 @@ class LLMService:
                 "--- AFFECTIVE CONTEXT (User's Emotional Relations) ---\\n"
                 f"{affective_context}\\n\\n"
             )
-
+            
 
         system_prompt += (
             "--- INTERNAL DIRECTIVES (Hidden from User) ---\\n"
@@ -421,7 +446,7 @@ class LLMService:
                     return response_data, None
             else:
                 data = response_data
-                
+
             reply = data.get("reply", "")
             prediction = data.get("predicted_user_reaction", None)
             

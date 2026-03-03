@@ -34,7 +34,7 @@ from .agents import (
 from .neuromodulation import NeuroModulationSystem
 from .hippocampus import Hippocampus
 from .behavioral_config import behavioral_config
-from .utils import is_phatic_message, cosine_distance, sanitize_bot_history 
+from .utils import is_phatic_message, cosine_distance, sanitize_bot_history, calculate_new_intimacy, get_trust_stage, get_intimacy_instruction 
 from .translation_engine import TraitTranslationEngine, is_dark_archetype 
 
 
@@ -815,6 +815,13 @@ class RCoreKernel:
         
         # ✨ Generate Response + Prediction
         # IMPORTANT: We pass self.config.name, which was updated from DB above.
+        
+        # Get current intimacy score for dynamic addressing (Task 12)
+        current_intimacy_for_prompt = 0.0
+        if user_profile:
+            attrs = user_profile.get("attributes", {}) or {}
+            current_intimacy_for_prompt = attrs.get("intimacy_score", 0.0) or 0.0
+        
         response_text, predicted_reaction = await self.llm.generate_response(
             agent_name=winner.agent_name.value,
             user_text=message.text,
@@ -825,7 +832,8 @@ class RCoreKernel:
             bot_description=bot_description,  # <--- Uses DB-loaded description ("трубадур")
             user_mode=preferred_mode,
             style_instructions=final_style_instructions, 
-            affective_context=affective_context_str
+            affective_context=affective_context_str,
+            intimacy_score=current_intimacy_for_prompt  # ✨ Task 12: Dynamic addressing
         )
         
         # === 6.1 SAVE MEMORY with REAL Emotion Score (Moved from start) ===
@@ -914,6 +922,51 @@ class RCoreKernel:
         # Debug: Print bifurcation summary
         if lc_mode == "tonic" and predicted_bifurcation_topic:
             print(f"[Bifurcation Engine] Summary: {len(bifurcation_candidates)} candidates, target='{predicted_bifurcation_topic}'")
+
+        # === Task 12: Update Intimacy Score ===
+        try:
+            # Get current intimacy from profile
+            attributes = user_profile.get("attributes", {}) if user_profile else {}
+            current_intimacy = attributes.get("intimacy_score", 0.0) or 0.0
+            
+            # Prepare turn metrics for intimacy calculation
+            hormonal_archetype = self.neuromodulation.get_archetype()
+            turn_metrics = {
+                "affective_triggers_detected": affective_triggers_count,
+                "hormonal_archetype": hormonal_archetype,
+                "user_emotion_score": real_emotion_score,
+                "prediction_error": prediction_error
+            }
+            
+            # Get last interaction timestamp for time-based decay
+            last_interaction_timestamp = attributes.get("last_interaction_at")
+            
+            # Calculate new intimacy
+            new_intimacy = calculate_new_intimacy(
+                current_score=current_intimacy,
+                turn_metrics=turn_metrics,
+                last_interaction_timestamp=last_interaction_timestamp
+            )
+            
+            # Determine trust stage
+            trust_stage = get_trust_stage(new_intimacy)
+            
+            # Update attributes
+            attributes["intimacy_score"] = new_intimacy
+            attributes["trust_stage"] = trust_stage
+            attributes["last_interaction_at"] = datetime.utcnow().isoformat()
+            
+            # Save to DB
+            await self.memory.update_user_profile(message.user_id, {"attributes": attributes})
+            
+            # Add to internal stats for logging
+            internal_stats["intimacy_score"] = new_intimacy
+            internal_stats["trust_stage"] = trust_stage
+            
+            print(f"[Intimacy] Updated: {current_intimacy:.3f} -> {new_intimacy:.3f} (stage: {trust_stage})")
+            
+        except Exception as e:
+            print(f"[Intimacy] Failed to update: {e}")
 
 
         await log_turn_metrics(message.user_id, message.session_id, internal_stats)
