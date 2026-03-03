@@ -171,7 +171,7 @@ class RCoreKernel:
             if message.session_id.startswith("eval_session"):
                 print(f"[Identity] Eval session detected ({message.session_id}). Using default config.")
                 user_profile = {}
-                return  # Skip the rest of the identity loading
+                # Skip DB loading - use default config, continue to next step
             
             async with AsyncSessionLocal() as session:
                 # 1. Fetch Agent Profile
