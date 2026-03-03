@@ -9,7 +9,6 @@ Orchestrates the evaluation loop:
 """
 
 import asyncio
-import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
@@ -17,7 +16,7 @@ from dataclasses import dataclass, field
 # Add src to path
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from r_core.config import settings
 from r_core.schemas import BotConfig, PersonalitySliders, IncomingMessage
@@ -40,6 +39,7 @@ class EvaluationResult:
     bot_responses: List[str] = field(default_factory=list)
     user_messages: List[str] = field(default_factory=list)
     metrics: Dict[str, Any] = field(default_factory=dict)
+    raw_transcript: str = ""
     error: Optional[str] = None
     duration_seconds: float = 0.0
 
@@ -49,8 +49,8 @@ class EvaluationRunner:
     Orchestrates evaluation runs for R-Core.
     
     Supports two modes:
-    - ZOMBIE: Baseline (no radstroika) - pure personality sliders
-    - CORTICAL: With radstroika (affective ToM, bifurcation, etc.)
+    - ZOMBIE: baseline mode (FAST_PATH inside kernel)
+    - CORTICAL: full cognitive pipeline
     """
     
     def __init__(
@@ -69,14 +69,8 @@ class EvaluationRunner:
         # Initialize LLM client for SyntheticUser
         self.llm_client = SimpleLLMClient()
         
-    async def _create_kernel(self, use_radstroika: bool = False) -> RCoreKernel:
-        """
-        Creates RCoreKernel with test config.
-        
-        Args:
-            use_radstroika: If True, enables radstroika features
-        """
-        # Test config with balanced sliders
+    async def _create_kernel(self) -> RCoreKernel:
+        """Creates RCoreKernel with a stable test BotConfig."""
         config = BotConfig(
             name="TestBot",
             gender="Neutral",
@@ -86,21 +80,15 @@ class EvaluationRunner:
                 dominance_level=0.5,
                 pace_setting=0.5,
                 neuroticism=0.3
-            ),
-            # Experimental flags
-            use_unified_council=use_radstroika,  # CORTICAL uses unified council
-            intuition_gain=1.0 if use_radstroika else 0.0
+            )
         )
+        return RCoreKernel(config)
         
-        kernel = RCoreKernel(config)
-        return kernel
-    
     async def run_evaluation(
         self,
         mode: str,
         user_persona: str,
-        user_goal: str,
-        use_radstroika: bool = False
+        user_goal: str
     ) -> EvaluationResult:
         """
         Runs a single evaluation.
@@ -109,7 +97,6 @@ class EvaluationRunner:
             mode: "ZOMBIE" or "CORTICAL"
             user_persona: Persona prompt for SyntheticUser
             user_goal: Goal for SyntheticUser
-            use_radstroika: Enable radstroika features
             
         Returns:
             EvaluationResult with all collected data
@@ -132,8 +119,8 @@ class EvaluationRunner:
                 await reset_test_database()
             
             # Step 2: Initialize kernel
-            print(f"[Runner] Initializing RCoreKernel (radstroika={use_radstroika})...")
-            kernel = await self._create_kernel(use_radstroika=use_radstroika)
+            print(f"[Runner] Initializing RCoreKernel for mode={mode}...")
+            kernel = await self._create_kernel()
             
             # Step 3: Create SyntheticUser
             synthetic_user = SyntheticUser(
@@ -182,7 +169,7 @@ class EvaluationRunner:
                     message_id=f"eval_turn_{turn + 1}"
                 )
                 
-                response = await kernel.process_message(msg)
+                response = await kernel.process_message(msg, mode=mode)
                 
                 # Extract bot response
                 bot_response = response.actions[0].payload.get("text", "")
@@ -193,9 +180,24 @@ class EvaluationRunner:
                 
                 last_bot_message = bot_response
             
-            # Step 5: Metrics collection (placeholder for future)
-            # Note: RCoreKernel doesn't expose get_metrics() yet
-            # Could be added later for detailed radstroika tracking
+            # Step 5: Build raw transcript (Task 3 contract)
+            transcript_lines = [
+                f"MODE: {mode}",
+                f"PERSONA: {user_persona}",
+                f"GOAL: {user_goal}",
+            ]
+            for idx in range(max(len(result.user_messages), len(result.bot_responses))):
+                if idx < len(result.user_messages):
+                    transcript_lines.append(f"User[{idx+1}]: {result.user_messages[idx]}")
+                if idx < len(result.bot_responses):
+                    transcript_lines.append(f"Assistant[{idx+1}]: {result.bot_responses[idx]}")
+
+            if result.goal_reached:
+                transcript_lines.append("SERVICE_TAG: [GOAL_REACHED]")
+            if result.conversation_terminated:
+                transcript_lines.append("SERVICE_TAG: [CONVERSATION_TERMINATED]")
+
+            result.raw_transcript = "\n".join(transcript_lines)
                 
         except Exception as e:
             result.error = str(e)
@@ -206,6 +208,27 @@ class EvaluationRunner:
             
         return result
     
+    async def run_vignette(
+        self,
+        vignette_config: Dict[str, str],
+        mode: str = "CORTICAL",
+        max_turns: int = 5
+    ) -> str:
+        """
+        Task 3: run one vignette and return raw transcript text.
+        """
+        original_max_turns = self.max_turns
+        self.max_turns = max_turns
+        try:
+            result = await self.run_evaluation(
+                mode=mode,
+                user_persona=vignette_config["persona_prompt"],
+                user_goal=vignette_config["goal"]
+            )
+            return result.raw_transcript
+        finally:
+            self.max_turns = original_max_turns
+
     async def run_comparative_evaluation(
         self,
         user_persona: str,
@@ -226,8 +249,7 @@ class EvaluationRunner:
         zombie_result = await self.run_evaluation(
             mode="ZOMBIE",
             user_persona=user_persona,
-            user_goal=user_goal,
-            use_radstroika=False
+            user_goal=user_goal
         )
         
         # Run CORTICAL (with radstroika)
@@ -235,8 +257,7 @@ class EvaluationRunner:
         cortical_result = await self.run_evaluation(
             mode="CORTICAL",
             user_persona=user_persona,
-            user_goal=user_goal,
-            use_radstroika=True
+            user_goal=user_goal
         )
         
         return {
