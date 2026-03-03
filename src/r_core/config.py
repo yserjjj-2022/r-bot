@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     # LLM (VseGPT)
     VSEGPT_API_KEY: str = Field(default="")
     VSEGPT_BASE_URL: str = Field(default="https://api.vsegpt.ru/v1")
+    VSEGPT_MODEL: str = Field(default="anthropic/claude-3-haiku")
     
     # Model Selection - читаем из .env, поддержка нескольких имён переменных
     LLM_MODEL_NAME: str = Field(

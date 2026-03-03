@@ -7,7 +7,13 @@ that test specific R-Core behaviors and scenarios.
 
 import json
 import re
+import sys
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
+
+# Add src to path for config import
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from r_core.config import settings
 
 
 class SyntheticUser:
@@ -25,18 +31,18 @@ class SyntheticUser:
         persona_prompt: str,
         goal: str,
         llm_client=None,
-        model_name: str = "deepseek/deepseek-chat-3.1-alt"
+        model_name: Optional[str] = None  # ✨ Uses settings default if None
     ):
         """
         Args:
             persona_prompt: System prompt describing the user's persona
             goal: The goal the synthetic user is trying to achieve
             llm_client: LLM client instance (if None, uses default)
-            model_name: Model to use for generation
+            model_name: Model to use for generation (defaults to settings.VSEGPT_MODEL)
         """
         self.persona_prompt = persona_prompt
         self.goal = goal
-        self.model_name = model_name
+        self.model_name = model_name or settings.VSEGPT_MODEL  # ✨ Use default from settings
         self.llm_client = llm_client
         self.conversation_history: List[Dict[str, str]] = []
         
@@ -156,47 +162,40 @@ class SimpleLLMClient:
     Uses the same LLM infrastructure as the main R-Core.
     """
     
-    def __init__(self, api_key: str, base_url: str, model: str = "deepseek/deepseek-chat-3.1-alt"):
-        self.api_key = api_key
-        self.base_url = base_url
-        self.model = model
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
+        # Use settings as defaults
+        self.api_key = api_key or settings.VSEGPT_API_KEY
+        self.base_url = base_url or settings.VSEGPT_BASE_URL
+        self.model = model or settings.VSEGPT_MODEL
     
     async def generate(
         self, 
         prompt: str, 
-        model: str = None, 
+        model: Optional[str] = None, 
         max_tokens: int = 500, 
         temperature: float = 0.8
     ) -> str:
         """Generates a response from the LLM."""
-        import aiohttp
+        from openai import AsyncOpenAI
         
         model = model or self.model
         
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+        client = AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url
+        )
         
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": temperature
-        }
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise Exception(f"LLM API error: {resp.status} - {error_text}")
-                
-                data = await resp.json()
-                return data["choices"][0]["message"]["content"]
+        content = response.choices[0].message.content
+        if content is None:
+            raise Exception("LLM returned empty response")
+        return content
 
 
 # --- Example Usage ---
