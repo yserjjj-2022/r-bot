@@ -11,12 +11,16 @@ import sys
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-# Add project root to path
+# Add project root and src to path
 import sys
 from pathlib import Path
 PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+SRC_DIR = str(Path(__file__).resolve().parents[2] / "src")
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from r_core.config import settings
 

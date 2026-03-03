@@ -10,13 +10,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
 
-# Add project root to path
+# Add project root and src to path
 PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+SRC_DIR = str(Path(__file__).resolve().parents[2] / "src")
+SCRIPTS_DIR = str(Path(__file__).resolve().parents[0])
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-
-# Add scripts to path for local imports
-SCRIPTS_DIR = str(Path(__file__).resolve().parents[0])
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 

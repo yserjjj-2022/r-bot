@@ -9,13 +9,17 @@ import json
 from typing import Dict, Any, List
 from dataclasses import dataclass
 
-# Add project root to path
+# Add project root and src to path
 import sys
 from pathlib import Path
 PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+SRC_DIR = str(Path(__file__).resolve().parents[2] / "src")
 SCRIPTS_DIR = str(Path(__file__).resolve().parents[0])
+
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
