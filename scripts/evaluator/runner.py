@@ -124,8 +124,14 @@ class EvaluationRunner:
         try:
             # Step 1: Reset test database
             if self.eval_mode:
-                print(f"[Runner] Resetting test database for {mode} mode...")
-                await reset_test_database()
+                # Force EVAL_MODE=True for proper test DB isolation
+                original_eval_mode = settings.EVAL_MODE
+                settings.EVAL_MODE = True
+                try:
+                    print(f"[Runner] Resetting test database for {mode} mode...")
+                    await reset_test_database()
+                finally:
+                    settings.EVAL_MODE = original_eval_mode
             
             # Step 2: Initialize kernel
             print(f"[Runner] Initializing RCoreKernel for mode={mode}...")
@@ -172,8 +178,8 @@ class EvaluationRunner:
                 
                 # Process through RCoreKernel
                 msg = IncomingMessage(
-                    user_id=999,  # Test user
-                    session_id="eval_session",
+                    user_id=999999,  # Test user (won't clash with real users)
+                    session_id=f"eval_session_{mode}",
                     text=user_message,
                     message_id=f"eval_turn_{turn + 1}"
                 )

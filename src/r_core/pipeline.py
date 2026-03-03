@@ -167,6 +167,12 @@ class RCoreKernel:
         # === ✨ RESTORE IDENTITY: Fetch Active Agent Profile from DB ===
         bot_description = ""
         try:
+            # Skip DB load for eval sessions (test isolation)
+            if message.session_id.startswith("eval_session"):
+                print(f"[Identity] Eval session detected ({message.session_id}). Using default config.")
+                user_profile = {}
+                return  # Skip the rest of the identity loading
+            
             async with AsyncSessionLocal() as session:
                 # 1. Fetch Agent Profile
                 # We prioritize the LATEST active profile in DB, ignoring config.name if it's default "R-Bot"
