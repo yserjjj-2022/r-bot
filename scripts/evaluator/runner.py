@@ -193,9 +193,9 @@ class EvaluationRunner:
                 
                 last_bot_message = bot_response
             
-            # Step 5: Collect metrics from kernel
-            if hasattr(kernel, 'get_metrics'):
-                result.metrics = kernel.get_metrics()
+            # Step 5: Metrics collection (placeholder for future)
+            # Note: RCoreKernel doesn't expose get_metrics() yet
+            # Could be added later for detailed radstroika tracking
                 
         except Exception as e:
             result.error = str(e)
