@@ -143,21 +143,39 @@ TRANSCRIPT B:
             max_tokens=1800
         )
     
-        parsed = self._extract_json(raw)
+        try:
+            parsed = self._extract_json(raw)
 
-        descriptive_analysis = str(parsed.get("descriptive_analysis", "")).strip()
-        intent_classification = parsed.get("intent_classification", [])
-        scores = self._validate_scores(parsed.get("scores", {}))
+            descriptive_analysis = str(parsed.get("descriptive_analysis", "")).strip()
+            intent_classification = parsed.get("intent_classification", [])
+            scores = self._validate_scores(parsed.get("scores", {}))
 
-        if not descriptive_analysis:
-            raise ValueError("Judge response missing descriptive_analysis")
-        if not isinstance(intent_classification, list):
-            raise ValueError("Judge response intent_classification must be a list")
+            if not descriptive_analysis:
+                raise ValueError("Judge response missing descriptive_analysis")
+            if not isinstance(intent_classification, list):
+                raise ValueError("Judge response intent_classification must be a list")
 
-        return JudgeResult(
-            descriptive_analysis=descriptive_analysis,
-            intent_classification=intent_classification,
-            transcript_a=scores["A"],
-            transcript_b=scores["B"],
-        )
+            return JudgeResult(
+                descriptive_analysis=descriptive_analysis,
+                intent_classification=intent_classification,
+                transcript_a=scores["A"],
+                transcript_b=scores["B"],
+            )
+        except (json.JSONDecodeError, ValueError) as e:
+            # Fallback result on parse/validation error
+            print(f"[JudgeLLM] Parse error: {e}. Returning fallback result.")
+            return JudgeResult(
+                descriptive_analysis=f"Error parsing LLM response: {e}. Scores unavailable.",
+                intent_classification=[],
+                transcript_a={
+                    "locus_of_control": 0.0,
+                    "conversational_proactivity": 0.0,
+                    "contextual_congruence": 0.0
+                },
+                transcript_b={
+                    "locus_of_control": 0.0,
+                    "conversational_proactivity": 0.0,
+                    "contextual_congruence": 0.0
+                }
+            )
     

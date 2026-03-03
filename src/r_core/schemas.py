@@ -168,6 +168,6 @@ class CoreResponse(BaseModel):
     actions: List[CoreAction]
     winning_agent: AgentType
     current_mood: MoodVector
-    current_hormones: Optional[HormonalState] = None
+    current_hormones: Optional[Union[HormonalState, Dict[str, Any]]] = None
     processing_mode: ProcessingMode
     internal_stats: Dict[str, Any] = {}
