@@ -11,13 +11,85 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy import select, desc, text
 
 # --- Setup ---
-engine = create_async_engine(
-    settings.database_url, 
-    echo=False,
-    poolclass=NullPool 
-)
+# ✨ EVAL_MODE: Use different engine based on settings
+_engine = None
+_session_factory = None
 
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+def get_engine():
+    """Returns the current engine, creating it if necessary."""
+    global _engine
+    if _engine is None:
+        _engine = create_async_engine(
+            settings.database_url, 
+            echo=False,
+            poolclass=NullPool 
+        )
+    return _engine
+
+def get_session_factory():
+    """Returns the session factory."""
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(
+            get_engine(), 
+            expire_on_commit=False, 
+            class_=AsyncSession
+        )
+    return _session_factory
+
+# For backward compatibility - use as property-like accessor
+class _EngineAccessor:
+    def __call__(self):
+        return get_engine()
+    def begin(self):
+        return get_engine().begin()
+
+engine = _EngineAccessor()
+
+# For backward compatibility
+AsyncSessionLocal = get_session_factory()
+
+
+async def reset_test_database():
+    """
+    ✨ EVAL_MODE: Drop all tables in test database and recreate.
+    Use before each test run to ensure clean state.
+    """
+    if not settings.EVAL_MODE:
+        print("[DB] Warning: reset_test_database called but EVAL_MODE=False")
+        return
+    
+    print(f"[DB] Resetting test database: {settings.TEST_DB_NAME}")
+    
+    # Force recreation of engine for test DB
+    global _engine, _session_factory
+    _engine = None
+    _session_factory = None
+    
+    # Create new engine for test DB
+    test_engine = create_async_engine(
+        settings.test_database_url,
+        echo=False,
+        poolclass=NullPool
+    )
+    
+    try:
+        async with test_engine.begin() as conn:
+            # Drop all tables
+            await conn.run_sync(Base.metadata.drop_all)
+            print("[DB] All tables dropped in test DB")
+            
+            # Recreate tables
+            await conn.run_sync(Base.metadata.create_all)
+            print("[DB] All tables recreated in test DB")
+    finally:
+        await test_engine.dispose()
+    
+    # Reinitialize global engine for future requests
+    _engine = None
+    _session_factory = None
+    
+    print("[DB] Test database reset complete")
 
 class Base(DeclarativeBase):
     pass
