@@ -17,18 +17,21 @@ async def test_bot(name: str, sliders: PersonalitySliders, text: str):
 
     # Init Config
     config = BotConfig(
-        character_id="test_v1",
         name=name,
-        sliders=sliders,
-        core_values=["test"]
+        sliders=sliders
     )
 
     # Init Kernel
     kernel = RCoreKernel(config)
 
     # Process
-    msg = IncomingMessage(user_id=1, session_id="test_session", text=text)
-    
+    msg = IncomingMessage(
+        user_id=1, 
+        session_id="test_session", 
+        text=text,
+        message_id="test_msg_001"
+    )
+
     print(">>> Processing message... (Calling LLM + DB)")
     response = await kernel.process_message(msg)
 
@@ -60,14 +63,14 @@ async def main():
         PersonalitySliders(empathy_bias=0.9, risk_tolerance=0.1, dominance_level=0.1, pace_setting=0.5, neuroticism=0.2),
         text
     )
-
+    
     # Case B: Логик
     await test_bot(
         "T-800 (Логик)",
         PersonalitySliders(empathy_bias=0.0, risk_tolerance=0.9, dominance_level=0.8, pace_setting=0.2, neuroticism=0.0),
         text
     )
-    
+
     # Case C: Memory Recall
     print(f"\n{'='*20} TESTING MEMORY RECALL {'='*20}")
     await test_bot(
