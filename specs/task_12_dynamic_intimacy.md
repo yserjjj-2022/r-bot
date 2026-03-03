@@ -1,50 +1,86 @@
-# Task 12: Dynamic Intimacy & Trust Gradient
+# Task 12: Dynamic Intimacy & Trust Gradient (No-Migration Schema)
 
 ## Context
-Currently, the bot's communication style is binary: `formal` ("Вы") or `informal` ("Ты"). However, human relationships develop gradually. A user wants to experiment with "gradations of intimacy" (доверительность) where the bot transitions from a polite stranger to a close friend based on shared history, emotional resonance, and time spent together.
+Currently, the bot's communication style is binary: `formal` ("Вы") or `informal` ("Ты"). However, human relationships develop gradually. We want to experiment with "gradations of intimacy" (доверительность) where the bot transitions from a polite stranger to a close friend based on shared history, emotional resonance, and time spent together.
 
-This aligns perfectly with our goal of "flexible and innovative study of human behavior" by allowing us to study how users react to a machine that *earns* their trust.
+Importantly, trust can also **decrease** if the user is toxic, ignores the bot, or doesn't interact for a long time. 
+
+To avoid schema bloat, we will store these metrics inside the existing `attributes` JSONB field rather than creating new database columns.
 
 ## Acceptance Criteria
-1. **Database Schema Update:** Add an `intimacy_score` (float 0.0 to 1.0) and `trust_level` (enum/string) to the `user_profiles` table.
-2. **Intimacy Engine:** Create a mechanism (e.g., in `hippocampus.py` or a new `social_dynamics.py`) that calculates the `intimacy_score` based on:
-    - Number of total interactions (session length).
-    - Accumulation of emotional anchors (from Affective ToM).
-    - Successful volitional resolutions (bot helped user solve a problem).
+1. **No SQL Migrations:** Use the existing `attributes` JSONB field in `UserProfileModel` to store `intimacy_score` (float 0.0 to 1.0) and `trust_stage` (string).
+2. **Intimacy Engine (Growth & Decay):** Create logic to update the score after each session or during memory consolidation:
+    - **Growth:** +0.01 per conversation turn, +0.05 for deep emotional topics.
+    - **Decay (Time):** -0.05 if the user hasn't interacted for > 3 days.
+    - **Penalty (Conflict):** -0.1 if user toxicity or high negative arousal is detected (e.g., Rage archetype triggered).
 3. **Dynamic Prompting:** Update `llm.py` so that the `address_block` scales based on `intimacy_score`:
-    - `0.0 - 0.3`: Polite, distant, formal ("Вы" or very respectful "Ты").
-    - `0.3 - 0.7`: Casual acquaintance, friendly but respects boundaries.
-    - `0.7 - 1.0`: Close friend, high empathy, uses comfortable nicknames (if allowed), deep emotional mirroring.
-4. **Metrics:** Log changes in `intimacy_score` to `rcore_metrics` for dashboard visualization.
+    - `0.0 - 0.3` (Stranger): Polite, distant, formal ("Вы" or very respectful "Ты").
+    - `0.3 - 0.7` (Acquaintance): Casual, friendly but respects boundaries.
+    - `0.7 - 1.0` (Close Friend): High empathy, emotionally open, informal.
+4. **Integration with Task 13:** Ensure the prompt sanitizer (`utils.py -> sanitize_bot_history`) correctly reads the `intimacy_score` from the JSON attributes to conditionally remove diminutives.
 
 ## Implementation Steps
 
-### 1. Database Update (`src/r_core/infrastructure/db.py`)
-Add fields to `UserProfileModel`:
-```python
-    intimacy_score: Mapped[float] = mapped_column(Float, default=0.1) # 0.0 to 1.0
-    trust_stage: Mapped[str] = mapped_column(String(20), default="stranger") # stranger, acquaintance, friend, confidant
-```
-Add migration logic in `init_models()`.
+### 1. Intimacy Calculation Engine (`src/r_core/social_dynamics.py` or similar)
+Create a helper function to calculate the new score.
 
-### 2. Intimacy Calculation (e.g., during Consolidation)
-In `hippocampus.py` (or pipeline), whenever memory consolidation happens, recalculate intimacy:
-- Base increase per 100 messages.
-- Bonus for high `emotion_score` episodic memories.
-- Bonus for semantic facts where `predicate` in `["LOVES", "FEARS", "TRUSTS"]`.
+```python
+def calculate_new_intimacy(current_score: float, turn_metrics: dict) -> float:
+    \"\"\"
+    Calculates the new intimacy score based on turn events.
+    \"\"\"
+    new_score = current_score
+    
+    # 1. Base growth per interaction
+    new_score += 0.005 
+    
+    # 2. Emotional bonding (Affective ToM triggers)
+    if turn_metrics.get("affective_triggers_detected", 0) > 0:
+        new_score += 0.02
+        
+    # 3. Penalties for conflict / rage
+    if turn_metrics.get("hormonal_archetype") in ["RAGE", "PANIC"]:
+        new_score -= 0.05
+        
+    # Cap between 0.0 and 1.0
+    return max(0.0, min(1.0, new_score))
+```
+
+### 2. Update Profile in Pipeline (`src/r_core/pipeline.py`)
+At the end of `process_message`, extract the current score from `user_profile.attributes`, update it using the helper, and save it back to the database using `self.memory.update_user_profile()`.
+
+```python
+        # Extract current score
+        attributes = user_profile.get("attributes", {}) if user_profile else {}
+        current_intimacy = attributes.get("intimacy_score", 0.0)
+        
+        # Calculate new score using the stats we just gathered
+        new_intimacy = calculate_new_intimacy(current_intimacy, internal_stats)
+        
+        # Determine Trust Stage for logging/UI
+        if new_intimacy < 0.3: trust_stage = "stranger"
+        elif new_intimacy < 0.7: trust_stage = "acquaintance"
+        else: trust_stage = "friend"
+        
+        # Save back to DB (only if changed significantly to save DB writes, or every turn)
+        attributes["intimacy_score"] = new_intimacy
+        attributes["trust_stage"] = trust_stage
+        await self.memory.update_user_profile(message.user_id, {"attributes": attributes})
+```
 
 ### 3. LLM Prompt Modification (`src/r_core/infrastructure/llm.py`)
-Replace the binary `user_mode` check with a gradient system based on the profile's `intimacy_score`.
+In `generate_response`, inject dynamic relationship instructions into the system prompt based on `intimacy_score`.
 
-*Example Logic:*
 ```python
-if intimacy_score < 0.3:
-    address_block = "Address the user politely but keep emotional distance. Avoid overly personal questions."
-elif intimacy_score < 0.7:
-    address_block = "Address the user as a friendly acquaintance. Be warm, use 'ТЫ', but respect boundaries."
-else:
-    address_block = "Address the user as a close, trusted friend. Be highly empathetic, emotionally open, and deeply supportive."
+        # Example addition to system prompt building:
+        intimacy_instruction = ""
+        if intimacy_score < 0.3:
+            intimacy_instruction = "Keep emotional distance. Be polite, formal, and objective. Do not act overly familiar."
+        elif intimacy_score < 0.7:
+            intimacy_instruction = "Act as a friendly acquaintance. You can be warm and casual, but respect boundaries."
+        else:
+            intimacy_instruction = "Act as a close, trusted friend. Be highly empathetic, emotionally open, and deeply supportive."
 ```
 
-### 4. Optional Override
-Ensure there is still a manual override in the UI (e.g., a slider or dropdown in the User Profile dashboard) to force a specific trust level for testing purposes.
+### 4. Optional UI / Metrics
+Log `new_intimacy` into `rcore_metrics` payload so it can be visualized on the dashboard.
